@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ExtensionManifest Version="6.0" ExtensionBundleId="com.fastpass.dist" ExtensionBundleVersion="9.2.0" ExtensionBundleName="FAST_PASSS_DIST">
+    
+    <ExtensionList>
+        <Extension Id="com.fastpass.dist.panel" Version="8.5.0"/>
+        <HostList>
+            <Host Name="PPRO" Port="8908"/>
+        </HostList>
+    </ExtensionList>
+    
+    <ExecutionEnvironment>
+        <HostList>
+            <Host Name="PPRO" Version="[14.0,99.0]"/>
+        </HostList>
+        <LocaleList>
+            <Locale Code="All"/>
+        </LocaleList>
+        <NodeJSEnabled>true</NodeJSEnabled>
+    </ExecutionEnvironment>
+    
+    <DispatchInfoList>
+        <Extension Id="com.fastpass.dist.panel">
+            <DispatchInfo>
+                <Resources>
+                    <MainPath>./index.html</MainPath>
+                    <ScriptPath>./jsx/main.jsx</ScriptPath>
+                </Resources>
+                <Lifecycle>
+                    <AutoVisible>true</AutoVisible>
+                </Lifecycle>
+                <UI>
+                    <Type>Panel</Type>
+                    <Menu>FAST >>> PASS (DIST)</Menu>
+                    <Geometry>
+                        <Size>
+                            <Height>400</Height>
+                            <Width>350</Width>
+                        </Size>
+                    </Geometry>
+                </UI>
+            </DispatchInfo>
+        </Extension>
+    </DispatchInfoList>
+</ExtensionManifest>

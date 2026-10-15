@@ -1,0 +1,364 @@
+# Changelog - FAST >>> PASS
+
+Historial de canvis del repositori (un commit = un tema). Els identificadors `#NNN` son el
+numero d incident del cataleg de bugs (`docs/BUGS_FIXED.md`).
+
+
+## 2026
+
+- **2026-10-15** `c56f978` BUGs #162 #163: Portada - neteja d audio orfe a la zona neta (snapshot + 3 regles) i PNG a AAA_PORTADES (reverteix #160a)
+- **2026-10-15** `a3dd5b6` feat: sessio 13-14/10 (#150-#161) - markers, chyrons/titols, grafics, mp4, context i hooks pre-commit
+- **2026-10-13** `629da6d` docs: registra el commit 8d84610 (#149 i #151 tancats — traduccions validades a Premiere)
+- **2026-10-13** `8d84610` BUGs #151 #149: TRADUCCIONS validades a Premiere (repartir sobre tota la selecció de V1 + congelat de cua)
+- **2026-10-12** `311791a` feat: #149 congelat de cua (traducció/repartir) + #150 marge esquerre visual de l'editor SRT
+- **2026-10-09** `f825cc9` docs: registra el commit d1a8d84 (publicacio d exports a EXPORTS PROVISIONALS)
+- **2026-10-09** `d1a8d84` feat: publicacio d'exports — render directe a EXPORTS PROVISIONALS + nom del PNG assegurat
+- **2026-10-09** `9cd3db8` docs: registra el commit 15ad66b (facets multi-color + gris DCDCDC)
+- **2026-10-09** `15ad66b` feat: titolet multi-color per etiqueta (facets) + gris clar #DCDCDC mesurat
+- **2026-10-08** `3b45581` docs: registra el commit f4fc22f (git.status, #147/#148 i sessio 2026-10-08)
+- **2026-10-08** `f4fc22f` BUGs #147 #148 + 7a passada TITOLET: congelat verificat, dedupe per posicio, ROI per etiqueta
+- **2026-10-08** `a56d4e8` feat: RESET GENERAL del bloc (boto RESET a INICI) - reset total + recreacio del projecte [validat a Premiere]
+- **2026-10-08** `95d39b9` BUG #146: MAPA (ancoratge al CABEZAL + retall estirable via Clips.trimBounds)
+- **2026-10-07** `f15d752` docs: tanca #143 (TITOLET -5 frames validat a Premiere)
+- **2026-10-07** `d1bf010` BUGs #144 #145: SORTIDA del Tema-Titol (6 frames, insert NO destructiu) + fantasma d'audio / A1 truncat
+- **2026-10-06** `a75d812` docs: registre #143 (TITOLET -5 frames) + seccio 6 de la sessio 2026-10-06
+- **2026-10-06** `12fa783` chore: els diaris de .roo/progress es versionen (fora del .gitignore) + doc del remot real
+- **2026-10-06** `7f5e0d3` BUG TITOLET: la targeta sortia 5 frames mes llarga que el retol cremat
+- **2026-10-06** `fd694d6` cleanup: elimina js/logic/9_Render_Logic.js (codi mort) i la seva carrega
+- **2026-10-06** `1809198` chore: exclusions de cerca i watcher de VS Code
+- **2026-10-06** `a71a68c` chore: 9_Render_Logic.capture - captura per Render.frame (modul orfe)
+- **2026-10-06** `e79fb9e` BUG #141: la FOTO s'ha de poder desar sempre (ensureFolders)
+- **2026-10-06** `2016c6f` BUG #142: Portada - captura via Render.snapshot (QE), no Render.frame
+- **2026-10-06** `0456f1f` BUGs #139-#140: markers - color dels IPD i imantat al tall dels no agrupats
+- **2026-10-06** `2a482f4` feat: TITOLET — imant exacte al tall, entrada refinada i congelat fins al final detectat
+- **2026-10-02** `01f7734` docs: clinerules - dos trampes de PowerShell 5.1 (ps1 sense BOM llegeix ANSI + validar JSON abans d escriure)
+- **2026-10-02** `a456ccb` docs: fix mojibake al registre (guillemets dels 26 validation_user nous)
+- **2026-10-02** `6e0ec75` docs: registre - #138 resolt (validat per l usuari) + 26 bugs tancats en bloc (OK general; titulillo queda pendent) + id #129 duplicat renombrat a #131
+- **2026-10-02** `ef837dc` BUGs #137-#138: accents llegits pel pont (mojibake) i marcadors que sobreviuen al RESET de subtítols
+- **2026-10-02** `af6a421` cleanup: guardia anti codi mort (bin/check_dead.ps1) + arrel de la recidiva dels flux
+- **2026-10-02** `9e00472` docs: registre del cleanup #115 (validat a Premiere + revisio de consola, commit 8da5851)
+- **2026-10-02** `8da5851` BUGs #115: neteja de codi mort - 38 fitxers (242 KB) esborrats
+- **2026-10-02** `5106d02` BUGs #136: TRADUCCIO dedupe - les traduccions re-generades es col.loquen 3 cops (abans 6)
+- **2026-10-02** `50fa6bb` docs: handoff del 01/10 i del 02/10 (estat de #126, #132, #133, #135 i TEMPS FINAL)
+- **2026-10-02** `b338f9c` feat: regla TEMPS FINAL, fix del IN del bloc (#135) i finestra d'edició de subtítols (#132)
+- **2026-10-02** `7f2723e` feat: chyrons — titulillos no destructius (#128/#129) i dedupe de regenerats (#133)
+- **2026-10-02** `74eb5a7` feat: MÀSCARA a V2 (zona PROTEGIDA) amb vigilància a flow_graphics (#126)
+- **2026-10-01** `bc656a9` docs: registres F4/D (#113 fet parcial) + decisio #126 (V4 fora de mascara) + handoff 2026-10-01
+- **2026-10-01** `d07b21a` feat(F4/D): scan de media+wotts en segon pla amb sonda cep.fs.readdir - #113
+- **2026-10-01** `10de9f2` BUGs #126-#129 + F1/F2/F3: lectura NAS fiable i IPD+ hereta el Motion
+- **2026-09-30** `5139d9d` docs: git.status amb els commits del 30/09 (#120-#124) i el pendent de test
+- **2026-09-30** `4cbed3c` docs: registres #118-#124 a .roo/features.json
+- **2026-09-30** `9a02643` BUGs #120-#124: fiabilitat de bounds/markers + portada hereta el Motion del clip original
+- **2026-09-30** `5fefff1` docs: registre V3 (10:26) + bug #117 (mediaN is not defined) + estat neteja #114 pujada
+- **2026-09-30** `71df683` docs: registres de sessio 2026-09-30 (#113 context, #114 neteja, #115 JS mort, #116 roig de cua)
+- **2026-09-30** `646d295` cleanup: neteja P0-P5 del repo (junk ._, INFO/ fusionat, docs arxivats, bin podat, SAMPLES fora)
+- **2026-09-29** `3331932` fix registres: restaura el tancament de l'array active de features.json (#108-#112)
+- **2026-09-29** `c757b1e` Marcadors: BUGs #108-#110 (colors, no agrupats, vermells al pipeline) + registres #111/#112
+- **2026-09-28** `b99479f` BUGs #93-#98: pipeline IN/OUT (snap a keyframe, corchetes, piso IN, ancoratge amb el clip real) + dump [DOMAINS]
+- **2026-09-25** `f0b441b` BUGs #86-#92: detector de silencis adaptatiu + conversio a timeline, corchetes nomes geometria
+- **2026-09-25** `4ec38a7` BUGs #79-#85: CAPA1 amb ancoratge OnAir real + imant al corte, CAPA0 filtra grafics
+- **2026-09-25** `ee50e33` BUGs #71-#78: bounds/IN-OUT, corchete i jerarquia de fonts
+- **2026-09-24** `4a0d6ed` BUGs #63-#70: orden i ancoratge de marcadors per durades (PAS 1+2), 00:00 immutable, prioritat OnAir, pare de grafics i finestra F4 real
+- **2026-09-24** `f954b63` docs: registres vius del 24/09 (features.json bugs.active #55-#62 + HANDOFF_2026-09-24)
+- **2026-09-24** `37676aa` BUGs #55-#62: clip MP4 sense recortar (trimBounds no exposat) + ancoratge de marcadors + ruta de treball per bloc
+- **2026-09-22** `05a3518` feat: pista de treball (SRT/grafismes/TT/DF-mapa/ESPAI) + play des del panell via VBS
+- **2026-09-18** `70723d5` docs: auditoria de capes i estructura de moduls (contrate JS-JSX, duplicats, god modules, setup/Profile.json i pla per lots)
+- **2026-09-18** `a66e025` feat: PORTADA de zero (opcio 2) - copia del clip a la zona neta de V1 + grafisme centrat (0.5/0.5) a V2 + captura QE/API + PNG amb el nom del video de la carpeta
+- **2026-09-18** `b66b1d3` feat: FALLBACK de subtitols al boto CARREGAR - Scan.srtFallback (carpeta de verticalitzacio, relaxacio per nivells) + workflow runSrtLoad/runSrtFallback + Ctrl+clic
+- **2026-09-18** `4327704` feat: PORTADA de zero (opcio 2) - copia del clip del cabezal a zona neta + captura de frame (Render.snapshot); PNG amb el mateix nom que el MP4
+- **2026-09-18** `07b04a3` feat: exportacio DIRECTA del video des de Premiere (exportAsMediaDirect) + preset .epr real
+- **2026-09-18** `c708455` BUGs marcadors/wotts: limit pel SEGUENT marcador + _chooseSlot acotat + endAt + Tema-Titol 4:19
+- **2026-09-18** `9ae7a7f` feat: feedback AHIR al boto MAIN amb Ctrl
+- **2026-09-18** `f474e5d` feat: importador MAPA al boto Grafics (ZZZ_GRAFISME -> bin GRAF -> V5 + congelat a V6)
+- **2026-09-17** `c87f7b6` feat: marcador 00:00 = 1r item estructural per ESCALETA + color via name
+- **2026-09-17** `ae95606` BUGs #cleanFeed: OnAir i previstes mentideres + piso de columna base
+- **2026-09-17** `b43c6c6` feat: ordre d escaleta sagrat als marcadors + cola clip 60s + marge SRT 120s
+- **2026-09-16** `ab4abf9` fix: arrencada de projecte (FOTO en calent), escaleta i marge de clip
+- **2026-09-15** `6117e8d` docs: handoff 2026-09-15 del visor de video (estat i problema pendent)
+- **2026-09-15** `b640409` feat: ancoratge de connexio, TITOLET a V7, SRT d emergencia asimetric, snap de faros F4 i timeout de FOTO
+- **2026-09-15** `7aaea0f` feat(visor): MP4 a memoria/copia local/UNC, servo de sincronitzacio i HUD de diagnostic
+- **2026-09-14** `369715a` feat(tema-titol): nomes clips grans (>4s) referenciats al seu item/marcador
+- **2026-09-14** `b4f6f0b` feat(robustesa): noms UNC decodificats, dedupe de logs, poll del registry i bridge Anim.modeInfo
+- **2026-09-14** `7f29960` feat(arrancada): data de treball ancorada al projecte obert
+- **2026-09-14** `c60c595` BUGs: escaleta valida nomes si el darrer item del bloc esta emes
+- **2026-09-14** `bab64f8` chore: neteja de comentaris (apostrofs) a escaleta_bounds
+- **2026-09-14** `068e2db` feat(arrancada): escaleta valida nomes si el bloc esta emes + FOTO->CREAR + semafor blink + guarda no-crear + reload JSX
+- **2026-09-11** `d4700ff` fix(IO): desfer el URL-encoding de File.name a scanDirectory
+- **2026-09-11** `7a7d96c` feat(visor SRT): PLAY local desacoblat del timeline + cache de video local
+- **2026-09-09** `6eaff29` feat: keyframe sobre clip seleccionat + visor SRT estable + marcats aillats per peca + FOTO->CREAR
+- **2026-09-09** `b080931` feat(actualitzar): si el projecte ja te la capa de video a V1 o subtitols montats, no es reimporten MP4/SRT equivalents encara que el nom no coincideixi (nom aplica a ACTUALITZAR/LOAD/GO, no al crear)
+- **2026-09-09** `cdb3de5` fix(portades): mateixa deteccio de duplicats que els wotts per ID numeric o nom base, i moviment al bin PORTADES amb fallback per ID enlloc de quedar-se al root
+- **2026-09-09** `8347969` feat(SRT editor): els marcadors del SRT es guarden a la carpeta del projecte al costat del manifest enlloc de C:/temp, aixi cada projecte te els seus i no s interfereixen; fallback local amb projectKey si cep.fs no pot escriure a la UNC
+- **2026-09-09** `05f1201` fix(Tema-Titol): escollir el primer item de la estructura que tingui el retol Tema-Titol, no el primer marcador del timeline (el item 01dp pot no tenir marcador propi i es triava el wott erroni del 03)
+- **2026-09-09** `c529f93` fix(ingesta): no duplicar chyrons ni portades a l actualitzar - deteccio de ja existents robusta per ID numeric del nom o nom base sense extensio ni sufix 1
+- **2026-09-08** `5e8a7a5` fix(SRT emergencia): no perdre la darrera frase del bloc - s afegeix el fitxer de 15 min seguent quan hi ha frases que creuen el tall i es retalla el final de cada entrada a la finestra bloc+marge
+- **2026-09-08** `db4b93c` fix(COLOCAR/SRT): conductor - plato sense marcador que obre el bloc va a l inici del clip; IPD - el tram acaba al seguent marcador estructural validat (comentari num-titol o blau), no al final; SRT - els marcadors locals nomes es restauren si son del mateix projecte i es netegen les restes d altres sessions
+- **2026-09-08** `7dc3b5c` fix(IPD): aplica el efecte zoom+posicio a TOTS els clips del tram des del marker IPD fins al seguent marker d estructura/bloc, no nomes al primer clip del marker
+- **2026-09-08** `43d45b0` fix(IPD): detecta els markers IPD pel titol/comentari que contingui IPD a mes del color turquesa; la fase IPD de COLOCAR ja no depen nomes del color 7
+- **2026-09-08** `b6a6312` fix(conductor): troba el primer item de plato llegint l escaleta del bloc AssemblyContext enlloc del primer marcador; els donapas dp/f sense marcador propi com el 05dp es detecten i el conductor es coloca al clip que obre el bloc; fallback a marcadors si no hi ha context
+- **2026-09-08** `58ff800` optim(visor SRT): reproduccio fluida - el video ara es reprodueix de veritat amb play/pausa i es sincronitza amb playbackRate suau enlloc de seeks cada 0.12s que causaven tirones i frames negres en maquines justes; preload auto
+- **2026-09-08** `6ae8684` fix(conductor): guarda al colocar el chyron de presentador - si el primer item del bloc no es de plato per titol OFF/DONA PAS/CONN/INTRO... s omet el conductor; els blocs de nomes video no reben chyron de presentador
+- **2026-09-08** `c69b874` feat(editor SRT): timeline superposat compacte - la WF fa de fons sense atenuar i els clips de subtitols hi queden al damunt semitransparents; la regla es la zona del cabezal i tota la zona de treball es per als marcadors; canvas de ~60px
+- **2026-09-08** `421e721` fix(editor SRT): restaurada la zona superior SOLS per al cabezal i la inferior per als marcadors; es mantenen el drag a nivell de document i la captura del marcador mes proper
+- **2026-09-08** `45a0779` fix(editor SRT): arrastrar marcadors des de qualsevol zona del canvas amb tolerancia real de pixels i agafant el mes proper; el drag no es perd en sortir del canvas listeners a document
+- **2026-09-08** `8691f25` feat(COLOCAR): despres de colocar els chyrons, si hi ha marcador IPD turquesa repassa el tram fins al seguent estructural i coloca el efecte zoom+posicio 144 sense fer toggle; runAplicarIpdDesdeMarkers guarda l estat previ per poder revertir amb el boto IPD
+- **2026-09-08** `d79b1ed` fix(timeline): treure el min-width del body perque el timeline es estrenyi amb la finestra; el minim de 640px queda nomes a la franja de controls per no trencar els grups de botons
+- **2026-09-08** `0d43f4d` compact(editor SRT): capa de clips del timeline mes baixeta 30px
+- **2026-09-08** `7f4ea15` fix(visor): mesurar la columna completa de controls amb el visor anullat per evitar autoinflar la mesura; el visor torna a fer l alçada de INICI+VIDEO+GRF/SUB+CHY/REN sense sobredimensionar
+- **2026-09-08** `b330f4c` fix(vista TREBALL): el visor fa la altura dels grups de botons GRF/SUB/CHY/REN i queda ancorat al seu costat; lletra dels botons dels grups mes discreta pes 700 tamany 8px com els botons IN/OUT
+- **2026-09-08** `cac28bd` fix(vista): visor mesurat contra la columna real de controls, sense autoinflar la zona del video; lletra dels botons dels grups de 7 a 9px amb trencament en dues linies per als textos llargs
+- **2026-09-08** `c90807a` fix(vista): ample minim de la finestra 640px per no trencar els grups de botons; visor pegat a l esquerra dimensionat per JS amb proporcio 9 16 de l altura de la columna
+- **2026-09-08** `4d421dc` feat(layout): TEST fila1 Marcadors+Chyrons, fila2 Grafics+Subtitols, fila3 Render; TREBALL graella fixa 2x2 (Grafics+Subtitols mai se separen); visor sense marc ni marges; botons 30px
+- **2026-09-08** `d7be227` fix(INICI+video): semaforos compactos sense botons dins; botons mode/config amb NOU; FOTO amb ample natural; selects encogibles; visor de video dimensionat per la vista (height 100%)
+- **2026-09-08** `2abdce0` fix(layout): igualar altura CHYRONS/RENDER (labels abreujats en TREBALL) i estrechar la columna esquerra (340px) per donar marge al visor de video
+- **2026-09-08** `c38ad90` feat(layout usuar): fila1 Grafica+Subtitols, fila2 Chyrons(horitzontal)+Render en TREBALL; video ajustat a la disposicio; eliminada info de dimensions (layoutInfo)
+- **2026-09-08** `b8d4b79` feat(layout v3 + srt): graelles de botons de 2 files max (34px); CHYRONS vertical en TREBALL; SUBTITOLS+RENDER a la mateixa fila; margen garantit +20s a la carrega SRT de 15 min
+- **2026-09-08** `8b8c9f0` fix(layout): limitar ample nomes a les seccions de botons quadrats (sq-group); SUBTITOLS/RENDER amb ample natural
+- **2026-09-08** `c35f89e` feat(layout v2): botons quadrats 38px amb acronims; fileres Grafica+Marcadors / Chyrons+Subtitols / Render; OUT nomes marcadors i boto COLOCAR per chyrons; video mes ample; marges subtitols
+- **2026-09-07** `b019b56` fix(layout): botons de tamany uniforme (64x30) i CHYRONS amb nomes Repartir en mode TREBALL
+- **2026-09-07** `7f702e7` docs(plan): netejar seccions 16-18 del pla (escapament) i documentar pipeline OUT + layouts
+- **2026-09-07** `f2b0c6d` feat(layout): pipeline OUT automatic en mode TREBALL + GRAFICS per usuari (Grafica/IPD/DblPant/Mapa/Totem) + MARCADORS test-only + Ctrl+clic IPD revisio
+- **2026-09-07** `eabf139` feat(chyrons): traduccions i retols de Programes tambe a V7 (lloc); Repartir opera sobre V7
+- **2026-09-07** `0456ab0` fix(chyrons): els retols de localitzacio de directe (Directe...) van a la pista de Lloc V7 per no trepitjar els de nom a V6
+- **2026-09-07** `863e415` fix(tema): prioritzar item OFF/OFD i netejar tots els prefixos reservats en la reconstruccio del tema
+- **2026-09-07** `d75dfed` fix(tema): reconstruir tema desde el 1r estructural cuando todos llevan prefijo reservado; limpiar log de MOVE_FAILED
+- **2026-09-07** `1fba038` fix(markers): AssemblyContext resuelve la carpeta del proyecto abierto via Project.path y realinea ctx.dateDir
+- **2026-09-07** `cc83afd` fix(inici): filtrar por FECHA DE CREACION real (el mtime del NAS esta desplazado +1d por proceso nocturno 02:31)
+- **2026-09-07** `f3a02cc` fix(inici): mecanismo unico de filtrado por fecha + filtro final de seguridad en ingestAssets
+- **2026-09-07** `3a0fff7` fix(inici): anti-contaminacion de wotts/portadas + Ctrl+FOTO de la escaleta de AHIR
+- **2026-09-07** `d082546` feat(inici): mecanica HOY por defecto / AYER con Ctrl+clic y estados MASSA D_HORA-ESPERANT-CREAR-ACTUALITZAR
+- **2026-09-04** `cc9f26e` docs(plans): MECANICA_INICIO_HOY_AYER - define estados del boton MAIN (MASSA D_HORA, ESPERANT, CREAR, ACTUALITZAR) con cascada de deteccion
+- **2026-09-04** `cc80a0c` docs(plans): MECANICA_INICIO_HOY_AYER - inicio con fecha explicita (hoy por defecto, ayer con Ctrl+clic), inventario de archivos a rastrear y matriz de decision
+- **2026-09-04** `1fe8cbd` refactor: elimina intent de color etiqueta IPD (setClipLabel/probeLabel) - API Premiere no permet recolorear clip del timeline
+- **2026-09-04** `b8a8fca` fix: recupera encoding UTF-8 de flow_graphics.js i main.js (doble codificacio Windows-1252 per reescriptura ANSI)
+- **2026-09-04** `26992bc` fix: _aplicarMotionAClip accepta respostes OK:... de setMotionValues (activava etiqueta IPD)
+- **2026-09-04** `fefdc7c` DF/slider/KF: fix fons V1 (delta espuri), escala uniforme, PAN amb compensacio de recorte i limits per cobertura; IN MP4: offsets configurables clipInOffset/zonaInOffset; SRT: tolerancia marcadors 20s i CARREGAR usa emergencia; IPD: toggle normal/IPD + etiqueta i procediment markers IPD; logs Main sense filtre
+- **2026-09-01** `6b74746` fix: doble pantalla paso a paso con polling/verificacion, remove con reintento y fons opcional
+- **2026-09-01** `057484a` refactor: doble pantalla con JSX atomico (move/duplicate/trim/setMotionValues) + logica de orquestacion en JS
+- **2026-09-01** `e5626b0` feat: boton Doble Pantalla (duplicar clip + crop/posicion/escala) + botones IPD/MAPA/TOTEM placeholder
+- **2026-09-01** `fd83640` fix: proyecto nuevo limpia marcadores SRT persistidos (C:/temp) y excluye _MOD al cargar
+- **2026-09-01** `963c79c` fix: exponer IO.copyFile e IO.createFolder en el puente JSX (fallaba ensureLocalCopy)
+- **2026-09-01** `e315fae` feat: la extension trabaja siempre con la escaleta local del directorio del proyecto (ensureLocalCopy) + manifest regenerado desde el ultimo JSON
+- **2026-09-01** `42cba61` feat: slider reframing con límites normalizados (centro 0.5) + fix IN/OUT solidario + zoom Work Area + reglas economía de tokens
+- **2026-09-01** `371c509` feat: playhead local más allá del OUT en editor SRT + mejoras en chyrons/KF/clips/main
+- **2026-08-27** `654eda5` fix: conductor usa directamente el primer marcador estructural (sin depender de structureById)
+- **2026-08-27** `f3792aa` docs: aclarar que la pista MP4 (v_mp4=1) conte el clip del bloc actiu, no el bloc V1
+- **2026-08-27** `55e3c2e` fix: conductor posiciona relativo al clip del bloque activo en vez de clips[0]
+- **2026-08-27** `dc987a8` fix: boton Conductor deriva estructura de marcadores si State.structure esta vacio
+- **2026-08-27** `fb85b51` fix: nombre de secuencia usa sanitizedTheme (tema real) en vez de wottData.tema (INTRO)
+- **2026-08-25** `5904a75` DOC_PLAN_VIDEO_PREVIEW: visor de video+subtitols a l'editor SRT (opcio A, sense ffmpeg)
+- **2026-08-25** `40484ff` FIX_encoding_index: recuperat contingut UTF-8 correcte (bf6677b) + cachebuster v5 aplicat sense corrompre (PowerShell 5.1 llegia ANSI i destrossava els accents)
+- **2026-08-25** `2ec5c57` FIX_playhead_seguiment_continu: interpola sempre (PLAY des de Premiere/espai, boto o scrubbing), detecta pausa per CTI parat, logs PLY quan el CTI avanca; cachebuster v5
+- **2026-08-25** `50d7063` CHORE_cachebuster_v4: forca recarrega dels scripts modificats (logs playhead)
+- **2026-08-25** `e09dace` DIAG_playhead: logs de PLAY/PAUSA i de cada poll en play (tl, real, show, rtt) per analitzar el desfase i els salts
+- **2026-08-25** `45d16ca` FIX_playhead_velocitat: extrapolacio del CTI a 1x en TL (exacte) i conversio a media; sense mesurar rEff (jitter inflava la velocitat); umbral de render per temps (independent del zoom); log RTT
+- **2026-08-25** `dc4ffba` FIX_playhead_salts: rEff mesurat nomes amb posicions reals del CTI (elimina retroalimentacio positiva), base al real amb punt mig RTT, render suavitzat proporcional, poll a 250ms en play
+- **2026-08-25** `6124776` FIX_playhead_play: interpolacio directa en MEDIA amb velocitat efectiva mesurada (rEff), sense amplificar l'error de tl per la velocitat dels clips (r fins a x15)
+- **2026-08-25** `1883f47` FIX_wf_recortada: la WF es dibuixa nomes al rang de media cobert pel timeline (primer inPoint..ultim outPoint dels segments); fora del rang queda buit
+- **2026-08-25** `c189587` FIX_espai_medi: WF, subtitols i marcadors en temps de MEDIA del clip (identitat); el cabezal converteix tl<->media (sempre senyala l'audio correcte); indicador media|tl visible a l'esquerra
+- **2026-08-25** `4ab0472` DIAG_tl_media: indicador al canvas amb tl del cabezal i media que dibuixa la WF (per mesurar el desajust 25:13 vs 14:07)
+- **2026-08-25** `1c02021` FIX_wf_perfil: normalitzacio fidel per maxAbs real del bin (sense ganx3/saturacio) + log segments amb outPoint i ratio per verificar el trimeo
+- **2026-08-25** `159bca9` CHORE_ffmpeg_normalitza_separadors: extRoot amb backslashes + runCommand usa el mateix resolver
+- **2026-08-25** `53a7d5a` FIX_ffmpeg_resoluble: primer a bin\\ffmpeg\\bin de l'extensio (no es pusheja), despres rutes absolutes conegudes; resolt via System.getExtPath
+- **2026-08-25** `ff252c5` CHORE_cachebuster_v3: forca recarrega de tots els scripts (evita servir codi vell amb el domini que penja)
+- **2026-08-25** `1d179b7` FEAT_log_comu: el log es guarda a PROVES\FASTPASS.log (nom generic, comu a tots els projectes) per seguir-lo des d'un unic fitxer obert a VS
+- **2026-08-25** `4c0efb7` FIX_escaletes_IP: llistat per IP directa (192.168.147.199) amb fallback a nom de domini; evita bloqueig quan public.ad-ccrtv.local no resol (PCs amb politiques)
+- **2026-08-25** `c64637d` FIX_ruta_sense_accent: totes les referencies a VERTICALITZACIO(amb accent) canvien a VERTICALITZACIO (nou directori de treball)
+- **2026-08-24** `fdf2fc8` DIAG_WF_segments: volcat detallat del mapa (medias per nom + primers 8 segments amb tl/media/nom) al log del panell
+- **2026-08-24** `af6129c` FIX_getBinPath_estricte: eliminats TOTS els fallbacks; nomes carrega el bin del BLOC actual o cap (millor sense WF que WF equivocada)
+- **2026-08-24** `c0fd6bf` FEAT_clip_directori_projecte: log explicit del desti del clip (carpeta del .prproj) + getBinPath prioritza el bin del BLOC actual (wott_bloque) per evitar confusions entre blocs a la mateixa carpeta
+- **2026-08-24** `8a0befc` FEAT_waveform_480Hz: AUDIO_REF generat a 480Hz (1 byte=1 peak), parser sense fallback 8kHz, segments WF unificats a getWorkSequence + log diagnostic
+- **2026-08-24** `5855902` FIX_IN_borra_mass: click prop de marcador suprimia el playhead (ara nomes es suprimeix si hi ha drag real) + log diagnostic IN
+- **2026-07-31** `bf6677b` FEAT_srt_markers: click dret crea/esborra, drag amb efecte (MOURE=dreta solidaria+tram escalat | AMBDOS=escala dos costats), IN ancora marcador, persistencia al fastpass.json
+- **2026-07-31** `8b1bf18` FEAT_playhead_sync_play: interpolacio local entre polls (rellotge local + correccio 500ms), compensacio latencia RTT, log SRT_SYNC
+- **2026-07-31** `d1752c2` CHORE_verify_audio_match: parametritzable (DIR_REL MP4 BIN)
+- **2026-07-31** `ff02fe7` FIX_waveform_desfase_0.9s: AUDIO_REF.bin es genera DES DEL CLIP extret (no del source) + eina verify_audio_match.py
+- **2026-07-31** `9ea8f77` FEAT_waveform_sync_timeline: mapa temps_timeline->temps_media via clips (start/end/inPoint/outPoint), refresc cada 2s, polls unificats
+- **2026-07-31** `29a1ccb` FEAT_waveform_positive_only_zoom_solidari: peaks per temps (100/s fix), barres des de la base
+- **2026-07-31** `9b8c2c9` FIX_waveform_WAV_8bit_unsigned_parser_Base64
+- **2026-07-31** `eb05676` WAVEFORM_amplify_3x_low_values
+- **2026-07-31** `07b500f` WAVEFORM_BIN_generator_script_and_reader
+- **2026-07-30** `ab87d33` fix: eliminar early-return por escaletaId null en main.js - permitir fallback interno
+- **2026-07-30** `3b5dcba` feat: boto FER FOTO escaleta - index.html + handler en main.js
+- **2026-07-30** `91cc124` feat: verificacion curl.exe instalado - curl 8.13.0 disponible
+- **2026-07-30** `f9eb65b` feat: sistema de foto escaleta on-demand - escaletaId en config, modulo fetch, helper curl JSX
+- **2026-07-30** `61ae249` fix:snap-no-colocar-chyron-ABANS-del-seu-marcador
+- **2026-07-30** `0eca710` fix:Conductor-CasA-B-usa-clips-0-start-no-targetTime
+- **2026-07-30** `4378865` fix:Conductor-no-verifica-existencia-al-JSON-nomes-sufix
+- **2026-07-30** `9a90375` fix:Conductor-logica-items-dp-i-lead-f-verifica-existencia
+- **2026-07-30** `bb12359` fix: output seeking per precisio de handles
+- **2026-07-29** `186c296` FIX_waveform_RAW_signed_8bit_parser
+- **2026-07-29** `670e93a` WAV_bin_waveform_reader_integrated
+- **2026-07-29** `39850ce` fix: audio ref format wav
+- **2026-07-29** `a9540e3` feat: audio ref binari 8kHz + handles 20s
+- **2026-07-29** `a5ec745` fix: let en lloc de const per psContent
+- **2026-07-29** `23b59e2` feat: extractClip via PowerShell
+- **2026-07-29** `5f00829` cleanup: eliminar fitxers obsolets
+- **2026-07-29** `242089e` feat: extraccio clip via ffmpeg completada + neteja fitxers obsolets
+- **2026-07-27** `ef486fb` PLAN_EXTRACCIO_CLIP_created
+- **2026-07-27** `46c0566` SRT_waveform_duration_limit_sync
+- **2026-07-27** `f79392c` SRT_waveform_PowerShell_script
+- **2026-07-27** `62a296e` SRT_fix_log_undefined_waveform
+- **2026-07-27** `91aea35` SRT_waveform_ffmpeg_RAW_cepfs
+- **2026-07-27** `b9ba905` SRT_fix_1track_waveform_preview
+- **2026-07-27** `d0d9fa3` SRT_WaveformGenerator_ffmpeg
+- **2026-07-27** `14eb04c` SRT_remove_info_references
+- **2026-07-27** `67e5b50` SRT_fix_PLAY_polling
+- **2026-07-27** `aace3fc` SRT_refinament_2_PLAY_zoom_font
+- **2026-07-27** `d4dc3f0` SRT: refinament layout + PLAY/PAUSA + 1 track + preview text net + playhead net
+- **2026-07-24** `cbdd03b` SRT EDITOR: tot a Track B + waveform + zoom slider + scroll horitzontal
+- **2026-07-24** `8e9a57d` FIX: callJSX->Utils.callJSX + runPreparar desactivat + manifest 9.2
+- **2026-07-24** `9a8d08d` SRT: forçar recàrrega extensió (manifest 9.0.0→9.1.0)
+- **2026-07-24** `b20180b` SRT EDITOR: cachebuster ?v=2 a scripts + fix auto-load conflicte
+- **2026-07-24** `60486af` SRT EDITOR: pseudotimeline canvas + 2 tracks + polling CTI + IN/OUT/AJUSTAR/EXPORTAR
+- **2026-07-24** `1c853a8` SRT: neteja de caption tracks via .prproj (PowerShell GZip)
+- **2026-07-24** `de40d59` SRT: IN/OUT/AJUSTAR funcionals (sense neteja de tracks per API)
+- **2026-07-23** `7d277a5` SRT IN/OUT/AJUSTAR: parseig, processament, import i createCaptionTrack
+- **2026-07-21** `449cfa5` docs: HandOff PLAN_EXTRACCIO_FFMPEG_CALENT - importacio en calent via ffmpeg -c copy
+- **2026-07-21** `4ec3d19` fix:moure-Timeline-set-cutTime-despres-snapshot
+- **2026-07-21** `2821151` fix:retornar-cabezal-a-cutTime-despres-del-freeze
+- **2026-07-21** `d190b9a` feat:freeze-Wott-temporal-TC-10-00-sense-ripple
+- **2026-07-21** `0f1d2a7` fix:freeze-inserir-Wott-temporal-a-TC-10-00-no-ripple
+- **2026-07-21** `056c748` feat:freeze-mou-clip-a-TC-10-00-00-per-snapshot-net
+- **2026-07-21** `600563d` fix:afegit-videoOut-al-bridge-global-Tracks-de-main.jsx
+- **2026-07-21** `49c74c7` feat:videoOut-diagnostic-TEMA-TITOL
+- **2026-07-15** `e21cf80` fix:mute-usa-track-mole-propietat-setMute-illegal-param
+- **2026-07-15** `390e225` debug:Tracks-mute-log-writeln
+- **2026-07-14** `162d713` fix:stretchEnd-fallback-final-ultim-clip-V1
+- **2026-07-14** `a049311` fix:Titol-out-point-final-sense-seguent-marcador
+- **2026-07-14** `8114fcb` fix:clipStart-usa-clips-0-start-no-first-marker-time
+- **2026-07-14** `6700cb8` docs:handoff-CHYRONS-20260714
+- **2026-07-14** `c6d5931` fix:Titol-detecta-conductor-altre-cop-CasA-B
+- **2026-07-14** `4ac3631` fix:Titol-sempre-al-principi-CasA-B-sense-interdependencia
+- **2026-07-14** `68cb9f2` fix:Titol-cerca-per-base-numerica-quan-marcador-no-te-entry
+- **2026-07-14** `28bc22b` fix:Conductor-cerca-marcador-per-base-numerica-inclou-dp
+- **2026-07-14** `bab2d29` fix:stretchEnd-sense-clipV1-nomes-TemaTitol-o-OutPoint
+- **2026-07-14** `97e9c41` fix:stretchEnd-fallback-final-clipV1-end
+- **2026-07-14** `79c495f` fix:snapshot-escriu-directament-a-Snapshots-del-projecte
+- **2026-07-14** `fc82bbb` fix:Conductor+Titol-ara-usen-allMarkers-ordenats
+- **2026-07-14** `92d0dd1` fix:Conductor-considera-marcadors-grafics-F6-al-calcular-marge
+- **2026-07-14** `6d79e2e` fix:stretchEnd-usa-Timeline-getOut-en-lloc-clipV1-end
+- **2026-07-14** `b9d4a86` fix:stretchEnd-fins-proper-TemaTitol-o-final-V1
+- **2026-07-14** `5f7dfeb` fix:Titol-CasB-eliminat-tcSeconds-4-20-correcte
+- **2026-07-14** `f60246b` fix:Titol-posicio-CasA-CasB-segons-conductor
+- **2026-07-14** `d7ac1ff` fix:Conductor-llegeix-desplegable-SETUP
+- **2026-07-14** `b55c01e` feat:Conductor-logica-marge-CasA-CasB
+- **2026-07-14** `c336c3d` fix-f2-faro-clamp-ordre-escaleta
+- **2026-07-13** `4e845e0` fix-f2-faro-clamp-ordre
+- **2026-07-13** `00f29a1` fix-deduce-onair-dir-prevista
+- **2026-07-13** `dc5a8d0` fix-deduce-faro-agrupacio
+- **2026-07-13** `a912395` fix-duplicat-d10-faro-d12
+- **2026-07-10** `ce4ff6f` docs:handoff-CHYRONS-20260710
+- **2026-07-10** `45f7e4c` wip:freeze-aisla-V5-folder-projecte-CHY-estira-final
+- **2026-07-10** `6d6cb54` fix:freeze-funciona-importa-CHY-estira-final
+- **2026-07-10** `c62e849` fix:rename-IntroGfx-OffGfx-OffVideoGfx-Repartir
+- **2026-07-10** `afc51fa` refactor:reorganitzacio-workflows-chyrons-graphics-markers
+- **2026-07-10** `64fbec2` fix-f5-placeByPrefixes
+- **2026-07-10** `ed4a5c1` fix-f3-only-faros
+- **2026-07-09** `9efd31a` fix:freezeFrame-export-API-standard-sense-QE
+- **2026-07-09** `fe150d2` fix:JSX-FASTPASS-global-bug-modulos-catalan
+- **2026-07-08** `f1f14a6` feat:CHYRONS-snap-V1-traducciones-V3-distribucion-IDs-completos-fix-tamano-mov-UNC-pista-trad
+- **2026-07-08** `06b9acc` fix-f6-parentEnd
+- **2026-07-08** `130b579` fix-f6-parent-priority
+- **2026-07-08** `7d2064a` fix-f6-spacing-d13
+- **2026-07-08** `fea66b9` fix-flow_markers-modular
+- **2026-07-08** `394227e` feat: completar S2 (snapshot immutable) + S3 (JSX atomic: trimBounds/trimAudioA2) + S4 (CODE_OWNERSHIP.md)
+- **2026-07-08** `2542aa8` refactor: modularizar flow_assembly en 4 dominios (MP4, Markers, Chyrons, Graphics) + Core AssemblyContext compartido
+- **2026-07-07** `0c94708` fix-f1-red-f6-dp-gap
+- **2026-07-07** `14f8c04` fix: findLatestValid fallback a JSON anterior si no hay ninguno posterior al bloque + _runNew usa findLatestValid
+- **2026-07-07** `ecc1ddc` fix: load() descarta JSONs de error del servidor sin cleanFeed/escaleta (evita fallback MP4)
+- **2026-07-03** `81b3694` fix: BUG #16-B5 - getItemSortidaSec compara deducedOnAir vs Prevista+durada para tener en cuenta gaps entre items
+- **2026-07-03** `aea43e4` fix-f6-remove-lead
+- **2026-07-03** `9c2a3fa` fix-f6-graphic-parent
+- **2026-07-03** `1327b77` fix-f3-ungrouped-blue
+- **2026-07-03** `193006d` fix-f4-previsto-snap
+- **2026-07-03** `50fd12a` fix-f2-ungrouped-blue
+- **2026-07-03** `d81b837` fix-f2-blue-color
+- **2026-07-01** `4daf7ef` feat: TimeGuard - sistema de 3 ventanas temporales (ayer/bloqueo/hoy) segun hora de emision del programa
+- **2026-07-01** `712d855` fix: BUG #16-B4 - Prevista+durada ahora se evalua ANTES que Phase2 cross-agrupacio en getItemSortidaSec
+- **2026-06-29** `51a2531` fix: FIX A3 - guarda 22h fallback a ayer si no hay JSONs validos hoy
+- **2026-06-29** `2c2ad94` feat: FIX A3 - findLatestValid integrado en checkContext con mensaje de espera si el bloque aun se esta emitiendo
+- **2026-06-29** `f9fd279` feat: findLatestValid - valida que el JSON sea posterior al fin de emision del bloque
+- **2026-06-29** `98a73ac` refactor: findLatest devuelve JSON mas reciente global ignorando blockId en filename
+- **2026-06-29** `87d63d4` fix: BUG #16-B3 - Eliminar Tier1-ONAIR-PREVAL que se comía la intro del bloque (TNM V3 28/06)
+- **2026-06-25** `956bcb5` fix: regex dateDir en FIX A1 - DD_MM_YYYY cambiado a YYYY_MM_DD para coincidir con directorios reales
+- **2026-06-25** `24b85ce` fix: getItemEntradaSec - fallback cross-agrupacio via _deduceOnAirEntrada(ignoreAgrupacio=true)
+- **2026-06-25** `f1e3cb6` fix: revertir cambio OUT + añadir debug logging en getItemSortidaSec
+- **2026-06-25** `78017ed` fix: OUT del clip - getItemSortidaSec no usa OnAir+0 cuando durada=0
+- **2026-06-25** `63b6df0` fix: MP4 del JSON + SRT por fecha creacion + D7.1 fallback a ayer (ventana 22h)
+- **2026-06-23** `6ecc5a9` feat: REGLA ORO - nunca cambiar de dia + restaurar _discardOld para chyrons + formato YYYY_MM_DD + _runNew con datePrefix en D7.1 + fallback V1->V5 intra-dia en findLatest
+- **2026-06-19** `9513c40` backup-2026-06-19
+- **2026-06-12** `b349a49` cleanup: liposuccion masiva de docs/planes obsoletos + feat: .clinerules y scripts bin + refactor: core JS y workflows
+- **2026-06-08** `6224ad5` feat: JSONs por bloque MATINS fmt junio 2026
+- **2026-06-08** `ba860ed` docs: plan de fusión local-remoto + configurar proxy corporativo en git skill + docs/conversations
+- **2026-05-29** `7c5ab09` docs: handoff 2026-05-29 — BUGs #14-#16 + reestructuración + consolidación + skills Debug/Git
+- **2026-05-29** `1cc192a` consolidacion: actualizar README.md, corregir coder-genius (paths UNC + OLD_CODE), eliminar auditoria duplicada (2.4.2 corta), mover plans/done/ -> archive/plans/, crear skills Debug + Git, limpiar resource fork ._SKILL.md
+- **2026-05-29** `0545a49` consolidacion: limpiar bin/ (eliminar format-json.ps1 redundante + placeholder), estandarizar docs/archive/ a .md, merge KEYFRAMES -> docs/reference/, eliminar OLD_CODE/ (30+ archs catalanes obsoletos), eliminar graphify-out/ (60+ caches), actualizar .gitignore
+- **2026-05-29** `55b4872` Reestructuracion Harness Engineering: .roo/ centro de control, INFO/ eliminado, docs/ consolidado
+- **2026-05-29** `dbb4548` BUG#16: fix doble contaminacion cross-agrupacio en calculo IN
+- **2026-05-29** `03a3b1b` BUG #16: Tier0-IN compite con Tier1-IN (usa el mínimo). Fix IN del MP4 desplazado en V1/V2/V5.
+- **2026-05-29** `523aa8c` BUG #15: F2·Deducido primer ítem estructural (intro) forçat a 00:00 en lloc d'anchorEfTimelineSec
+- **2026-05-29** `19369c3` BUG #14: fallback _getColorIdx en F3.5/F4/F5 para marcadores sin color (pre-BUG #9). Los marcadores ahora preservan su color correcto (azul/rojo/amarillo) en lugar de caer a verde por defecto.
+- **2026-05-28** `f93dc0e` BUG #13: _deduceOnAirSortida y Tier 2 no cruzan fronteras de agrupacio
+- **2026-05-28** `a0d448d` BUG #12: _isGraphicByNum compartido + filtro en UNGROUPED F1/F2/F3 — ítems gráficos (ex: 18TE) ya no se cuelan como marcadores estructurales. Sufijos gráficos centralizados en _GRAPHIC_SUFFIXES + _isGraphicByNum como fuente única de verdad. _classifyItems ahora delega en el helper compartido.
+- **2026-05-28** `902a4ea` BUGs #6-#11: crash F2 _safePlaceByPrefixes, color perdido _setMarkerColor, logica colores _getColorIdx, OUT por siguiente OnAir (3 capas), HANDOFF 2026-05-28
+- **2026-05-03** `0b0e66e` PLAN MARKERS con Escaleta
+- **2026-04-30** `15fc480` Polling ffmpeg
+- **2026-04-30** `50a5716` Mejora Rendimiento y ffmpeg
+- **2026-04-30** `f5aa5ce` Delimitadores de secuencia
+- **2026-04-30** `159f422` Antes de Block Analisis y Graphify
+- **2026-04-26** `fcf6984` NNews Project para pruebas
+- **2026-04-26** `784e4a4` PLAN NNEWS
+- **2026-04-26** `ca8b95a` CleanUp
+- **2026-04-26** `f590b29` Arreglillo
+- **2026-04-25** `89aa355` Fuente de Verdad
+- **2026-04-25** `1688820` New PLAN TC AWARE
+- **2026-04-25** `aabd271` Estabilizado markers + NNEWS Info
+- **2026-04-19** `b132328` SKILLS
+- **2026-04-19** `16d6552` CLEANUP
+- **2026-04-19** `6326551` SetUp Button
+- **2026-04-19** `70631ad` ESCALETA + RENDER
+- **2026-04-18** `c06a034` ESCALETA.json ANTIGRAVITY
+- **2026-04-17** `8d66596` ESTRUCTURA
+- **2026-04-16** `01899a3` SRT Antigravity
+- **2026-04-16** `1c12e4d` POST ANTIGRAVITY Flashes.
+- **2026-04-16** `af640ad` LIMPIEZA DE FLASHES en proceso
+- **2026-04-13** `5615867` Reconexión de repositorio y actualización a estado Desarrollo (v2.9.5)
+- **2026-04-12** `48d3fec` Paso intermedio DeepSeek Viernes 9 AM
+- **2026-04-09** `125cb55` Backup actualizado desde pendrive
+- **2026-04-05** `323785d` Claude Opus boton IN
+- **2026-04-03** `45f7ff6` Refurbished Antigravity
+- **2026-04-03** `6d42496` Repaso Antigravity
+- **2026-04-02** `673e48e` En desarrollo Wott Rebelde y Project desconectado
+- **2026-03-31** `0bf0baa` Session Summary
+- **2026-03-31** `798ec2e` flow_mainButton refactorizado
+- **2026-03-31** `6e50cb0` ruNew en marcha
+- **2026-03-29** `cbe4b3c` Revision Sonnet
+- **2026-03-29** `4d20b80` FINAL antes de Test
+- **2026-03-28** `ca84fa0` REFACTOR FINAL!!!
+- **2026-03-28** `82f1ed2` Refact Assembly
+- **2026-03-28** `cf2d061` HAsta Auditorioa de <Parser (incluido)
+- **2026-03-28** `e190f7d` CAmbios Nombres en Clips
+- **2026-03-28** `c8636ce` Despues de Auditoria Tecnica ANtigravity
+- **2026-03-28** `7e3c4a9` Reactive State Machine
+- **2026-03-28** `c6d3a0b` JSX con argumentos de contexto
+- **2026-03-28** `635b282` Dinamica Antigravity
+- **2026-03-27** `1ab0db4` Hasta aqui Funcionalidad con Antigravity
+- **2026-03-27** `f92f77c` Antes de antigravity. Importacion funciona.
+- **2026-03-24** `64a9efd` Stabilization Plan
+- **2026-03-23** `c58c383` Aufitoria Tecnica Antigravity
+- **2026-03-23** `e9f504f` Taula d'Estructura
+- **2026-03-23** `d29b13a` Bloqueig d'usuari
+- **2026-03-23** `b6444f8` Auto Reframe Intel·ligent
+- **2026-03-23** `f3f4a46` Botó Fons
+- **2026-03-22** `d8997d4` CutOut Pro y ontext (4 llums)
+- **2026-03-22** `459f030` Portada PNG Pro
+- **2026-03-22** `120160d` Auto-verificació de seqüència activa
+- **2026-03-22** `bcc3aaa` Arreglos Auditoria Verdes Comletado.
+- **2026-03-22** `400072a` POst Auditoria Crash
+- **2026-03-22** `046459a` Remapeado tracks
+- **2026-03-22** `9b6cc8d` flow mainButton
+- **2026-03-21** `ed2a3ad` LIPO ACABADA y TESTEO EN VACIO
+- **2026-03-21** `523c588` Inspectors
+- **2026-03-21** `c0f303f` first commit
+

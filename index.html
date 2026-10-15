@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="ca">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FAST >>> PASS (v2.9.5 - TACTICAL)</title>
+    <link rel="stylesheet" href="./style.css?v=59">
+</head>
+<body>
+    <div id="main-content">
+        <div class="main-upper">
+        <div class="upper-left">
+        
+        <!-- SECTION: SETUP -->
+        <div class="section-container" id="secInici">
+            <button id="btnReset" class="btn-destructivo" aria-label="RESET GENERAL" title="RESET GENERAL · Tanca el projecte del bloc seleccionat, n'esborra TOTA la carpeta i el torna a crear de zero">🔄</button>
+            <div class="section-label"><span>INICI</span></div>
+            <div class="section-content">
+                <div class="setup-top-row">
+                    <div class="semaforo-strip">
+                        <div class="semaforo-item" title="Estat de l'Escaleta JSON (Servidor)">
+                            <div id="sem-esc" class="light off"></div>
+                            <span>ESC</span>
+                        </div>
+                        <div class="semaforo-item" title="MP4 CleanFeed al projecte/timeline">
+                            <div id="sem-mp4" class="light off"></div>
+                            <span>MP4</span>
+                        </div>
+                        <div class="semaforo-item" title="Rètols (Wotts) al Bin CHY">
+                            <div id="sem-wot" class="light off"></div>
+                            <span>WOT</span>
+                        </div>
+                        <div class="semaforo-item" title="Subtítols projectats al timeline">
+                            <div id="sem-srt" class="light off"></div>
+                            <span>SRT</span>
+                        </div>
+                    </div>
+                    <button id="btnFetchEscaleta" class="secondary btn-foto" title="Fer foto actualitzada de l'escaleta via API digition (Ctrl+clic = foto d'AHIR, per corregir/comparar el dia anterior)" style="background:#5a2a2a; color:#f99;">📷 FOTO</button>
+                </div>
+                <div class="setup-grid">
+                    <div class="setup-inputs">
+
+                        <div class="inline-input-group">
+                            <label for="programa">PROG:</label>
+                            <select id="programa"><option value="">Tria...</option></select>
+                        </div>
+                        <div class="inline-input-group">
+                            <label for="bloc">BLOC:</label>
+                            <select id="bloc">
+                                <option value="---">--- SELECCIONA BLOC ---</option>
+                                <option value="V1">V1</option>
+                                <option value="V2">V2</option>
+                                <option value="V3">V3</option>
+                                <option value="V4">V4</option>
+                                <option value="V5">V5</option>
+                            </select>
+                        </div>
+                        <div class="inline-input-group">
+                            <label for="conductor">COND:</label>
+                            <select id="conductor"><option value="">Tria...</option></select>
+                        </div>
+
+                    </div>
+                    <div class="setup-actions">
+                        <button id="btnMainAction" class="btn-big-sq">NOU</button>
+                        <div class="setup-actions-mini">
+                            <button id="btnMode" class="icon-button" title="Alternar layout TEST / TREBALL">🧪</button>
+                            <button id="btnSetup" class="icon-button red" title="Configuració">⚙️</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- SECTION: VÍDEO -->
+        <div class="section-container">
+            <div class="section-label"><span>VÍDEO</span></div>
+            <div class="section-content">
+                <div class="video-tactical-layout">
+                    <div class="video-row-top">
+                        <button id="btnIn" class="secondary btn-sq-std btn-destructivo">IN</button>
+                        <button id="btnScene" class="secondary btn-wide-flex btn-destructivo test-only" title="TROSSEJA: divideix el clip de V1 als talls de contingut (Cut.runScene). És la fase 2 del pipeline OUT &amp; GO: aquest botó només surt a la pantalla de TEST per poder provar-la per separat">TROSSEJA</button>
+                        <button id="btnOut" class="secondary btn-wide-flex btn-destructivo" title="OUT &amp; GO: tanca el bloc, trosseja els talls, col·loca els marcadors i els chyrons (tot el pipeline)">OUT &amp; GO</button>
+                        <button id="btnKey" class="secondary btn-sq-double-high btn-destructivo">KEYFRAME</button>
+                    </div>
+                    <div class="video-row-bottom">
+                        <button id="btnPrevClip" class="secondary btn-sq-std">◀</button>
+                        <div class="slider-zone" id="sliderZone" title="Clica per activar/desactivar el reencuadre manual">
+                            <input type="range" id="slider-move" min="-1000" max="1000" value="0" disabled>
+                        </div>
+                        <button id="btnNextClip" class="secondary btn-sq-std">▶</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- TEST: graella per files (MAR+CHY · GRÀFICS+SUBTÍTOLS · RENDER) · TREBALL: 2 columnes (col1 CHYRONS+GRÀFICS · col2 SUBTÍTOLS+RENDER) -->
+        <div class="graphics-group">
+        <!-- TREBALL col1: flux de dalt a baix (CHYRONS a dalt, GRÀFICS a baix) -->
+        <div class="gfx-col">
+        <!-- SECTION: CHYRONS (sempre visible) - TREBALL: col1 a dalt (COLOCAR/REPART); TEST: graella 4 columnes -->
+        <div class="section-container sq-group" id="secChyrons">
+            <div class="section-label" title="Chyrons"><span class="lbl-full">CHYRONS</span><span class="lbl-short">CHY</span></div>
+            <div class="section-content">
+                 <div class="graphics-strip cols-4 chy-strip">
+                    <button id="btnChyronColocar" class="secondary icon-only" title="Col·loca TOTS els chyrons: Conductor, Titol, Lloc, Nom, Resto i Traducció (verifica primer els marcadors)">🎯</button>
+                    <button id="btnChyronRepartir" class="secondary icon-only" title="Reparteix les traduccions seleccionades">↔️</button>
+                    <button id="btnChyronConductor" class="secondary test-only" title="Col·loca el Conductor (TEST)">COND</button>
+                    <button id="btnChyronTitol" class="secondary test-only" title="Col·loca el Tema-Titol (TEST)">TITOL</button>
+                    <button id="btnChyronLloc" class="secondary test-only" title="Col·loca Lloc/Data (TEST)">LLOC</button>
+                    <button id="btnChyronNom" class="secondary test-only" title="Col·loca Nom/Càrrec (TEST)">NOM</button>
+                    <button id="btnChyronResto" class="secondary test-only" title="Col·loca la resta de chyrons (TEST)">RESTO</button>
+                    <button id="btnChyronTraduccio" class="secondary test-only" title="Col·loca traduccions (TEST)">TRAD</button>
+                 </div>
+            </div>
+        </div>
+
+        <!-- SECTION: GRÀFICS (sempre visible) - TREBALL: col1, sota CHYRONS -->
+        <div class="section-container sq-group" id="secGrafics">
+            <div class="section-label" title="Gràfics"><span class="lbl-full">GRÀFICS</span><span class="lbl-short">GRF</span></div>
+            <div class="section-content">
+                 <div class="graphics-strip cols-3">
+                    <button id="btnGrafIpd" class="secondary" title="IPD (zoom 144% + posició) · Ctrl+clic: repassa els clips IPD dels marcadors">IPD</button>
+                    <button id="btnGrafIpdPlus" class="secondary" title="IPD+ · Doble finestra VERTICAL: dues parts de la imatge (una a dalt i una a baix) amb fons a sota. Mateixa maquinària que la Doble Finestra (V4/V5 + fons V3) amb un altre perfil de Motion">IPD+</button>
+                    <button id="btnGrafDoblePantalla" class="secondary icon-only doble" title="Doble pantalla (horitzontal)">🪟🪟</button>
+                    <button id="btnMapaImport" class="secondary icon-only" title="Mapa: importa els grafismes del tema a la pista de grafismes DES DEL CABEZAL. L'espai hàbil el marca el clip SELECCIONAT al timeline (o el clip de V1 sota el cabezal) i al final hi va un congelat de 3 s. L'ítem de l'escaleta (coincidència de nom) és el del marcador anterior al cabezal. Per als marcadors GF de l'escaleta: botó GF (TEST) o pipeline OUT &amp; GO">🎨</button>
+                    <button id="btnGrafMapa" class="secondary icon-only" title="Mapa zoom">🗺️</button>
+                    <button id="btnGrafTotem" class="secondary icon-only" title="Tòtem">🗿</button>
+                 </div>
+            </div>
+        </div>
+        </div>
+
+        <!-- TREBALL col2: flux de dalt a baix (SUBTÍTOLS a dalt, RENDER a baix) -->
+        <div class="gfx-col">
+        <!-- SECTION: SUBTÍTOLS (sempre visible) - TREBALL: col2 a dalt (RENDER queda a sota) -->
+        <div class="section-container" id="secSubtitols">
+            <div class="section-label" title="Subtítols"><span class="lbl-full">SUBTÍTOLS</span><span class="lbl-short">SUB</span></div>
+            <div class="section-content">
+                 <div class="graphics-strip cols-3">
+                    <button id="btnSrtLoad" class="secondary icon-only" title="Carrega el SRT del dia (blocs de 15 min; si no hi ha res, fallback al .SRT de la carpeta de verticalització. Ctrl+clic = fallback directe)">⬇️</button>
+                    <button id="btnSrtExport" class="secondary icon-only" title="Exporta el SRT">💾</button>
+                    <button id="btnSrtReset" class="secondary icon-only" style="background:#5a2a2a; color:#f99;" title="RESET: restaura el subtítol (torna a buscar el .SRT del tema del bloc, sempre del dia de treball) i neteja els subtítols de la seqüència">♻️</button>
+                    <button id="btnSrtIn" class="secondary" title="IN del subtítol seleccionat">IN</button>
+                    <button id="btnSrtOut" class="secondary" title="OUT del subtítol seleccionat">OUT</button>
+                 </div>
+            </div>
+        </div>
+
+        <!-- SECTION: RENDER (sempre visible) - TREBALL: col2 a baix, sota SUBTÍTOLS -->
+        <div class="section-container" id="secRender">
+            <div class="section-label" title="Render"><span class="lbl-full">RENDER</span><span class="lbl-short">REN</span></div>
+            <div class="section-content">
+                 <div class="graphics-strip cols-3">
+                    <button id="btnRenderVideo" class="secondary icon-only" title="Render / exporta el vídeo">📹</button>
+                    <button id="btnRenderPortada" class="secondary icon-only" title="Render / exporta la portada">🖼️</button>
+                    <button id="btnRenderClose" class="secondary icon-only" title="Tanca la peça">✅</button>
+                 </div>
+            </div>
+        </div>
+        </div>
+
+        <!-- NOMÉS TEST (amagats en TREBALL): marcadors i salts de fila de la graella TEST -->
+        <!-- SECTION: MARCADORS (TEST ONLY) - fila 1 en TEST -->
+        <div class="section-container sq-group test-only" id="secMarcadors">
+            <div class="section-label" title="Marcadors"><span class="lbl-full">MARCADORS</span><span class="lbl-short">MAR</span></div>
+            <div class="section-content">
+                 <div class="graphics-strip cols-3">
+                    <!-- ═══ ORDRE DE PULSACIÓ DEL SISTEMA PER CAPES (2026-09-25) ═══ -->
+                    <!-- 1) SIL (diagnòstic, només lectura) · 2) C0 (setup+00:00) · 3) C1 (OnAir dur) -->
+                    <button id="btnMarksSIL" class="secondary" title="PAS 1 (opcional, només lectura) · SIL · Bolca al log el mapa de SILENCIS d'àudio del bloc (llegit del .bin de referència a 480Hz). Serveix per ajustar llindar/durada mínima amb dades reals. El silenci NOMÉS confirma: no mou res">1·SIL</button>
+                    <button id="btnMarksC0" class="secondary" title="PAS 2 · CAPA 0 · Setup: referència del clip + context d'assembly + classificació d'ítems + col·loca el MARCADOR D'INICI a 00:00 (immutable per a totes les capes)">2·C0</button>
+                    <button id="btnMarksC1" class="secondary" title="PAS 3 · CAPA 1 · OnAir DURO: calcula densitat de corts + mapa de silencis, resol cada ítem amb OnAir real per consens (SILENCI → CORTE a prop → OnAir), valida contra el material real de V1, publica el Δ i CONGELA aquests marcadors per a les capes següents">3·C1</button>
+                    <!-- ─── Fases antigues (pipeline OUT &amp; GO): es mantenen per comparar ─── -->
+                    <button id="btnMarksF2" class="secondary" title="F2 (antic) · Marcadors OnAir deduïts">F2 Dedu</button>
+                    <button id="btnMarksF3" class="secondary" title="F3 (antic) · Marcadors previstos (coincidències)">F3 Prev</button>
+                    <button id="btnMarksF35" class="secondary" title="F3.5 (antic) · CorrelationSnap a corts de vídeo">F3.5 Correl</button>
+                    <button id="btnMarksF4" class="secondary" title="F4 (antic) · DensitySnap / faros">F4 Dens</button>
+                    <button id="btnMarksF5" class="secondary" title="F5 (antic) · Inferits: col·loca els ítems inferits de l'escaleta. Ctrl+clic = F5 antic OrphanSnap (marcadors orfes a corts propers)">F5 Inferits</button>
+                    <button id="btnMarksF6" class="secondary" title="F6 (antic) · Ordre: garanteix que els marcadors dels ítems ESTRUCTURALS mantinguin l'ordre de l'escaleta (el faro no es mou mai; un ítem invertit va al tall anterior del faro)">F6 Ordre</button>
+                    <button id="btnMarksF6GF" class="secondary" title="F6·GF (antic) · Marcadors gràfics (GF) de l'escaleta: P2 foto / P2 MAPA / GF / TE… ancorats al seu ítem pare">F6 GF</button>
+                 </div>
+            </div>
+        </div>
+
+        <div class="row-break test-only"></div>
+        <div class="row-break test-only"></div>
+
+        </div>
+        <div id="splitter" title="Arrossega per redimensionar"></div>
+        </div>
+        <div class="right-zone">
+            <div id="srtVideoWrap">
+                <video id="srtVideo" playsinline muted></video>
+                <div id="srtVideoSubs"></div>
+            </div>
+            <div id="srtVideoHud">— · — fps</div>
+        </div>
+        </div>
+
+        <!-- ZONA TIMELINE SUBTÍTOLS (ample complet) -->
+        <div class="srt-timeline-zone">
+            <div id="srtEditorContainer" style="display:none;">
+                <div style="overflow-x:hidden; overflow-y:hidden;">
+                    <canvas id="srtCanvas" width="1800" height="150" style="cursor:crosshair; background:#1a1a1a;"></canvas>
+                </div>
+                <div class="srt-zoombar" id="srtZoomBar" title="Arrossega els extrems per fer zoom · arrossega el centre per desplaçar-te">
+                    <div class="srt-zoombar-fill" id="srtZoomFill"></div>
+                    <div class="srt-zoombar-handle srt-zoombar-handle-l" id="srtZoomHandleL"></div>
+                    <div class="srt-zoombar-handle srt-zoombar-handle-r" id="srtZoomHandleR"></div>
+                </div>
+            </div>
+        </div>
+
+    </div>
+
+    <!-- OVERLAY: SETUP -->
+    <div id="setup-overlay">
+        <iframe id="setup-iframe" src="about:blank"></iframe>
+    </div>
+
+    <!-- SCRIPTS with version cachebuster -->
+    <script src="js/lib/CSInterface.js"></script>
+    <script src="js/core/utils.js?v=25"></script>
+    <script src="js/core/11_Configuracio.js?v=37"></script>
+    <script src="js/core/escaleta_timecode.js?v=5"></script>
+    <script src="js/core/escaleta_config.js?v=7"></script>
+    <script src="js/core/escaleta_io.js?v=17"></script>
+    <script src="js/core/escaleta_items.js?v=6"></script>
+    <script src="js/core/escaleta_bounds.js?v=20"></script>
+    <script src="js/core/escaleta_fallback.js?v=6"></script>
+    <script src="js/core/escaleta_fetch.js?v=12"></script>
+    <script src="js/core/escaleta_reader.js?v=5"></script>
+    <script src="js/core/session_manifest.js?v=8"></script>
+    <script src="js/core/state.js?v=5"></script>
+    <script src="js/inspectors/1_SourceAssets.js?v=5"></script>
+    <script src="js/logic/Scanner.js?v=11"></script>
+    <script src="js/inspectors/2_App.js?v=5"></script>
+    <script src="js/inspectors/3_Session.js?v=5"></script>
+    <script src="js/core/4_Context.js?v=24"></script>
+    <script src="js/logic/3_Project_Logic.js?v=28"></script>
+    <script src="js/logic/5_Tracks_Logic.js?v=5"></script>
+    <script src="js/logic/6_Clips_Logic.js?v=6"></script>
+    <script src="js/logic/7_KF_Logic.js?v=5"></script>
+    <script src="js/logic/10_Srt_Logic.js?v=16"></script>
+    <script src="js/logic/13_Parse.js?v=5"></script>
+    <script src="js/logic/14_Assembly_Logic.js?v=6"></script>
+    <script src="js/logic/15_FFmpeg_Logic.js?v=12"></script>
+    <script src="js/logic/16_Analysis_Logic.js?v=7"></script>
+    <script src="js/logic/17_TitoletDetect_Logic.js?v=3"></script>
+    <script src="js/core/assembly_context.js?v=10"></script>
+    <script src="js/workflows/flow_mp4.js?v=6"></script>
+    <script src="js/workflows/flow_markers.js?v=66"></script>
+    <script src="js/workflows/flow_chyrons.js?v=74"></script>
+    <script src="js/workflows/flow_graphics.js?v=25"></script>
+    <script src="js/workflows/flow_mainButton.js?v=32"></script>
+    <script src="js/workflows/flow_cut.js?v=18"></script>
+    <script src="js/workflows/flow_srt.js?v=10"></script>
+    <script src="js/workflows/flow_render.js?v=31"></script>
+    <script src="js/workflows/flow_KF.js?v=10"></script>
+    <script src="js/workflows/flow_config.js?v=5"></script>
+    <script src="js/workflows/flow_assembly.js?v=8"></script>
+<script src="js/workflows/flow_mapa.js?v=23"></script>
+    <script src="js/core/project_registry.js?v=5"></script>
+    <script src="js/editor/srt_editor.js?v=75"></script>
+    <script src="js/main.js?v=80"></script>
+</body>
+</html>

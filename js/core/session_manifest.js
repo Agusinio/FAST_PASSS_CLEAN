@@ -1,0 +1,150 @@
+/**
+ * ============================================================================
+ * FASTPASS_UI.SessionManifest - v1.0.0
+ * Mòdul de persistència de sessió (.fastpass.json)
+ * Font de veritat per a tots els processos del timeline
+ * ============================================================================
+ */
+
+(function () {
+    var FASTPASS_UI = window.FASTPASS_UI || {};
+
+    FASTPASS_UI.SessionManifest = {
+
+        _cache: {},   // path -> manifest (en memòria, evita rellegir el NAS)
+
+        /**
+         * Retorna la ruta del fitxer manifest per al context actual.
+         * Ubicació: mateixa carpeta que el .prproj
+         */
+        getPath: function(ctx) {
+            // El ctx conté config.rutas.destinoBase, progData.directorio i dateDir
+            // ctx.progData.wott sol ser el progId (TNV, TNC...)
+            // (2026-09-24) El manifest viu a la carpeta del BLOC: <base><prog>_PROJECTES/<data>/<V*>
+            const folder = window.FASTPASS_UI.Utils.workFolder(ctx);
+            const filename = (ctx.progData.wott || 'PROG') + '_' + ctx.bloque + '.fastpass.json';
+            return folder + '\\' + filename;
+        },
+
+        /**
+         * Llegeix el manifest existent o retorna un objecte buit inicial si no existeix.
+         */
+        load: async function(ctx) {
+            const path = this.getPath(ctx);
+            const utils = window.FASTPASS_UI.Utils;
+            // Cache en memòria: la lectura del JSON al NAS triga ~20-25s i bloqueja
+            // ExtendScript (causa dels cuelgues). Un cop llegit, es reutilitza.
+            if (this._cache[path]) {
+                return this._cache[path];
+            }
+            try {
+                // (2026-10-02) IO.readTxt llegeix amb ANSI: els títols amb accents del
+                // manifest tornaven malmesos i, en reescriure's, quedaven fixats.
+                const raw = utils._fromMojibake(await utils.callJSX(`IO.readTxt('${utils.escape(path)}')`), 'manifest');
+                if (raw && !raw.startsWith('ERR') && raw !== '') {
+                    const parsed = JSON.parse(raw);
+                    this._cache[path] = parsed;
+                    const items = parsed.escaletaItems ? parsed.escaletaItems.length : 0;
+                    utils.log(`📂 [SessionManifest] Manifest carregat: ${items} items d'escaleta (${path.substring(Math.max(0, path.length - 60))})`, 'DEBUG');
+                    return parsed;
+                }
+                utils.log(`⚠️ [SessionManifest] Manifest buit o no trobat: ${path}`, 'DEBUG');
+            } catch (e) {
+                utils.log(`⚠️ [SessionManifest] Error parsejant manifest: ${e.message} (${path})`, 'WARN');
+            }
+            return this._empty(ctx);
+        },
+
+        /**
+         * Desa el manifest fusionant les dades noves amb les existents (deep merge).
+         */
+        save: async function(ctx, patch) {
+            const existing = await this.load(ctx);
+            const updated = this._deepMerge(existing, patch);
+            updated._lastUpdated = new Date().toISOString();
+            
+            const path = this.getPath(ctx);
+            // Actualitzar el cache en memòria abans de tornar (font de veritat immediata)
+            this._cache[path] = updated;
+            
+            const json = JSON.stringify(updated);
+            const utils = window.FASTPASS_UI.Utils;
+            
+            // Escriure al NAS en segon pla (no bloqueja l'edició ni els clics)
+            utils.callJSX(`IO.writeTxt('${utils.escape(path)}', '${utils.escape(json)}')`).then(function(writeResult) {
+                if (writeResult === '[]') {
+                    utils.log(`❌ [SessionManifest] Error escrivint manifest a: ${path} (writeTxt ha fallat)`, 'ERROR');
+                }
+            });
+            
+            // Sincronització immediata amb l'estat global per a compatibilitat
+            if (updated.ref) {
+                window.FASTPASS_UI.State.ref = updated.ref;
+            }
+            if (updated.hierarchy) {
+                window.FASTPASS_UI.State.hierarchy = updated.hierarchy;
+            }
+            
+            return updated;
+        },
+
+        /** Objecte inicial buit amb l'estructura base */
+        _empty: function(ctx) {
+            return {
+                _version:    '1.0',
+                _generated:  new Date().toISOString(),
+                _lastUpdated: new Date().toISOString(),
+                program: {
+                    progId:        ctx.progData?.wott || '',
+                    blockId:       ctx.bloque || '',
+                    projectFile:   '', // s'omple al crear projecte
+                    projectFolder: window.FASTPASS_UI.Utils.workFolder(ctx),
+                    escaletaFile:  ''  // s'omple al carregar JSON
+                },
+                cleanFeed: {},
+                blockBounds: {},
+                ref: {
+                    worldSecMediaStart: null,
+                    mp4ExpandedInPoint: null,
+                    tlBlockInPointSec:  null,
+                    tlClipStartSec:     null,
+                    offsetSec:          null,
+                    blockInSec:         null
+                },
+                hierarchy: {}, // Fase 4: Mapa de lineID -> data
+                clips: [],
+                escaletaItems: [],
+                footprintVerification: null,
+                phases: {
+                    boundsCalculated:   false,
+                    mp4Imported:        false,
+                    tcRefEstablished:   false,
+                    trossejaDone:       false,
+                    clipsLogged:        false,
+                    footprintVerified:  false,
+                    clipAnalysisDone:   false,
+                    markersPlaced:      false,
+                    chyronsPlaced:      false,
+                    hierarchyResolved:  false
+                }
+            };
+        },
+
+        /** Merge profund recursiu (les llistes es substitueixen) */
+        _deepMerge: function(base, patch) {
+            const result = Object.assign({}, base);
+            for (const key of Object.keys(patch)) {
+                if (Array.isArray(patch[key])) {
+                    result[key] = patch[key];
+                } else if (patch[key] && typeof patch[key] === 'object') {
+                    result[key] = this._deepMerge(base[key] || {}, patch[key]);
+                } else {
+                    result[key] = patch[key];
+                }
+            }
+            return result;
+        }
+    };
+
+    window.FASTPASS_UI = FASTPASS_UI;
+})();
