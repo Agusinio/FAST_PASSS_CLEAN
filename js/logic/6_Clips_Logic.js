@@ -10,7 +10,9 @@
 
     const utils = {
         callJSX: (s) => window.FASTPASS_UI.Utils.callJSX(s),
-        log: (m) => window.FASTPASS_UI.Utils.log(m, "DEBUG")
+        log: (m) => window.FASTPASS_UI.Utils.log(m, "DEBUG"),
+        // (2026-10-16) Nivell WARN per a les xarxes de seguretat d'`endCoherent`.
+        warn: (m) => window.FASTPASS_UI.Utils.log(m, "WARN")
     };
 
     FASTPASS_UI.Logic.Clips = {
@@ -247,6 +249,129 @@
             const endParam = (endSec !== null && endSec !== undefined) ? `, ${endSec}` : ', null';
             const typeParam = type || 'video';
             return await utils.callJSX(`Clips.insert('${safeName}', ${trackIdx}, ${startSec}${endParam}, '${typeParam}')`);
+        },
+
+        /**
+         * _clipAtTime: Clip REAL de la pista que ARRENCA a l'instant donat.
+         *
+         * Usa l'àtom `Clips.at` (una sola crida: retorna el clip que CONTÉ l'instant, amb
+         * `index`/`inPoint`/`outPoint`) i, si el resultat no arrenca on esperàvem, escombra
+         * la pista clip a clip (mateix patró que `flow_chyrons::_repararClipsV7`).
+         *
+         * @param {number} trackIdx - Pista (1-based)
+         * @param {number} startSec - Instant d'inici esperat del clip
+         * @param {string} [type] - 'video' (default) | 'audio'
+         * @returns {Promise<Object|null>} {index,name,start,end,inPoint,outPoint,duration} o null
+         */
+        _clipAtTime: async function (trackIdx, startSec, type) {
+            const t = parseInt(trackIdx, 10);
+            const s = Number(startSec);
+            if (!(t > 0) || !isFinite(s)) return null;
+            const kind = type || 'video';
+            const TOL = 0.21;   // ~5 frames a 25 fps
+            try {
+                const raw = await utils.callJSX(`Clips.at(${t}, ${(s + 0.02).toFixed(4)}, '${kind}')`);
+                if (raw && raw !== 'null') {
+                    const c = JSON.parse(raw);
+                    if (c && isFinite(Number(c.start)) && Math.abs(Number(c.start) - s) <= TOL) return c;
+                }
+            } catch (eAt) { }
+            let best = null, bestD = Infinity;
+            try {
+                const n = parseInt(await utils.callJSX(`Clips.count(${t}, '${kind}')`) || '0', 10) || 0;
+                for (let i = 0; i < n; i++) {
+                    const raw = await utils.callJSX(`Clips.get(${t}, ${i}, '${kind}')`);
+                    if (!raw || raw === 'null') continue;
+                    const c = JSON.parse(raw);
+                    const d = Math.abs(Number(c.start) - s);
+                    if (d < bestD) { bestD = d; best = c; }
+                }
+            } catch (eSc) { return null; }
+            return (best && bestD <= TOL) ? best : null;
+        },
+
+        /**
+         * endCoherent: Fixa el FINAL del clip que arrenca a `startSec` DEIXANT-LO ESTIRABLE
+         * amb el ratolí a la timeline.
+         *
+         * ── PER QUÈ (mesurat en viu el 2026-10-08 · docs/BUGS_FIXED.md #146) ─────────────
+         * `Clips.endAt` (àtom històric) NOMÉS mou `clip.end` del TIMELINE: l'`outPoint` del
+         * SOURCE queda on era (al final del mèdia) → l'estat és INCOHERENT
+         * (`end − start ≠ outPoint − inPoint`) i Premiere considera el material ESGOTAT →
+         * el clip NO es pot estirar amb el ratolí («no es pot estirar més enllà de la
+         * inserció feta»), encara que al mèdia li queden segons de sobres.
+         * Amb `Clips.retrim` (inPoint → outPoint → end, amb verificació) l'estat queda
+         * COHERENT (end − start == outPoint − inPoint) i el clip SÍ que s'estira i
+         * s'escurça amb el ratolí, fins on arribe el mèdia.
+         *
+         * ── GARANTIES ───────────────────────────────────────────────────────────────────
+         * · MATEIX resultat visual: la durada al TIMELINE no canvia; només se sincronitza el
+         *   rang del source amb ella. Si el mèdia NO dóna per a la durada demanada (Premiere
+         *   limita l'`outPoint`), el final es torna a fixar amb `Clips.endAt` (= el
+         *   comportament de sempre) i s'escriu un WARN dient que eixe clip només es podrà
+         *   escurçar.
+         * · NO toca l'àudio d'A1 (a diferència de `Clips.trimBounds`, que també retalla el
+         *   clip d'àudio que arrenca al mateix instant).
+         * · Idempotent: si el clip JA és coherent, no crida res (una sola lectura).
+         *
+         * @param {number} trackIdx - Pista (1-based)
+         * @param {number} startSec - Inici del clip al timeline
+         * @param {number|null} [endSec] - Final volgut (null → el que ja té)
+         * @param {string} [type] - 'video' (default) | 'audio'
+         * @param {string} [tag] - Etiqueta per als logs
+         * @returns {Promise<string>} "OK:ja-coherent …" | "OK:coherent …" | "WARN_MEDIA:…" |
+         *   "WARN_COHERENT:…" | "ERR_…"
+         */
+        endCoherent: async function (trackIdx, startSec, endSec, type, tag) {
+            const FRAME = 0.04;          // 1 frame a 25 fps (mateixa reixa que flow_chyrons)
+            const t = parseInt(trackIdx, 10);
+            const s = Number(startSec);
+            const kind = type || 'video';
+            const LBL = tag || 'Coherent';
+            const f3 = (v) => (isFinite(Number(v)) ? Number(v).toFixed(3) : '?');
+            try {
+                const clip = await this._clipAtTime(t, s, kind);
+                if (!clip) return `ERR_NO_CLIP:V${t}@${isFinite(s) ? s.toFixed(2) : s}s`;
+                const start = Number(clip.start);
+                const wantEnd = (endSec !== null && endSec !== undefined && isFinite(Number(endSec)) && Number(endSec) > 0)
+                    ? Number(endSec) : Number(clip.end);
+                const dur = wantEnd - start;
+                if (!(dur > 0.02)) return `ERR_NO_SPAN:${LBL} dur=${f3(dur)}`;
+                const inPt = (isFinite(Number(clip.inPoint)) && Number(clip.inPoint) >= 0) ? Number(clip.inPoint) : 0;
+                const outPt = inPt + dur;
+                const tlDur = Number(clip.end) - start;
+                const srcDur = Number(clip.outPoint) - Number(clip.inPoint);
+                const isStill = /\.(png|jpe?g|tiff?|psd|bmp|gif|eps|ai)$/i.test(String(clip.name || ''));
+                const info = `V${t}@${start.toFixed(2)}s dur=${f3(dur)}s source ${f3(inPt)}→${f3(outPt)}` +
+                    (isStill ? ' (imatge FIXA: estirable sense límit)' : ` (source sencer ${f3(srcDur)}s)`) +
+                    ` "${String(clip.name || '').substring(0, 34)}"`;
+
+                // 1) Ja coherent i amb el final volgut → res a fer.
+                if (Math.abs(tlDur - srcDur) <= FRAME / 2 && Math.abs(Number(clip.end) - wantEnd) <= FRAME / 2) {
+                    return `OK:ja-coherent ${info}`;
+                }
+
+                // 2) Retall COHERENT: inPoint → outPoint → end (`Clips.retrim`, verificat).
+                const r = String(await utils.callJSX(
+                    `Clips.retrim(${t}, ${clip.index}, ${inPt.toFixed(4)}, ${outPt.toFixed(4)}, ${wantEnd.toFixed(4)}, '${kind}')`) || '');
+                const c2 = await this._clipAtTime(t, start, kind);
+                const coh = !!c2 && Math.abs((Number(c2.end) - Number(c2.start)) - (Number(c2.outPoint) - Number(c2.inPoint))) <= FRAME / 2;
+                const endOk = !!c2 && Math.abs(Number(c2.end) - wantEnd) <= Math.max(FRAME / 2, 0.05);
+                if (coh && endOk) return `OK:coherent ${info} [${r}]`;
+
+                // 3) El mèdia no dóna per a `outPt` (Premiere l'ha limitat): es manté el final de
+                //    sempre amb `endAt` i s'AVISA que eixe clip només es podrà escurçar.
+                if (c2 && !endOk) {
+                    const rb = String(await utils.callJSX(
+                        `Clips.endAt(${t}, ${start.toFixed(4)}, ${wantEnd.toFixed(4)}, '${kind}')`) || '');
+                    utils.warn(`   ⚠️ [${LBL}] ${info} → el source NO accepta ${f3(outPt)}s (source sencer ${f3(srcDur)}s): final fixat amb endAt (${f3(c2.end)}→${f3(wantEnd)}s) [${rb}]; eixe clip només es podrà ESCURÇAR`);
+                    return `WARN_MEDIA:${LBL} ${info} endAt=${rb}`;
+                }
+                utils.warn(`   ⚠️ [${LBL}] ${info} → retrim NO verificat (coherent=${coh} endOk=${endOk}) [${r}]`);
+                return `WARN_COHERENT:${LBL} ${info} [${r}]`;
+            } catch (e) {
+                return 'ERR: ' + e.message;
+            }
         },
 
         /**

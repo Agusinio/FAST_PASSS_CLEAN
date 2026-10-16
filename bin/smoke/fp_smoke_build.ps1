@@ -43,11 +43,16 @@ $files = @(
     (Join-Path $repo 'js\workflows\flow_graphics.js'),
     # (2026-10-16 · BUG #169) Guarda d'IMATGE FIXA del congelat que es replica a V6.
     (Join-Path $repo 'js\workflows\flow_mapa.js'),
+    # (2026-10-16 · BUG #171) Motor de Clips (JS): `endCoherent` → retall coherent
+    # (in/out ↔ end) perquè els rètols col·locats es puguen ESTIRAR amb el ratolí.
+    (Join-Path $repo 'js\logic\6_Clips_Logic.js'),
     (Resolve-Harness 'fp_probe_f45.js'),
     # (2026-10-16 · BUG #167) Rètol de localització del directe → ítem IPD/directe.
     (Resolve-Harness 'fp_probe_ipd_chyron.js'),
     # (2026-10-16 · BUG #170) ESTAT de la intro del bloc (botó 🔀) + neteja sense ripple.
     (Resolve-Harness 'fp_probe_cas_intro.js'),
+    # (2026-10-16 · BUG #171) CHYRONS ESTIRABLES amb el ratolí (`Clips.endCoherent`).
+    (Resolve-Harness 'fp_probe_estirable.js'),
     (Resolve-Harness 'fp_smoke_runner.js')
 )
 

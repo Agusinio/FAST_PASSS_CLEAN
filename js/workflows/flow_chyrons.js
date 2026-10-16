@@ -601,8 +601,10 @@
                     log(`   ❌ [_freeze] Clip NO inserit a V${T_THEME} @ ${placeTime.toFixed(2)}s (${rOne}) → rètol NO col·locat`, "ERROR");
                     return { success: false, duration: 0 };
                 }
-                await callJSX(`Clips.endAt(${T_THEME}, ${placeTime}, ${cutTime}, 'video')`);
-                log(`   🎞️ [_freeze] Clip animació inserit a V${T_THEME} @ ${placeTime.toFixed(2)}s→${cutTime.toFixed(2)}s (SENSE congelat)`);
+                // (2026-10-16 · #171) Retall COHERENT (no `Clips.endAt`): el clip ha de quedar
+                // ESTIRABLE amb el ratolí (vegeu `Clips.endCoherent`, js/logic/6_Clips_Logic.js).
+                const rEst = await getClipsLogic().endCoherent(T_THEME, placeTime, cutTime, 'video', '_freeze·anim');
+                log(`   🎞️ [_freeze] Clip animació inserit a V${T_THEME} @ ${placeTime.toFixed(2)}s→${cutTime.toFixed(2)}s (SENSE congelat) [${rEst}]`);
                 return { success: true, duration: 0 };
             }
 
@@ -634,8 +636,9 @@
                     log(`   ❌ [_freeze] Ni el clip viu s'ha pogut inserir (${rLive}) → rètol NO col·locat`, "ERROR");
                     return { success: false, duration: 0 };
                 }
-                await callJSX(`Clips.endAt(${T_THEME}, ${placeTime}, ${cutTime}, 'video')`);
-                log(`   🎞️ [_freeze] Clip animació inserit a V${T_THEME} @ ${placeTime.toFixed(2)}s→${cutTime.toFixed(2)}s (SENSE congelat)`);
+                // (2026-10-16 · #171) Retall COHERENT → clip ESTIRABLE amb el ratolí.
+                const rEst2 = await getClipsLogic().endCoherent(T_THEME, placeTime, cutTime, 'video', '_freeze·anim');
+                log(`   🎞️ [_freeze] Clip animació inserit a V${T_THEME} @ ${placeTime.toFixed(2)}s→${cutTime.toFixed(2)}s (SENSE congelat) [${rEst2}]`);
                 return { success: true, duration: 0 };
             }
 
@@ -687,14 +690,14 @@
 
             // 4. Inserir ara el Wott d'animació a placeTime (0→CUT_OFFSET)
             // (2026-10-01 · #129) SENSE endSec: `Clips.insert(..., endSec)` retalla el DARRER clip
-            // de la pista (clips[numItems-1].end). El final es fixa amb `Clips.endAt` (cerca pel
-            // start → immunitzat a renumeracions de clips).
+            // de la pista (clips[numItems-1].end). El final es fixa amb `Clips.endCoherent`
+            // (retall COHERENT → clip ESTIRABLE amb el ratolí; cerca pel start).
             const resAnim = String(await callJSX(`Clips.insert('${escapedWott}', ${T_THEME}, ${placeTime}, null, 'video')`) || '');
             if (isErrRes(resAnim)) {
                 log(`   ❌ [_freeze] Clip d'animació NO inserit a V${T_THEME} @ ${placeTime.toFixed(2)}s (${resAnim}) → rètol NO col·locat`, "ERROR");
                 return { success: false, duration: 0 };
             }
-            await callJSX(`Clips.endAt(${T_THEME}, ${placeTime}, ${cutTime}, 'video')`);
+            await getClipsLogic().endCoherent(T_THEME, placeTime, cutTime, 'video', '_freeze·anim·4');
             log(`   🎞️ [_freeze] Clip animació inserit a V${T_THEME} @ ${placeTime.toFixed(2)}s→${cutTime.toFixed(2)}s`);
             // (2026-10-14 · #159b) ON ARRENCA EL CONGELAT: `Clips.endAt` (final del clip viu) i
             // `Clips.insert` (inici del PNG) arrodoneixen cada instant a la graella de frames
@@ -740,11 +743,14 @@
                 const timelineDur = parseFloat(await callJSX("Timeline.duration()") || "0");
                 duration = Math.max(timelineDur - cutReal, 0.5);
             }
-            // (2026-10-01 · #129) Insert sense endSec + `endAt` (vegeu punt 4): el PNG estirat
-            // no ha de retallar el darrer clip de la pista.
+            // (2026-10-01 · #129) Insert sense endSec: el PNG estirat no ha de retallar el darrer
+            // clip de la pista.
             await callJSX(`Clips.insert('${utils.escape(fileName)}', ${T_THEME}, ${cutReal}, null, 'video')`);
-            await callJSX(`Clips.endAt(${T_THEME}, ${cutReal}, ${cutReal + duration}, 'video')`);
-            log(`   ✅ [_freeze] PNG "${fileName}" → CHY → V${T_THEME} @ ${cutReal.toFixed(2)}s dur=${duration.toFixed(1)}s (fi=${stretchEnd !== null ? stretchEnd.toFixed(2) : 'final'})s`);
+            // (2026-10-16 · #171) Retall COHERENT (no `Clips.endAt`): així el congelat queda
+            // ESTIRABLE amb el ratolí. Si el still no acceptara l'outPoint (5 s per defecte),
+            // `endCoherent` ja re-fixa el final amb `endAt` i avisa.
+            const rPng = await getClipsLogic().endCoherent(T_THEME, cutReal, cutReal + duration, 'video', '_freeze·PNG');
+            log(`   ✅ [_freeze] PNG "${fileName}" → CHY → V${T_THEME} @ ${cutReal.toFixed(2)}s dur=${duration.toFixed(1)}s (fi=${stretchEnd !== null ? stretchEnd.toFixed(2) : 'final'})s [${rPng}]`);
             // (2026-10-14 · #159b) VERIFICACIÓ del junt: el PNG ha d'arrencar on acaba el clip
             // viu (±1 frame). Mateixa xarxa que `Repartir` (JS:4328): llegir la realitat, no
             // confiar en el càlcul.
@@ -897,11 +903,12 @@
             const escapedName = utils.escape(utils.jsxName(name));
             const isErrRes = (r) => /^\s*(ERR|EXC)/i.test(String(r || ''));
             // Insert SENSE endSec (el JSX l'aplicaria al DARRER clip de la pista: quirk de
-            // l'API) i final fixat amb `Clips.endAt`, que cerca el clip PER TEMPS.
+            // l'API) i final fixat amb `Clips.endCoherent` (retall COHERENT: el clip queda
+            // ESTIRABLE amb el ratolí — vegeu js/logic/6_Clips_Logic.js · 2026-10-16 · #171).
             const insertLive = async () => {
                 const rIns = String(await callJSX(`Clips.insert('${escapedName}', ${track}, ${start.toFixed(4)}, null, 'video')`) || '');
                 if (isErrRes(rIns)) return rIns;
-                return String(await callJSX(`Clips.endAt(${track}, ${start.toFixed(4)}, ${end.toFixed(4)}, 'video')`) || '');
+                return String(await getClipsLogic().endCoherent(track, start, end, 'video', tag) || '');
             };
             // ── Sense congelat: el mèdia ja cobreix el slot (o no s'ha pogut resoldre) ──
             const wantFreeze = (TR.freezeTail !== false) && media > 0.1 && (span - media) >= minFreeze;
@@ -2836,17 +2843,20 @@
                         // (2026-10-01 · #129) SENSE endSec: el JSX l'aplica al DARRER clip de la
                         // pista (vegeu nota de sota) → l'insert cru ja perjudica un altre clip
                         // (a V6, el PNG estirat del Tema-Títol). El final es fixa tot seguit amb
-                        // `Clips.endAt`, que cerca el clip pel seu start.
+                        // `Clips.endCoherent`, que cerca el clip pel seu start.
                         await callJSX(`Clips.insert('${escapedName}', ${slot.track}, ${slot.start.toFixed(4)}, null, 'video')`);
                         // (2026-09-18) IMPORTANT: el JSX Clips.insert aplica l'endSec al DARRER
                         // clip de la pista, NO al que acaba d'inserir → cal fixar-lo pel clip
                         // que comença a slot.start. Sense això els wotts quedaven més llargs
                         // del compte, se solapaven i es colaven fora del seu ítem (i sortien
                         // durades negatives).
+                        // (2026-10-16 · #171) El final es fixa amb `Clips.endCoherent` (retall
+                        // COHERENT: in/out del source ↔ end del timeline) perquè el rètol quede
+                        // ESTIRABLE amb el ratolí; cerca el clip pel seu start.
                         if (placeEnd !== null) {
-                            const rEndAt = await callJSX(`Clips.endAt(${slot.track}, ${slot.start.toFixed(4)}, ${placeEnd.toFixed(4)}, 'video')`);
+                            const rEndAt = await getClipsLogic().endCoherent(slot.track, slot.start, placeEnd, 'video', label);
                             if (String(rEndAt).indexOf('OK') === -1) {
-                                log(`   ⚠️ [${label}] endAt V${slot.track} @ ${slot.start.toFixed(2)}s → ${rEndAt}`, "WARN");
+                                log(`   ⚠️ [${label}] retall V${slot.track} @ ${slot.start.toFixed(2)}s → ${rEndAt}`, "WARN");
                             }
                         }
                         const endRec = (placeEnd !== null) ? placeEnd : slot.start + Math.max(durInfo.dur, 0.5);
@@ -3583,7 +3593,7 @@
                 const esc = getUtils().escape(name);
                 const endTarget = (typeof endSec === 'number') ? endSec : (start + durP);
                 const ins = await callJSX(`Clips.insert('${esc}', ${p.track}, ${start.toFixed(4)}, null, 'video')`);
-                const end = await callJSX(`Clips.endAt(${p.track}, ${start.toFixed(4)}, ${endTarget.toFixed(4)}, 'video')`);
+                const end = await getClipsLogic().endCoherent(p.track, start, endTarget, 'video', label);
                 log(`      ${label} → V${p.track} @ ${start.toFixed(2)}s→${endTarget.toFixed(2)}s (${(endTarget - start).toFixed(2)}s) [ins=${ins} · end=${end}]`);
                 return true;
             };
@@ -3793,7 +3803,11 @@
                 try { await callJSX(`Clips.removeAt(${track}, ${tempStart.toFixed(4)}, 'video')`); } catch (eRm2) { }
                 return false;
             }
-            log(`      🔴 [Titol·Sortida] desaparició del gran → V${track} @ ${startSec.toFixed(2)}s→${endSec.toFixed(2)}s (mèdia ${inSec.toFixed(2)}→${(inSec + dur).toFixed(2)}s) [${mv}]`);
+            // (2026-10-16 · #171) `moveToRange` només mou start/end; si el retall de mèdia no
+            // quadra amb el rang final, l'in/out del source queda descompensat i el clip NO
+            // s'estira amb el ratolí → es passa per `endCoherent` (idempotent si ja quadra).
+            const rEst = await getClipsLogic().endCoherent(track, startSec, endSec, 'video', 'Titol·Sortida');
+            log(`      🔴 [Titol·Sortida] desaparició del gran → V${track} @ ${startSec.toFixed(2)}s→${endSec.toFixed(2)}s (mèdia ${inSec.toFixed(2)}→${(inSec + dur).toFixed(2)}s) [${mv} · ${rEst}]`);
             // (2026-10-07) Verificació del retall: confirma que el clip mostra al timeline
             // EXACTAMENT el tram de mèdia [inSec, inSec+dur] (p. ex. 10:00→10:06).
             try {
@@ -3878,7 +3892,11 @@
                         try { await callJSX(`Clips.removeAt(${track}, ${TEMP_PNG}, 'video')`); } catch (eRm) { }
                         return false;
                     }
-                    log(`      ${label} → V${track} @ ${startSec.toFixed(2)}s→${endSec.toFixed(2)}s (${(endSec - startSec).toFixed(2)}s) [${mv}]`);
+                    // (2026-10-16 · #171) `moveToRange` només mou start/end → l'in/out del source
+                    // queda amb la durada per defecte del still i el congelat NO s'estira amb el
+                    // ratolí. `endCoherent` el deixa coherent (inPoint 0 → outPoint = durada).
+                    const rEstFz = await getClipsLogic().endCoherent(track, startSec, endSec, 'video', 'Titol·Petit·freeze');
+                    log(`      ${label} → V${track} @ ${startSec.toFixed(2)}s→${endSec.toFixed(2)}s (${(endSec - startSec).toFixed(2)}s) [${mv} · ${rEstFz}]`);
                     return true;
                 }
                 log(`   ⚠️ [Titol·Petit] Snapshot del congelat fallit (${cap.res})`, 'WARN');
@@ -4010,10 +4028,11 @@
             };
 
             // Insert + fixar el final (l'endSec de Clips.insert pot acabar al darrer clip de la pista)
+            // (2026-10-16 · #171) amb `Clips.endCoherent`: retall COHERENT → clip ESTIRABLE.
             const insEnd = async (name, start, end, label) => {
                 const ins = await callJSX(`Clips.insert('${utils.escape(name)}', ${T}, ${start.toFixed(4)}, null, 'video')`);
-                const e2 = await callJSX(`Clips.endAt(${T}, ${start.toFixed(4)}, ${end.toFixed(4)}, 'video')`);
-                log(`      ${label} → V${T} @ ${start.toFixed(2)}s→${end.toFixed(2)}s [ins=${ins} · end=${e2}]`);
+                const e2 = await getClipsLogic().endCoherent(T, start, end, 'video', label);
+                log(`      ${label} → V${T} @ ${start.toFixed(2)}s→${end.toFixed(2)}s [ins=${ins} · retall=${e2}]`);
             };
 
             let fets = 0;
@@ -4976,14 +4995,18 @@
                         // Esborrat del tot → tornar-lo a inserir a la seva posició original.
                         const esc = getUtils().escape(s0.name);
                         await callJSX(`Clips.insert('${esc}', ${track}, ${s0.start.toFixed(4)}, null, 'video')`);
-                        const r2 = await callJSX(`Clips.endAt(${track}, ${s0.start.toFixed(4)}, ${s0.end.toFixed(4)}, 'video')`);
+                        // (2026-10-16 · #171) Retall COHERENT → el clip torna ESTIRABLE.
+                        const r2 = await getClipsLogic().endCoherent(track, s0.start, s0.end, 'video', TAG);
                         log(`   🩹 [${TAG}] "${s0.name}" havia estat esborrat per un insert → re-insertat @ ${s0.start.toFixed(2)}-${s0.end.toFixed(2)}s (${r2})`, "WARN");
                         fixed++; total++;
                         continue;
                     }
                     if (Math.abs(best.start - s0.start) > 0.05 || Math.abs(best.end - s0.end) > 0.05) {
                         const r = await callJSX(`Clips.moveToRange(${track}, ${best.index}, ${s0.start.toFixed(4)}, ${s0.end.toFixed(4)}, 'video')`);
-                        log(`   🩹 [${TAG}] "${s0.name}" tocat per un insert [${best.start.toFixed(2)}-${best.end.toFixed(2)}] → restaurat a [${s0.start.toFixed(2)}-${s0.end.toFixed(2)}]s (${r})`, "WARN");
+                        // (2026-10-16 · #171) `moveToRange` només mou start/end: l'in/out del
+                        // source queda descompensat → el clip NO s'estira. Es retorna a coherent.
+                        const rEst = await getClipsLogic().endCoherent(track, s0.start, s0.end, 'video', TAG);
+                        log(`   🩹 [${TAG}] "${s0.name}" tocat per un insert [${best.start.toFixed(2)}-${best.end.toFixed(2)}] → restaurat a [${s0.start.toFixed(2)}-${s0.end.toFixed(2)}]s (${r} · estirable=${rEst})`, "WARN");
                         fixed++; total++;
                     }
                 }

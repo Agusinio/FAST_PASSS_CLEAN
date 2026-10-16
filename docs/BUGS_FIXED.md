@@ -1110,7 +1110,23 @@ Ordre cronologic pel numero d incident. 103 entrades.
 
 **FITXERS**: `js/workflows/flow_chyrons.js`
 
+### #171 - resolt (2026-10-16)
+
+**SIMPTOMA**: Petició d'usuari 2026-10-16: «en general quan s'insereixen els chyrons, es col·loquen al timeline de manera que després NO es poden estirar amb el ratolí; necessitaria que es col·loquen sempre amb la possibilitat d'editar-ne la durada». Passava amb qualsevol rètol col·locat pel panell (chyrons, Tema-Títol, congelats, traduccions…): el clip hi era, però l'eina de retall del ratolí no deixava allargar-lo.
+
+**CAUSA ARREL**: el final de cada col·locació es tancava amb `Clips.endAt`, que NOMÉS mou `clip.end` del TIMELINE: l'`outPoint` del SOURCE quedava al final del mèdia i l'estat del clip era INCOHERENT (`end − start ≠ outPoint − inPoint`). Premiere, amb eixa incoherència, considera el material ESGOTAT i no deixa estirar el clip («no es pot estirar més enllà de la inserció feta»). És EXACTAMENT el defecte que es va mesurar en viu el 2026-10-08 al MAPA (#146: `Clips.endAt(3,900,902)` → end=902 dur=2 però outPoint=50.6 = INCOHERENT; `Clips.trimBounds(900,0,2,…)` → outPoint=2 = coherent = estirable), que allà es va resoldre i ací havia quedat estès per TOTES les col·locacions de rètols i pels `Clips.moveToRange` que només reassignen start/end (congelat del titulillo i peça de sortida del Tema-Títol).
+
+**SOLUCIO**: IMPLEMENTAT 2026-10-16 (ZERO JSX NOU: es COMPOSEN àtoms existents). (1) `js/logic/6_Clips_Logic.js` — `Clips.endCoherent(trackIdx, startSec, endSec, type, tag)`: llig el clip real (`_clipAtTime`: àtom `Clips.at` i, si el resultat no arrenca on toca, escombratge `Clips.count`/`Clips.get`, mateix patró que `flow_chyrons::_repararClipsV7`), comprova l'estat i, si és incoherent, fa el retall COHERENT amb `Clips.retrim` (inPoint → outPoint → end, amb verificació de 3 intents): `outPoint = inPoint + (end − start)` → `end − start == outPoint − inPoint` = ESTIRABLE amb el ratolí. Si el clip JA és coherent no crida res (idempotent); si el mèdia NO dóna per a la durada demanada (Premiere limita l'`outPoint`), RE-FIXA el final amb `Clips.endAt` = comportament de sempre + WARN; si no troba el clip → `ERR_NO_CLIP`. NO toca l'àudio d'A1 (a diferència de `Clips.trimBounds`, que també retalla el clip d'àudio que arrenca al mateix instant). (2) `js/workflows/flow_chyrons.js` — totes les col·locacions hi passen: `_freezeTemaTitol` (les 3 rutes del clip d'animació + el PNG estirat del congelat), `_placeChyronsByType` (el final de cada rètol), `_placeTradSlot::insertLive`, `_placeTemaTitolTransicions::insertTitol`, `_fillTitulilloGaps::insEnd`, `_repararClipsV7` (re-inserció i restauració) i, DESPRÉS dels `moveToRange`, `_insertTemaTitolExit` i `_freezeTitulilloStill` (un `moveToRange` mou start/end i deixava l'in/out del source descompensat → el clip no s'estirava). (3) `index.html`: `6_Clips_Logic.js?v=6→7` i `flow_chyrons.js?v=78→79`. (4) `bin/smoke/fp_smoke_build.ps1`: el mòdul real `js/logic/6_Clips_Logic.js` entra al bundle headless.
+
+**FITXERS**: `js/logic/6_Clips_Logic.js`, `js/workflows/flow_chyrons.js`, `index.html`, `bin/smoke/fp_probe_estirable.js` (nou), `bin/smoke/fp_smoke_build.ps1`
+
+**VALIDACIO**: `bin/check_js_v8.ps1`: TOTAL 58 | OK 58 | FAIL 0 · `bin/smoke/fp_smoke_build.ps1`: **PASS 202 FAIL 0** (secció nova `18-estirable`, 17 assercions amb el MOTOR REAL carregat i un MODEL de Premiere al pont JSX: estat incoherent → coherent amb el final intacte i mèdia romanent per estirar; idempotència; mèdia esgotat → `endAt` de reserva amb el final volgut intacte; imatge FIXA (PNG de `moveToRange`); xarxa de lectura `count/get`; sense clip → `ERR_NO_CLIP`; i la INTEGRACIÓ REAL de `_placeTradSlot` i `_freezeTemaTitol`, que acaben amb clips coherents) · **pendent el test a Premiere** (cal RECARREGAR el panell pel cache-bust v7/v79).
+
+**NOTA**: El retall COHERENT no canvia res del que es veu: la durada al timeline mana i només se sincronitza el rang del source amb ella. Per a un mèdia que s'usa SENCER (un wott animat col·locat amb tota la seua durada) el clip queda coherent i es pot ESCURÇAR/estirar fins al final del mèdia; allargar-lo MÉS enllà del mèdia és impossible en qualsevol editor (Premiere no té més imatge) — quan la targeta és més llarga que el mèdia, el flux ja hi posa el CONGELAT (#149), que és una imatge fixa i s'estira sense límit.
+
 ## 3. Bugs en curs / pendents
+
+
 
 | ID | Estat | Data | Simptoma |
 |----|-------|------|----------|
