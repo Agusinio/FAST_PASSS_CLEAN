@@ -484,9 +484,9 @@
             let outRestore = null;
             try {
                 const out0 = parseFloat(await callJSX('Timeline.getOut()') || '0');
-                if (out0 > 0 && out0 < tc + 1) {
-                    outRestore = out0;
-                    await callJSX(`Timeline.out(${(tc + 2).toFixed(3)})`);
+                if (!(out0 >= tc + 1 - 0.02)) {   // (BUG #172) abans: `out0 > 0 && out0 < tc + 1` no cobria out0 = 0/NaN
+                    outRestore = (isFinite(out0) && out0 > 0) ? out0 : 0;   // 0 = la seqüència no tenia Out
+                    await callJSX(`Timeline.out(${(tc + 2).toFixed(3)})`);   // pont: Timeline.out → FASTPASS.Timeline.outPoint (NO hi ha cap Timeline.outPoint al pont)
                     // 🛡️ (2026-10-14) Es VERIFICA el valor REAL: si l'Out no s'amplia de
                     // veritat, QE no exporta el frame (PNG absent o NEGRE).
                     const realOut = parseFloat(await callJSX('Timeline.getOut()') || '0');
@@ -517,8 +517,15 @@
                 if (bytes > 0) via = 'API';
                 res = res + ' · API→ ' + res2;
             }
-            if (outRestore !== null) {
+            if (outRestore !== null && outRestore > 0) {
+                // (2026-10-16 · BUG #172) El mètode del PONT és `Timeline.out` (jsx/main.jsx:
+                // `"out"` → `FASTPASS.Timeline.outPoint`); `Timeline.outPoint` NO existeix al pont
+                // i la restauració de l'Out original fallava en silenci.
+                // ⚠️ Amb `outRestore === 0` NO es crida `Timeline.out(0)`: fixaria el corxet a
+                // l'inici i deixaria el rang BUIT (vegeu la branca de davall).
                 try { await callJSX(`Timeline.out(${outRestore.toFixed(3)})`); } catch (eR) { }
+            } else if (outRestore === 0) {
+                log("   ℹ️ [_capture] La seqüència no tenia Out point (0): es deixa l'Out ampliat per a la captura (no es fixa a 0)", 'WARN');
             }
             if (bytes > 0) {
                 log(`   📸 [_capture] PNG a ${path} (${Math.round(bytes / 1024)} KB, t=${tc.toFixed(2)}s, via ${via}, ${res})`);

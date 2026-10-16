@@ -478,3 +478,26 @@ button.btn-debug {
     width: 100%;
     height: 100%;
 }
+
+/* BOTÓ OCUPAT (2026-10-16 · BUG #172): mentre la portada s'exporta (còpia a la zona neta +
+   captura QE + neteja = 10-30 s) el botó queda desactivat amb un pols, perquè es vegi que hi
+   ha feina en curs i no es torni a clicar. L'afegeix/treu `markBtnBusy`/`clearBtnBusy`
+   (js/main.js). El clic repetit, a més, el descarta la guarda `_portadaRunning` del flux. */
+@keyframes fpBtnBusyPulse {
+    0%   { opacity: 1; }
+    50%  { opacity: 0.4; }
+    100% { opacity: 1; }
+}
+button.btn-busy {
+    animation: fpBtnBusyPulse 1s ease-in-out infinite;
+    cursor: progress !important;
+    background-color: #b06a12;
+    color: #fff2d9;
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.2);
+}
+button.btn-busy:disabled {
+    opacity: 1;
+    cursor: progress;
+    filter: none;
+}
+

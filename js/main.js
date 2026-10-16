@@ -852,7 +852,17 @@ if (btnMarksC1) btnMarksC1.addEventListener('click', () => callWorkflow('Markers
         const btnRenderClose = document.getElementById('btnRenderClose');
 
         if (btnRenderVideo) btnRenderVideo.addEventListener('click', () => callWorkflow('Render', 'runVideo'));
-        if (btnRenderPortada) btnRenderPortada.addEventListener('click', () => callWorkflow('Render', 'runPortada'));
+        // (2026-10-16 · BUG #172) La portada es exporta en 10-30 s: el botó queda OCUPAT
+        // (desactivat + pols `.btn-busy` + hora de rellotge) mentre dura i es restaura al
+        // final. Un segon clic el descarta la guarda de re-entrada del flux.
+        if (btnRenderPortada) btnRenderPortada.addEventListener('click', async () => {
+            markBtnBusy(btnRenderPortada, '⏳');
+            try {
+                await callWorkflow('Render', 'runPortada');
+            } finally {
+                clearBtnBusy(btnRenderPortada);
+            }
+        });
         if (btnRenderClose) btnRenderClose.addEventListener('click', () => callWorkflow('Render', 'runClose'));
 
         // --- SETUP Y SELECTORES ---
@@ -1048,6 +1058,33 @@ if (btnMarksC1) btnMarksC1.addEventListener('click', () => callWorkflow('Markers
         try { savedMode = localStorage.getItem('fastpass_v1_layout') || 'test'; } catch (e) { }
         applyLayoutMode(window.FASTPASS_UI.LayoutMode || savedMode);
         if (typeof sizeVideoToFit === 'function') sizeVideoToFit();
+    }
+
+    /**
+     * markBtnBusy / clearBtnBusy: (2026-10-16 · BUG #172) Estat OCUPAT d'un botó mentre dura
+     * un flux llarg. Es guarda l'etiqueta original al dataset i es restaura en acabar.
+     * S'usa amb la PORTADA (còpia a la zona neta + captura QE + neteja = 10-30 s): sense
+     * senyal visual, es tornava a clicar i el segon clic muntava una segona composició
+     * (el flux també té la seva pròpia guarda de re-entrada `_portadaRunning`).
+     */
+    function markBtnBusy(btn, text) {
+        if (!btn) return;
+        try {
+            if (!btn.dataset) btn.dataset = {};
+            if (btn.dataset.label === undefined) btn.dataset.label = btn.innerText;
+            btn.disabled = true;
+            btn.classList.add('btn-busy');
+            if (text) btn.innerText = text;
+        } catch (e) { }
+    }
+
+    function clearBtnBusy(btn) {
+        if (!btn) return;
+        try {
+            btn.disabled = false;
+            btn.classList.remove('btn-busy');
+            if (btn.dataset && btn.dataset.label !== undefined) btn.innerText = btn.dataset.label;
+        } catch (e) { }
     }
 
     async function callWorkflow(module, method, ...args) {

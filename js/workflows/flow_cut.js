@@ -128,7 +128,7 @@
                 log(`📍 [IN·POST] range(0, ${newOut.toFixed(3)}) → ${rPost} | getOut()=${postOut}`);
                 if (Math.abs(parseFloat(postOut) - newOut) > 0.05) {
                     log(`⚠️ [IN] OUT real (${postOut}) ≠ newOut (${newOut.toFixed(3)}). Reintent directe...`);
-                    await callJSX(`Timeline.out(${newOut.toFixed(3)})`);
+                    await callJSX(`Timeline.out(${newOut.toFixed(3)})`);   // pont: Timeline.out → FASTPASS.Timeline.outPoint (NO hi ha cap Timeline.outPoint al pont)
                     postOut = await callJSX('Timeline.getOut()');
                     log(`📍 [IN·RETRY] Timeline.out(${newOut.toFixed(3)}) → getOut()=${postOut}`);
                 }

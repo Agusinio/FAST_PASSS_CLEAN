@@ -53,8 +53,30 @@ $files = @(
     (Resolve-Harness 'fp_probe_cas_intro.js'),
     # (2026-10-16 · BUG #171) CHYRONS ESTIRABLES amb el ratolí (`Clips.endCoherent`).
     (Resolve-Harness 'fp_probe_estirable.js'),
+    # (2026-10-16 · BUG #172) PORTADA: el frame capturat ha de ser el DEMANAT (Out/àrea de
+    # treball) + CONTRACTE DEL PONT (`callJSX('Espai.metode()')` → jsx/main.jsx).
+    (Resolve-Harness 'fp_probe_portada.js'),
     (Resolve-Harness 'fp_smoke_runner.js')
 )
+
+# (2026-10-16 · BUG #172) CONTRACTE DEL PONT: la prova 19-portada llig els fitxers REALS
+# del repo (js/**, jsx/**, index.html, style.css) per `fetch('file:///…')` per comprovar
+# que cap crida `callJSX('Espai.metode(…)')` use un mètode que no estiga declarat al pont
+# de jsx/main.jsx (això va ser el #172: `Timeline.outPoint` inexistent → 'ERR:…' empassat).
+# Cal passar la ruta del repo i la llista de fitxers a la pàgina + el permís de lectura
+# file:/// al navegador (mateix truc que bin/check_js_v8.ps1).
+$repoUrl = ($repo -replace '\\', '/')
+$textFiles = New-Object System.Collections.Generic.List[string]
+foreach ($dir in @('js', 'jsx')) {
+    $root = Join-Path $repo $dir
+    Get-ChildItem -Path $root -Recurse -File | Where-Object { $_.Extension -in @('.js', '.jsx') } |
+        Sort-Object FullName | ForEach-Object {
+            $textFiles.Add($dir + '/' + (($_.FullName.Substring($root.Length + 1)) -replace '\\', '/'))
+        }
+}
+foreach ($extra in @('index.html', 'style.css')) { $textFiles.Add($extra) }
+$manifest = '[' + (($textFiles | ForEach-Object { '"' + $_ + '"' }) -join ', ') + ']'
+Write-Host "Manifest del repo (prova #172): $($textFiles.Count) fitxers"
 
 # Traçabilitat: quins fitxers entren al bundle i d'on surten (repo vs %TEMP%).
 Write-Host "REPO: $repo"
@@ -67,6 +89,8 @@ foreach ($f in $files) {
 
 $sb = New-Object System.Text.StringBuilder
 [void]$sb.AppendLine('<!DOCTYPE html><html lang="ca"><head><meta charset="utf-8"><title>FASTPASS smoke</title></head><body><pre id="out">RUNNING</pre>')
+# (2026-10-16 · BUG #172) Globals que necessita la prova 19-portada (contracte del pont).
+[void]$sb.AppendLine("<script>window.__REPO = '$repoUrl'; window.__TEXT_FILES = $manifest;</script>")
 foreach ($f in $files) {
     if (-not (Test-Path $f)) { throw "no trobat: $f" }
     [void]$sb.AppendLine('<script>')
@@ -97,6 +121,9 @@ $url = 'file:///' + ($html -replace '\\', '/')
 $pargs = @(
     '--headless=new', '--no-sandbox', '--disable-gpu', '--no-first-run',
     '--no-default-browser-check', "--user-data-dir=$prof",
+    # (2026-10-16 · BUG #172) La prova 19-portada llig els fitxers REALS del repo per
+    # `fetch('file:///…')` (contracte del pont): sense aquest permís, fetch hi falla.
+    '--allow-file-access-from-files',
     '--dump-dom', '--virtual-time-budget=30000', $url
 )
 $proc = Start-Process -FilePath $browser -ArgumentList $pargs -RedirectStandardOutput $raw -RedirectStandardError $err -Wait -PassThru -NoNewWindow

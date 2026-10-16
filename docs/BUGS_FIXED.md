@@ -3,7 +3,7 @@
 Projecte **FAST >>> PASS** - versio **2.9.5 (LIPO-PRO)** - cataleg actualitzat: 2026-10-16
 
 Aquest fitxer es genera automaticament des del cataleg viu del projecte (`features.json`).
-Total: 112 entrades - **106 resoltes/tancades** - 6 en curs o pendents.
+Total: 114 entrades - **108 resoltes/tancades** - 6 en curs o pendents.
 
 ---
 
@@ -30,7 +30,7 @@ Total: 112 entrades - **106 resoltes/tancades** - 6 en curs o pendents.
 
 ## 2. Bugs resolts (detall)
 
-Ordre cronologic pel numero d incident. 103 entrades.
+Ordre cronologic pel numero d incident. 105 entrades.
 
 ### #8 - resolt (2026-05-28)
 
@@ -1123,6 +1123,34 @@ Ordre cronologic pel numero d incident. 103 entrades.
 **VALIDACIO**: `bin/check_js_v8.ps1`: TOTAL 58 | OK 58 | FAIL 0 · `bin/smoke/fp_smoke_build.ps1`: **PASS 202 FAIL 0** (secció nova `18-estirable`, 17 assercions amb el MOTOR REAL carregat i un MODEL de Premiere al pont JSX: estat incoherent → coherent amb el final intacte i mèdia romanent per estirar; idempotència; mèdia esgotat → `endAt` de reserva amb el final volgut intacte; imatge FIXA (PNG de `moveToRange`); xarxa de lectura `count/get`; sense clip → `ERR_NO_CLIP`; i la INTEGRACIÓ REAL de `_placeTradSlot` i `_freezeTemaTitol`, que acaben amb clips coherents) · **pendent el test a Premiere** (cal RECARREGAR el panell pel cache-bust v7/v79).
 
 **NOTA**: El retall COHERENT no canvia res del que es veu: la durada al timeline mana i només se sincronitza el rang del source amb ella. Per a un mèdia que s'usa SENCER (un wott animat col·locat amb tota la seua durada) el clip queda coherent i es pot ESCURÇAR/estirar fins al final del mèdia; allargar-lo MÉS enllà del mèdia és impossible en qualsevol editor (Premiere no té més imatge) — quan la targeta és més llarga que el mèdia, el flux ja hi posa el CONGELAT (#149), que és una imatge fixa i s'estira sense límit.
+
+### #172 - resolt (2026-10-16)
+
+**SIMPTOMA**: PORTADA — el PNG que es publicava NO era el frame demanat: la portada eixia amb el fotograma d'un altre moment de la timeline, i com que la captura sencera (còpia a la zona neta + `Render.snapshot`/QE + neteja) dura 10-30 s el botó no donava cap senyal de treball (un segon clic muntava una segona composició).
+
+**CAUSA ARREL**: (1) **BRETXA DE PONT** (mateixa classe que el #173): per ampliar temporalment el corxet OUT abans de capturar, el flux cridava `Timeline.outPoint(...)`, un àtom que NO existeix al pont —`jsx/main.jsx` exposa `out` → `FASTPASS.Timeline.outPoint`— i `callJSX` empassa l'`EvalScript error` com a `'ERR:...'`; l'Out es quedava CURT i `Render.snapshot` (→ `Render.exportFrameQE(tcSec, path)` → `qeSeq.exportFramePNG(tc, path)`) rebia un timecode FORA del rang de la seqüència: QE NO falla, exporta el frame que pot → portada d'un altre moment. (2) L'ÀREA DE TREBALL (el rang amb què exporta QE si està activada) NOMÉS se sincronitza amb IN/OUT via `Timeline.zoomToSelection()` (`setWorkAreaIn/OutPoint`): amb `Timeline.out` sol el TC de captura podia quedar fora de l'àrea de treball. (3) Amb la seqüència sense Out (`out0 = 0`) el `finally` cridava `Timeline.out(0)`, que FIXA el corxet a 0 (pitjor que no tocar-lo), i la guarda d'ampliació (`out0 > 0 && out0 < needOut`) NO cobria el cas `0`/`NaN`. (4) `waitFile` només mirava l'EXISTÈNCIA del PNG → un fitxer VELL del mateix nom passava la comprovació i es publicava com si fóra la portada nova.
+
+**SOLUCIO**: (1) `js/workflows/flow_render.js` (`runPortada`) — àtoms del pont corregits (`Timeline.in`/`Timeline.out`); `in0` (`Timeline.getIn()`) i `outRestore` (0 = la seqüència no tenia Out) guardats ABANS de tocar res; guarda d'ampliació reescrita (`!(out0 >= needOut - 0.02)`) amb comprovació del valor REAL de l'Out (`Timeline.getOut()`); `Timeline.zoomToSelection()` SEMPRE abans de capturar (marca `waSynced`, mou el CTI a l'IN i la captura el torna a fixar a 6a amb `seekCti` verificat); GUARDA DE RANG a 6a — si la lectura PROVA que l'Out no cobreix `tcCap` el flux s'atura amb error, i si la lectura no és concloent (0/NaN) avisa i continua, perquè deixar l'usuari sense portada quan no hi ha cap prova de fallada seria pitjor; `finally` amb RESTAURACIÓ VERIFICADA (`Timeline.out(outRestore)` + `Timeline.range(in0, outRestore)` + `zoomToSelection()`, amb avís si l'Out no torna al valor original) i, si `outRestore === 0`, es deixa el rang a `[in0, maxEnd]` enlloc de fixar l'Out a 0; el PNG anterior del mateix nom s'ESBORRA abans d'exportar (`cep.fs.stat` + `utils.deleteFile` amb reintent) i si no es pot esborrar el flux s'atura. (2) `js/workflows/flow_chyrons.js` — el congelat de cobertura amplia amb `Timeline.out` i MAI es deixa l'Out a 0 (`outRestore === 0` → no es crida `Timeline.out(0)`); `flow_cut.js` i `flow_graphics.js` amb els mateixos àtoms. (3) `js/main.js` + `style.css` — estat OCUPAT del botó de portada: `markBtnBusy(btn,'⏳')`/`clearBtnBusy(btn)` (desactivat + `.btn-busy` amb `@keyframes fpBtnBusyPulse`, etiqueta original al `dataset` i restaurada al `finally`). (4) `index.html` — cache-busts `flow_render.js?v=33`, `flow_chyrons.js?v=80`, `flow_cut.js?v=19`, `flow_graphics.js?v=26`, `main.js?v=82`, `style.css?v=61`. (5) `jsx/main.jsx` — exposat l'àtom que faltava al pont (`Render.exportRange`, vegeu #173).
+
+**FITXERS**: `js/workflows/flow_render.js`, `js/workflows/flow_chyrons.js`, `js/workflows/flow_cut.js`, `js/workflows/flow_graphics.js`, `jsx/main.jsx`, `js/main.js`, `style.css`, `index.html`, `bin/smoke/fp_probe_portada.js` (nou), `bin/smoke/fp_smoke_build.ps1`, `bin/smoke/fp_smoke_runner.js`
+
+**VALIDACIO**: `bin/check_js_v8.ps1`: TOTAL 58 | OK 58 | FAIL 0 · `bin/check_dead.ps1`: CODI MUERT 0 orfes (i cap fitxer de `js/` o `jsx/` sense carregador) · `bin/smoke/fp_smoke_build.ps1`: **PASS 224 FAIL 0** (secció nova `19-portada`, 22 assercions: contracte del pont sobre els fitxers REALS del repo —60/60 lectures, 12 espais i 540 crides `callJSX` revisades— i MOTOR REAL `Chyrons._capturePng` amb un MODEL de la seqüència al pont: ampliació amb `Timeline.out`, TC de captura EXACTE via QE, restauració de l'Out i cas Out ABSENT) · **pendent el test a Premiere** (cal RECARREGAR el panell pel cache-bust v33/v80/v26/v19/v82/v61).
+
+**NOTA**: El símptoma «portada d'un altre frame» tenia QUATRE causes sumables i cap d'elles donava error visible: l'`EvalScript error` empassat pel pont, l'àrea de treball sense sincronitzar, l'Out fixat a 0 al `finally` i el PNG vell que passava la comprovació d'existència. La guarda de rang NO ha d'impedir la captura quan la lectura no és concloent: el mal resultat ha de ser sempre preferible a no tindre portada.
+
+### #173 - resolt (2026-10-16)
+
+**SIMPTOMA**: `Render` de vídeo — `flow_render.runVideo` retallava el timeline SEMPRE a l'Out de la seqüència: amb una ÀREA DE TREBALL marcada (i sense IN/OUT) l'exportació ignorava l'àrea de treball.
+
+**CAUSA ARREL**: BRETXA DE PONT — `Render.exportRange()` està implementat a `jsx/modules/9_Render.jsx` (l'ÚNIC àtom que llig l'àrea de treball, amb `getWorkAreaOutPointAsTime`) però NO estava exposat a `$.global.Espai` de `jsx/main.jsx` → `EvalScript error` empassat per `callJSX` com a `'ERR:...'` → el `try` del flux queia SEMPRE al fallback `Timeline.getOut()`. Mateixa classe de defecte que el `Timeline.outPoint` del #172: la funció existeix al MÒDUL i NO al PONT, i el pont no avisa.
+
+**SOLUCIO**: (1) `jsx/main.jsx` — àtom nou `exportRange` (`FASTPASS.Render.exportRange()`, amb el comentari del perquè). (2) AUDITORIA del contracte: es revisen les 540 crides `callJSX` de `js/` contra la taula del pont; l'única bretxa era aquesta (`Clips.placeSrtOnExistingSubtitleTrack` va eixir com a FALS POSITIU: es crida directament amb `FASTPASS.Clips.*`, sense pont). (3) GUARDA NOVA: `bin/smoke/fp_probe_portada.js` part A escaneja els fitxers REALS de `js/` (llegits amb `fetch('file:///…')`, el build afig `--allow-file-access-from-files`) i comprova cada `Espai.metode(` escrit dins d'una crida `callJSX` contra el bloc `$.global.Espai` de `main.jsx`; `bin/smoke/fp_smoke_build.ps1` injecta el manifest `window.__TEXT_FILES` + `window.__REPO` (js/ + jsx/ + `index.html` + `style.css`) i `bin/smoke/fp_smoke_runner.js` puja el timeout a 20 s (el bundle amb els fitxers del repo dins és més gran).
+
+**FITXERS**: `jsx/main.jsx`, `bin/smoke/fp_probe_portada.js` (nou), `bin/smoke/fp_smoke_build.ps1`, `bin/smoke/fp_smoke_runner.js`
+
+**VALIDACIO**: `bin/smoke/fp_smoke_build.ps1`: **PASS 224 FAIL 0** — assercions «cap crida `callJSX` a un mètode INEXISTENT del pont (540 crides revisades)» i «el pont exposa els àtoms que el #172 necessitava (`Timeline.out` + `Render.exportRange`)» · pendent el test a Premiere.
+
+**NOTA**: Aquesta prova (part A) hauria caçat els DOS defectes el primer dia. Regla per al futur: si s'afig un mètode nou a un mòdul `jsx/`, cal exposar-lo també a `main.jsx`, o la crida fallarà EN SILENCI (`callJSX` retorna `'ERR:...'` i el flux cau al seu fallback com si el mètode no existira).
 
 ## 3. Bugs en curs / pendents
 

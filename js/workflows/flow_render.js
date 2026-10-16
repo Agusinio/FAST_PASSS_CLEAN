@@ -82,18 +82,87 @@
     }
 
     /**
-     * waitFile: Espera que un fitxer existeixi (cep.fs.stat). `stat` NO retorna `.size`
-     * en aquest equip, així que aquí només es comprova l'existència; la mida es valida
-     * llegint el fitxer.
-     * @returns {Promise<boolean>}
+     * readFileBytes: Bytes reals d'un fitxer (cep.fs i, si cal, Node `fs`).
+     * Retorna un array indexable de bytes, o null si no es pot llegir.
+     * @param {string} path - Ruta (UNC o local) del fitxer
+     * @returns {Uint8Array|Array|null}
      */
-    async function waitFile(path, tries) {
-        for (let i = 0; i < (tries || 20); i++) {
-            const st = window.cep.fs.stat(path);
-            if (st && st.err === 0) return true;
-            await getUtils().delay(100);
+    function readFileBytes(path) {
+        const normP = String(path).replace(/\//g, "\\");
+        try {
+            const rr = window.cep.fs.readFile(normP);
+            const d = (rr && rr.err === 0) ? rr.data : null;
+            if (d) {
+                if (typeof d.length === "number" && typeof d[0] === "number") return d;
+                if (typeof ArrayBuffer !== "undefined" && d instanceof ArrayBuffer) return new Uint8Array(d);
+                if (d.buffer) return new Uint8Array(d.buffer);
+            }
+        } catch (eCep) { }
+        const fs = getUtils()._nodeFs();
+        if (fs && fs.readFileSync) {
+            try { return new Uint8Array(fs.readFileSync(normP)); } catch (eNode) { }
         }
-        return false;
+        return null;
+    }
+
+    /**
+     * waitPng: Espera que un PNG estigui REALMENT ACABAT a disc (2026-10-16 · BUG #172).
+     * `waitFile` nomes mirava l'EXISTENCIA i QE escriu el fitxer de mica en mica: es podia
+     * llegir/publicar un PNG a mitges (o un de VELL del mateix nom). Criteris:
+     *   1) existeix i te mida > 0,
+     *   2) la mida es manté ESTABLE entre dues lectures seguides,
+     *   3) te el chunk final IEND (0x49 0x45 0x4E 0x44) = fitxer complet.
+     * @param {string} pathNoExt - Ruta (amb o sense `.png`; es proven les dues)
+     * @param {number} [tries=30] - Intents (~70-120 ms cada un)
+     * @returns {Promise<{ok:boolean,size:number,iend:boolean,file:string,tries:number}>}
+     */
+    async function waitPng(pathNoExt, tries) {
+        const utils = getUtils();
+        const norm = String(pathNoExt).replace(/\//g, "\\");
+        const candidats = [/\.png$/i.test(norm) ? norm : (norm + ".png"), norm.replace(/\.png$/i, "")];
+        const maxTries = tries || 30;
+        let size = -1, stable = 0, iend = false, file = candidats[0];
+        for (let i = 0; i < maxTries; i++) {
+            for (let c = 0; c < candidats.length; c++) {
+                const buf = readFileBytes(candidats[c]);
+                if (!buf || buf.length === 0) continue;
+                file = candidats[c];
+                const n = buf.length;
+                iend = (n >= 12 && buf[n - 8] === 0x49 && buf[n - 7] === 0x45 && buf[n - 6] === 0x4E && buf[n - 5] === 0x44);
+                if (n === size) { stable++; } else { stable = 0; size = n; }
+                if (iend && stable >= 1) return { ok: true, size: n, iend: true, file: file, tries: i + 1 };
+            }
+            await utils.delay(i === 0 ? 120 : 70);
+        }
+        return { ok: false, size: (size < 0 ? 0 : size), iend: iend, file: file, tries: maxTries };
+    }
+
+    /**
+     * seekCti: Mou el cabezal (CTI) a `sec` i VERIFICA la lectura REAL amb `Timeline.get()`
+     * (2026-10-16 · BUG #172). Abans es feia `Timeline.set(tcCap)` + un `delay(500)` fixe
+     * molt abans de capturar i, pel mig, el flux passava pel NAS i ampliava l'Out point:
+     * si el CTI no quallava, el PNG de portada sortia d'un ALTRE frame i no s'avisava.
+     * Ara: fins a 3 intents (amb `Timeline.refresh` pel mig) i, si no qualla, es LLANÇA
+     * (millor cap PNG que un d'equivocat).
+     * @param {number} sec - Instant destí (segons)
+     * @param {string} label - Etiqueta per al registre
+     * @returns {Promise<number>} Lectura REAL del CTI
+     */
+    async function seekCti(sec, label) {
+        const utils = getUtils();
+        let real = NaN;
+        for (let i = 0; i < 3; i++) {
+            const rs = await callJSX(`Timeline.set(${sec})`);
+            await utils.delay(i === 0 ? 220 : 160);
+            real = parseFloat((await callJSX('Timeline.get()')) || "0");
+            if (isFinite(real) && Math.abs(real - sec) <= FRAME_TOL) {
+                log(`[Portada] CTI ${label}: demanat ${sec.toFixed(2)}s · real ${real.toFixed(2)}s (${rs})`);
+                return real;
+            }
+            log(`[Portada] El cabezal no s'ha quedat a ${sec.toFixed(2)}s (real=${isFinite(real) ? real.toFixed(2) : real}s) · reintent ${i + 2}/3`, "WARN");
+            try { await callJSX('Timeline.refresh()'); } catch (eR) { }
+        }
+        throw new Error(`El cabezal no s'ha pogut fixar a ${sec.toFixed(2)}s (real=${isFinite(real) ? real.toFixed(2) : real}s): capturar ara donaria una portada d'un altre frame.`);
     }
 
     /**
@@ -555,7 +624,28 @@
          *      s'ha recarregat, es busca el MP4 més recent de la carpeta de publicació; i
          *      com a última xarxa, l'hora actual.
          */
+        /**
+         * (2026-10-16 · BUG #172) GUARDA DE RE-ENTRADA: un segon clic mentre la primera
+         * exportacio encara corre muntava una SEGONA composicio sobre la mateixa zona i
+         * deixava la sequencia amb doble captura i doble neteja. Ara el segon clic es
+         * descarta i s'avisa a la barra d'estat.
+         */
         runPortada: async function () {
+            const R = FASTPASS_UI.Workflows.Render || this;
+            if (R._portadaRunning) {
+                log("[Portada] Ja hi ha una exportacio en curs · clic ignorat", "WARN");
+                getUtils().status("Portada en curs...", "info");
+                return;
+            }
+            R._portadaRunning = true;
+            try {
+                await R._runPortadaBody();
+            } finally {
+                R._portadaRunning = false;
+            }
+        },
+
+        _runPortadaBody: async function () {
             if (!(await getUtils().validateActiveSequence())) return;
             log("📸 [Portada] Inici (còpia a zona neta + captura de frame)...");
 
@@ -571,6 +661,13 @@
             let portStart = null;
             // Out point original de la seqüència, si l'hem hagut d'ampliar per capturar.
             let outRestore = null;
+            // (2026-10-16 · BUG #172) IN original i marca de si hem sincronitzat l'ÀREA DE
+            // TREBALL amb IN/OUT (`Timeline.zoomToSelection`): totes dues coses es desfan al
+            // finally (`Timeline.range(in0, …)`). ⚠️ El PONT (jsx/main.jsx) NOMÉS té
+            // `Timeline.in/out/range/getIn/getOut/zoomToSelection`: no hi ha cap
+            // `Timeline.inPoint`/`Timeline.outPoint` (aquesta confusió va ser la causa del #172).
+            let in0 = 0;
+            let waSynced = false;
             // 🛡️ (2026-10-15 · BUG #162) Nom del clip font, final del projecte i FOTO de
             // l'àudio ABANS d'inserir res: l'insert amb ripple de la còpia (insertClipFrom)
             // deixa un clip d'àudio ORFE (sense link, amb el MEDIA SENCER) en un TC que
@@ -579,7 +676,16 @@
             // la neteja s'esborra tot clip d'àudio (pista+nom+start) que NO hi era.
             let srcName = "";
             let maxEnd = 0;
+            // (2026-10-16 · BUG #172) Guardes de la captura:
+            //  · `insertedCopy`: nomes hi ha res a esborrar/restaurar si la copia temporal
+            //    s'ha INSERIT de veritat (abans qualsevol error previ a la insercio deixava
+            //    un avis de "Neteja INCOMPLETA" amb la sequencia intacta).
+            //  · `t0` / `tPre` / `tCap`: cronometres per etapa (queixa de lentitud).
             let audioBefore = null;
+            let insertedCopy = false;
+            const t0 = Date.now();
+            let tPre = 0;
+            let tCap = 0;
             
             try {
                 const config = FASTPASS_UI.Config.get();
@@ -644,7 +750,20 @@
                 // filtri els PNG per la data del projecte actual (no només mtime).
                 const stateDateDir = state.dateDir || utils.getFormattedDate().replace(/["\s]/g, "").trim();
                 const ctx = { config, progData: state.progData, bloque: state.bloque, dateDir: stateDateDir };
-                const portadas = await getScanner().portadas(ctx);
+                // (2026-10-16 · BUG #172) LECTURES INDEPENDENTS EN PARAL·LEL: el filtre de portades
+                // al NAS, la foto de les pistes de vídeo (per maxEnd) i la foto de l'àudio no
+                // depenen entre elles i abans anaven EN SERIE (2-3 viatges al NAS, de 0,5-2 s
+                // cada un, dins d'un flux que l'usuari troba lent). Ara surten alhora.
+                const tLect = Date.now();
+                const lect = await Promise.all([
+                    getScanner().portadas(ctx),
+                    callJSX(`Clips.debugTracks('video')`),
+                    this._snapAudio()
+                ]);
+                const portadas = lect[0];
+                const vRaw = lect[1];
+                audioBefore = lect[2];
+                log(`[Portada] Lectures en paral·lel (portades NAS + pistes de vídeo + foto d'àudio): ${((Date.now() - tLect) / 1000).toFixed(2)}s`);
                 const portada = (portadas && portadas.length > 0) ? portadas[0] : null;
                 
                 if (!portada) {
@@ -654,7 +773,7 @@
                 log(`🖼️ [Portada] Portada del tema: ${portada.name}${sz ? ' (' + sz.w + 'x' + sz.h + ' px)' : ''}`);
 
                 // ── 3. ZONA NETA: més enllà del final de TOT el projecte ─────────
-                const vRaw = await callJSX(`Clips.debugTracks('video')`);
+                // ⚠️ `vRaw` ve de la lectura en PARAL·LEL de més amunt (2026-10-16 · BUG #172).
                 let info = null;
                 try { info = JSON.parse(vRaw); } catch (eV) { }
                 if (!info || !info.tracks || !info.tracks.length) {
@@ -681,7 +800,7 @@
                 // 🛡️ (2026-10-15 · BUG #162) FOTO de l'àudio ABANS d'inserir la còpia: el
                 // ripple insert deixa un clip d'àudio orfe en un TC impredictible, així que
                 // la neteja es fa per DIFERÈNCIA contra aquesta foto (no per temps).
-                audioBefore = await this._snapAudio();
+                // ⚠️ `audioBefore` ve de la lectura en PARAL·LEL de més amunt (2026-10-16 · BUG #172).
                 log(`🧾 [Portada] Àudio abans d'inserir: ${audioBefore ? audioBefore.size + ' clips' : 'NO llegible (només regla d\'orfes)'}`);
 
                 // ── 4. CÒPIA del clip de V1 a la zona neta (a la MATEIXA V1) ─────
@@ -692,6 +811,10 @@
                 const ins = await callJSX(`Clips.insertClipFrom(${T_V1}, ${src.index}, ${T_V1}, ${tempTC}, 'video')`);
                 log(`🧬 [Portada] Clips.insertClipFrom V1[${src.index}] → V1 @ ${tempTC}s → ${ins}`);
                 if (String(ins).indexOf('OK') !== 0) throw new Error("La còpia del clip a V1 ha fallat: " + ins);
+                // (2026-10-16 · BUG #172) A partir d'aquí ja hi ha còpia a la zona neta: és el
+                // senyal perquè el `finally` faci la neteja (abans qualsevol error previ a la
+                // inserció deixava un avís de "Neteja INCOMPLETA" amb la seqüència intacta).
+                insertedCopy = true;
                 await utils.delay(300);
                 const idxCopy = await clipIndexAt(T_V1, tempTC);
                 if (idxCopy < 0) throw new Error(`No trobo la còpia a V${T_V1} @ ${tempTC}s.`);
@@ -815,8 +938,12 @@
                 // (start_real + (mediaIn − inPoint_real)), SEMPRE amb ≥1 frame de marge a
                 // dins del clip: és l'instant en què la còpia mostra el frame del cabezal
                 // sense el risc del borde (que és el que produïa el PNG NEGRE).
-                await callJSX(`Timeline.set(${tcCap})`);
-                await utils.delay(500);
+                // (2026-10-16 · BUG #172) El cabezal NO es mou aquí: es mou JUST ABANS de
+                // capturar, a 6a (amb `seekCti`, que VERIFICA la lectura real). Abans es feia
+                // `Timeline.set(tcCap)` aquí + un `delay(500)` fixe i, pel mig, el flux
+                // passava pel NAS (carpeta de portades, noms, import…) i ampliava l'Out
+                // point: si el CTI no quallava o Premiere el clampejava (l'Out encara era
+                // curt!), la captura QE sortia d'un ALTRE frame i ningú no s'avisava.
 
                 // ── 6b. DESTÍ del PNG: AAA_PORTADES (`config.rutas.portadas`) ──
                 // 🛡️ (2026-10-15 · BUG #163) El PNG va a la carpeta de PORTADES PUBLICADES
@@ -887,10 +1014,22 @@
                 // marge: si l'Out queda abans, QE `exportFramePNG` no escriu res (NEGRE).
                 // Després es VERIFICA el valor REAL i s'avisa si no s'ha ampliat.
                 const needOut = tEnd + 1;
-                if (out0 > 0 && out0 < needOut) {
-                    outRestore = out0;
-                    const rOut = await callJSX(`Timeline.out(${needOut})`);
+                // (2026-10-16 · BUG #172) IN original: el rang sencer (IN+OUT) s'ha de poder
+                // tornar exactament com estava (el pont NO té `Timeline.inPoint`: es restaura
+                // amb `Timeline.range`, vegeu el finally).
+                in0 = parseFloat(await callJSX('Timeline.getIn()') || "0");
+                if (!(out0 >= needOut - 0.02)) {   // (BUG #172) abans: `out0 > 0 && out0 < needOut` no cobria out0 = 0/NaN
+                    outRestore = (isFinite(out0) && out0 > 0) ? out0 : 0;   // (BUG #172) 0 = la seqüència no tenia Out
+                    const rOut = await callJSX(`Timeline.out(${needOut})`);   // pont: Timeline.out → FASTPASS.Timeline.outPoint → seq.setOutPoint
                     const realOut = parseFloat(await callJSX('Timeline.getOut()') || "0");
+                    // (2026-10-16 · BUG #172) Aquest valor és decisiu: `Render.snapshot` →
+                    // `Render.exportFrameQE(timeSec, path)` converteix tcCap a timecode i crida
+                    // `qeSeq.exportFramePNG(tc, path)`. Amb un TC FORA del rang de la seqüència
+                    // (Out curt), QE escrivia un frame equivocat: la portada sortia d'un altre
+                    // moment de la timeline. El mètode del PONT és `Timeline.out(v)`; el
+                    // `Timeline.outPoint(v)` amb què es va intentar arreglar no existeix al pont
+                    // (jsx/main.jsx: `"out"` → `FASTPASS.Timeline.outPoint`) i tornava
+                    // `EvalScript error` en silenci. La comprovació de rang es fa a 6a.
                     log(`📐 [Portada] Out point ampliat temporalment ${out0.toFixed(2)}s → ${needOut}s (${rOut}) · real=${realOut.toFixed(2)}s`);
                     if (!isFinite(realOut) || realOut < needOut - 0.02) {
                         log(`⚠️ [Portada] L'Out point NO s'ha ampliat de veritat (real=${realOut}s < ${needOut}s) · la captura podria sortir NEGRA!`, "WARN");
@@ -899,6 +1038,18 @@
                     log(`📐 [Portada] Out point = ${out0.toFixed(2)}s · captura a ${tcCap.toFixed(2)}s (finestra ${tStart.toFixed(2)}→${tEnd.toFixed(2)}s)`);
                 }
 
+                // 🛡️ (2026-10-16 · BUG #172) ÀREA DE TREBALL: `Timeline.out` mou el corxet OUT,
+                // però l'ÀREA DE TREBALL (el rang amb què exporta QE si està activada) només se
+                // SINCRONITZA amb IN/OUT via `Timeline.zoomToSelection()` (pont →
+                // `FASTPASS.Timeline.zoomToSelection` → setWorkAreaIn/OutPoint; patró ja seguit a
+                // flow_graphics.js). Sense això el TC de captura podia quedar FORA de l'àrea de
+                // treball → QE tornava un altre frame. Es fa SEMPRE abans de capturar (encara que
+                // l'Out ja cobrira) i el finally el desfà. Mou el CTI a l'IN: la captura torna a
+                // fixar el cabezal acte seguit (6a · `seekCti`).
+                const rZoom = await callJSX('Timeline.zoomToSelection()');
+                waSynced = true;
+                log(`📐 [Portada] Àrea de treball sincronitzada amb IN/OUT (in=${in0.toFixed(2)}s → out=${Math.max(needOut, out0).toFixed(2)}s): ${rZoom}`);
+
                 // (2026-10-06) El mètode que FUNCIONA és `Render.snapshot` = QE exportFramePNG
                 // (main.jsx:669 → FASTPASS.Render.exportFrameQE; commit 4327704 «captura de frame
                 // (Render.snapshot)»). Rep la ruta SENSE extensió. `Render.frame`
@@ -906,6 +1057,29 @@
                 // com a segona opció per si algun dia l'API estàndard existeix al DOM.
                 // 🛡️ (2026-10-14) VERIFICACIÓ del frame que es captura: hi ha d'haver la
                 // còpia a V1 i la portada a la seva pista EXACTAMENT a tcCap (si no, NEGRE).
+                // (2026-10-16 · BUG #172) Fi de la preparació: a partir d'aquí res no pot
+                // tornar a moure el cabezal ni el rang de la seqüència.
+                tPre = Date.now();
+
+                // 🛡️ (2026-10-16 · BUG #172) GUARDA DE RANG: l'Out point HA de cobrir el frame de
+                // captura; si no, `exportFrameQE` rep un TC fora del rang de la seqüència i QE
+                // exporta un frame EQUIVOCAT enlloc de fallar. Només s'atura quan la LECTURA ho
+                // PROVA (valor finit i més petit que el TC): si la lectura no és concloent (0/NaN
+                // = no llegible) es continua amb avís, perquè deixar l'usuari sense portada quan
+                // no hi ha cap prova de fallada seria pitjor que intentar la captura.
+                const outCap = parseFloat((await callJSX('Timeline.getOut()')) || "0");
+                if (isFinite(outCap) && outCap > 0 && outCap < tcCap + FRAME_TOL) {
+                    throw new Error("L'Out point (" + outCap.toFixed(2) + "s) no cobreix el frame de captura (" + tcCap.toFixed(2) + "s) → QE exportaria una portada d'un altre frame.");
+                }
+                if (!(outCap >= tcCap + FRAME_TOL)) {
+                    log(`⚠️ [Portada] No puc CONFIRMAR que l'Out point cobreix el frame de captura (getOut()=${isFinite(outCap) ? outCap.toFixed(2) : outCap}s vs tcCap=${tcCap.toFixed(2)}s) · continue (si la portada surt d'un altre frame, revisa el corxet OUT)`, "WARN");
+                }
+                // ── 6a. CABEZAL al frame de captura, VERIFICAT ───────────────────
+                // `seekCti` fa `Timeline.set` + comprova la lectura REAL amb `Timeline.get`
+                // (fins a 3 intents, amb `Timeline.refresh` pel mig) i, si no qualla, LLANÇA.
+                tCap = Date.now();
+                await seekCti(tcCap, 'captura');
+
                 const chkCopy = await callJSX(`Clips.at(${T_V1}, ${tcCap}, 'video')`);
                 const chkPort = await callJSX(`Clips.at(${tPort}, ${tcCap}, 'video')`);
                 log(`🔎 [Portada] Frame ${tcCap.toFixed(2)}s → V${T_V1}: ${chkCopy} | V${tPort}: ${chkPort}`);
@@ -913,12 +1087,30 @@
                     log(`⚠️ [Portada] NO hi ha còpia a V${T_V1} @ ${tcCap.toFixed(2)}s · el PNG sortirà NEGRE`, "WARN");
                 }
 
-                let snapRes = await callJSX(`Render.snapshot('${utils.escape(destPath.replace(/\.png$/i, ''))}', ${tcCap})`, { rawError: true });
-                let pngOk = await waitFile(destPath, 20);
+                const tCapt = Date.now();
+                const destExt = /\.png$/i.test(destPath) ? destPath : (destPath + ".png");
+                const destNoExt = destExt.replace(/\.png$/i, "");
+                // 🛡️ (2026-10-16 · BUG #172) Si ja hi ha un PNG amb aquest nom (exportació
+                // anterior, o una que va quedar a mitges), s'ESBORRA abans d'exportar: abans
+                // `waitFile` només mirava l'EXISTÈNCIA i un fitxer VELL passava la comprovació
+                // → es publicava com si fos la portada nova.
+                const stVell = window.cep.fs.stat(destExt);
+                if (stVell && stVell.err === 0) {
+                    let delOk = utils.deleteFile(destExt);
+                    if (!delOk) { await utils.delay(200); delOk = utils.deleteFile(destExt); }
+                    log(`[Portada] PNG anterior del mateix nom ${delOk ? 'ESBORRAT' : 'NO esborrat'} abans de capturar: ${destExt}`, delOk ? "INFO" : "WARN");
+                    if (!delOk) throw new Error("Hi ha un PNG anterior a " + destExt + " i no s'ha pogut esborrar → publicar-lo donaria una portada VELLA.");
+                }
+                let snapRes = await callJSX(`Render.snapshot('${utils.escape(destNoExt)}', ${tcCap})`, { rawError: true });
+                // 🛡️ `waitPng` = mida > 0 + mida ESTABLE + chunk final IEND (fitxer sencer).
+                let pngRes = await waitPng(destNoExt, 30);
+                let pngOk = pngRes.ok;   // (BUG #172) `waitPng` ja n'ha verificat la integritat
                 let via = 'QE';
                 if (!pngOk) {
-                    snapRes = await callJSX(`Render.frame('${utils.escape(destPath)}', ${tcCap})`, { rawError: true });
-                    pngOk = await waitFile(destPath, 20);
+                    log("[Portada] QE (Render.snapshot) no ha escrit el PNG · es prova l'API estàndard (Render.frame)...", "WARN");
+                    snapRes = await callJSX(`Render.frame('${utils.escape(destExt)}', ${tcCap})`, { rawError: true });
+                    pngRes = await waitPng(destNoExt, 20);
+                    pngOk = pngRes.ok;
                     via = 'API';
                 }
                 log(`📸 [Portada] ${via} → ${snapRes}`);
@@ -926,21 +1118,22 @@
                 // Verificació: el fitxer hi és i no és buit (`cep.fs.stat` no retorna .size
                 // en aquest equip → la mida es comprova LLEGINT).
                 if (!pngOk) throw new Error(`El PNG no s'ha escrit a ${destPath} (via ${via} → ${snapRes})`);
-                const rr = window.cep.fs.readFile(destPath);
-                const pngBytes = (rr && rr.err === 0 && rr.data)
-                    ? ((typeof rr.data.length === 'number') ? rr.data.length : (rr.data.byteLength || 0))
-                    : -1;
-                if (pngBytes <= 0) throw new Error("El PNG existeix però no es pot llegir (" + destPath + ", err=" + (rr && rr.err) + ")");
+                // (2026-10-16 · BUG #172) La mida ve de `waitPng`, que a més ha comprovat que el
+                // fitxer està COMPLET (mida estable entre dues lectures + chunk final IEND):
+                // no cal tornar a llegir el PNG sencer (en un NAS no és gratis).
+                const pngBytes = pngRes.size;
+                if (pngBytes <= 0) throw new Error("El PNG existeix però no es pot llegir (" + destPath + ")");
                 utils.status(`Portada OK: ${nameBase}.png (${Math.round(pngBytes / 1024)} KB)`, "exito");
                 log(`✅ [Portada] PNG generat via ${via}: ${destPath} (${Math.round(pngBytes / 1024)} KB)`);
 
+                log(`[Portada] TIMES (BUG #172): preparació=${((tPre - t0) / 1000).toFixed(2)}s · captura+publicació=${((Date.now() - tCap) / 1000).toFixed(2)}s · TOTAL=${((Date.now() - t0) / 1000).toFixed(2)}s`);
             } catch (e) {
                 getUtils().handleError(e, "RenderPortada");
             } finally {
                 // ── NETEJA: només el que hem inserit (vídeo per TEMPS, immune a reindexar;
                 // àudio per DIFERÈNCIA + regla d'orfes, vegeu més avall) ──
                 try {
-                    if (tempTC > 0) {
+                    if (tempTC > 0 && insertedCopy) {   // (BUG #172) res a netejar si la còpia no s'ha inserit
                         // 🛡️ (2026-10-14) S'esborra amb el START REAL de la còpia: els clips
                         // temporals comencen a `tStart` (pre-roll), NO a tempTC → buscar-los
                         // per tempTC fallaria (removeAt tolera només 0.05 s).
@@ -1002,9 +1195,35 @@
                             log("⚠️ [Portada] Neteja d'àudio: " + eAud.message, "WARN");
                         }
                     }
-                    if (outRestore !== null) {
+                    if (outRestore !== null && outRestore > 0) {
+                        // (2026-10-16 · BUG #172) El mètode del PONT per al corxet OUT és
+                        // `Timeline.out(v)` (jsx/main.jsx: `"out"` → `FASTPASS.Timeline.outPoint`);
+                        // `Timeline.outPoint` NO existeix al pont i la restauració fallava tan
+                        // silenciosament com l'ampliació. Ara s'usa el mètode bo, es torna el RANG
+                        // sencer amb `Timeline.range` i es re-sincronitza l'àrea de treball; el
+                        // resultat es VERIFICA.
                         const rb = await callJSX(`Timeline.out(${outRestore})`);
-                        log(`📐 [Portada] Out point restaurat a ${outRestore}s → ${rb}`);
+                        let rbR = '—', rbZ = '—';
+                        if (waSynced) {
+                            rbR = await callJSX(`Timeline.range(${in0}, ${outRestore})`);
+                            rbZ = await callJSX('Timeline.zoomToSelection()');
+                        }
+                        const rbV = parseFloat((await callJSX('Timeline.getOut()')) || "0");
+                        if (Math.abs(rbV - outRestore) > 0.05) {
+                            log(`[Portada] L'Out point NO ha tornat al valor original (${outRestore}s demanat vs ${isFinite(rbV) ? rbV.toFixed(2) : rbV}s real): revisa el corxet OUT de la seqüència`, "WARN");
+                        }
+                        log(`📐 [Portada] Out point restaurat a ${outRestore}s → ${rb} | rang ${in0.toFixed(2)}→${outRestore.toFixed(2)}s → ${rbR} | àrea de treball → ${rbZ}`);
+                    } else if (outRestore === 0) {
+                        // (2026-10-16 · BUG #172) La seqüència NO tenia Out point (0): NO es crida
+                        // `Timeline.out(0)`, que fixaria el corxet a l'inici i deixaria el rang
+                        // d'exportació BUIT. Es torna el rang fins al FINAL DEL PROJECTE (`maxEnd`,
+                        // la zona neta ja s'ha netejat) i es re-sincronitza l'àrea de treball.
+                        let rb = '—';
+                        if (waSynced && maxEnd > 0) {
+                            rb = await callJSX(`Timeline.range(${in0}, ${maxEnd})`);
+                            await callJSX('Timeline.zoomToSelection()');
+                        }
+                        log(`[Portada] La seqüència no tenia Out point (0): es deixa el rang a [${in0.toFixed(2)}s, ${maxEnd > 0 ? maxEnd.toFixed(2) : '?'}s] (final del projecte) → ${rb} — revisa el corxet OUT si has d'exportar per àrea de treball`, "WARN");
                     }
                     await callJSX(`Timeline.set(${cti})`);
                 } catch (eC) {

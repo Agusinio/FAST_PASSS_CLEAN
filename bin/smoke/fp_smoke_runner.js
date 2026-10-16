@@ -17,7 +17,9 @@
     }
 
     // Xarxa de seguretat: si la cadena de promeses es penja, bolca l'estat parcial.
-    setTimeout(function () { if (!done) { show(dump('HARNESS TIMEOUT (fase: ' + (window.__PHASE || '-') + ')')); } }, 8000);
+    // (2026-10-16 · BUG #172) 8 s → 20 s: la prova 19-portada llig els fitxers REALS del
+    // repo per `fetch('file:///…')` abans de les assercions.
+    setTimeout(function () { if (!done) { show(dump('HARNESS TIMEOUT (fase: ' + (window.__PHASE || '-') + ')')); } }, 20000);
 
     try {
         document.getElementById('out').textContent = 'RUNNER START (' + (typeof window.__runTests) + ')';

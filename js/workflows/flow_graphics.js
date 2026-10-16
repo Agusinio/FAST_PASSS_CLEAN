@@ -27,7 +27,7 @@
             try {
                 const cti = parseFloat(await callJSX("Timeline.get()"));
                 log(`📍 In Seqüència → ${cti.toFixed(2)}s`);
-                await callJSX(`Timeline.inPoint(${cti})`);
+                await callJSX(`Timeline.in(${cti})`);   // (BUG #172) el pont NO té `Timeline.inPoint` (sí `Timeline.in` → FASTPASS.Timeline.inPoint)
                 getUtils().status("In fixat", "exito");
             } catch (e) { getUtils().handleError(e, "updateBlocIn"); }
         },
@@ -41,7 +41,7 @@
                 log(`📍 Fixant BLOC_OUT a ${cti.toFixed(2)}s`);
                 
                 // 1. Actualitzar Out Point de seqüència
-                await callJSX(`Timeline.outPoint(${cti})`);
+                await callJSX(`Timeline.out(${cti})`);   // (BUG #172) el pont NO té `Timeline.outPoint` (sí `Timeline.out` → FASTPASS.Timeline.outPoint)
                 
                 // 2. Actualitzar marcador BLOC_OUT
                 await callJSX(`Markers.set(${cti}, 'BLOC_OUT', 'color=3')`);

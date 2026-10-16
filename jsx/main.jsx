@@ -686,6 +686,15 @@ $.global.Render = {
     // sense AME. Cal exposar-lo aquí perquè el panell crida Render.<mètode>.
     renderDirect: function(pr, o, n) {
         return ($.global.FASTPASS.Render) ? FASTPASS.Render.renderDirect(pr, o, n) : "ERR";
+    },
+    // (2026-10-16 · BUG #172) BRETXA DE PONT: `flow_render.runVideo` cridava
+    // `Render.exportRange()` per saber a quin TC retallar el timeline abans d'exportar
+    // (àtom de 9_Render.jsx que és l'ÚNIC que llig l'ÀREA DE TREBALL), però no estava
+    // exposat ací → `EvalScript error` que `callJSX` empassa com 'ERR:...' i el flux
+    // queia sempre al fallback `Timeline.getOut()`. Mateix defecte de classe que el
+    // `Timeline.outPoint` del #172: la funció existeix al mòdul i no al pont.
+    exportRange: function() {
+        return ($.global.FASTPASS.Render) ? FASTPASS.Render.exportRange() : "ERR";
     }
 };
 
