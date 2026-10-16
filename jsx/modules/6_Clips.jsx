@@ -764,15 +764,25 @@ FASTPASS.Clips = {
     /**
      * removeAt: Elimina el clip que inicia a startSec (cerca per temps, no per índex).
      * Immunitzat contra renumeració de clips.
+     * @param {number}  trackIdx
+     * @param {number}  startSec
+     * @param {string}  [type]   "video" | "audio" | "data"
+     * @param {boolean} [ripple] (2026-10-16) true per defecte (comportament històric:
+     *   `remove(true, true)` → TANCA el forat i DESPLAÇA la resta de la pista). Amb
+     *   `ripple === false` s'esborra el clip i DEIXA el forat (remove(false, false)):
+     *   és el que necessita el botó 🔀 de la fila CHY (flow_chyrons.js::
+     *   switchTitolConductorCase) per retirar el clúster de l'inici de bloc sense
+     *   moure la resta de clips de la pista.
      */
-    removeAt: function(trackIdx, startSec, type) {
+    removeAt: function(trackIdx, startSec, type, ripple) {
         try {
             var track = this._get(trackIdx, type || "video");
             if (!track) return "ERR_TRACK_NOT_FOUND";
             var target = parseFloat(startSec);
+            var doRipple = (ripple === false) ? false : true;
             for (var i = 0; i < track.clips.numItems; i++) {
                 if (Math.abs(track.clips[i].start.seconds - target) < 0.05) {
-                    track.clips[i].remove(true, true);
+                    track.clips[i].remove(doRipple, doRipple ? true : false);
                     return "OK";
                 }
             }

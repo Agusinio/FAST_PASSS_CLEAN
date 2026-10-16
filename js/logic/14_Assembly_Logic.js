@@ -154,13 +154,19 @@
             let hasFirma = false;
 
             for (const c of chyrons) {
-                if (c.name.includes("Tema-Titol") || c.name.includes("TITOL")) {
-                    temaTitols.push(c);
-                } else if (
-                    (c.rol || '').toUpperCase().includes("TRADUCCIO") ||
-                    c.name.toUpperCase().includes("TRADUCCIO")
-                ) {
+                // (2026-10-16) TRADUCCIÓ PRIMER i ACCENT-SAFE: `.includes("TRADUCCIO")`
+                // no veu «TRADUCCIÓ» amb accent i, en l'ordre antic, un text traduït amb
+                // "Tema-Titol"/"TITOL" classificava la traducció com a tema-títol.
+                // Cas real TNC V3 (2026-10-15): «…_644349_TRADUCCIO [2-3] Només n'existei…»
+                // acabava a la família dels noms i es col·locava a V7 damunt del nom-càrrec.
+                // Mateix criteri que `flow_chyrons._isTraduccioWott` (rol o TOKEN del nom).
+                const rolU = (c.rol || '').toUpperCase();
+                const esTraduccio = /TRADUCCI[OÓ]/.test(rolU) ||
+                    String(c.name || '').toUpperCase().split('_').some(t => /^TRADUCCI[OÓ]/.test(t.trim()));
+                if (esTraduccio) {
                     traduccions.push(c);
+                } else if (c.name.includes("Tema-Titol") || c.name.includes("TITOL")) {
+                    temaTitols.push(c);
                 } else {
                     otros.push(c);
                 }

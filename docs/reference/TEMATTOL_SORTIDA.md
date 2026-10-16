@@ -48,6 +48,33 @@ Accessible en calent: `FASTPASS_UI.Config.get().temaTitolExit` (o `Config.get().
 La durada de la peça és `snapDur(durSec)` (alineada a la rejilla de frames) i la seva posició
 `ceil((target − durSec)/frame)·frame → target` (acaba EXACTAMENT on entra el gran).
 
+## Ordre SORTIDA ↔ CONGELAT (2026-10-16 · BUG #166)
+
+A la cobertura d'un buit (`_fillTitulilloGaps`) les tres peces es col·loquen **encadenades** i la
+**SORTIDA va ABANS del congelat**:
+
+```
+entrant   gapStart            → entrantOut
+SORTIDA   reverseStart        → zoneEnd          ← es col·loca PRIMER
+congelat  freezeStart         → _coberturaFreezeEnd(zoneEnd, reverseStart, exitPlaced)
+```
+
+**Ancoratge**: la SORTIDA acaba a **`zoneEnd`** = `max(endZone, ttTime)` = el MÉS GRAN entre el
+**marcador de l'ítem** (`endZone`) i l'**IN del gran** (`ttTime`). `reverseStart` es deriva d'aquí
+(`ceil((zoneEnd − exitDur)/FRAME)·FRAME`). Si s'ancorés a `endZone` i el marcador caigués ABANS del
+gran, la sortida quedaria 6 frames curta i, amb el congelat ja encadenat a `reverseStart`, quedaria
+un **forat** davant del gran de fins a `CONDUCTOR_TAIL` (0,60 s).
+
+**Per què**: totes dues peces entren amb `Clips.moveToRange` (NO destructiu, **sense**
+`overwriteClip`), de manera que **cap de les dues retalla l'altra**. Si el congelat s'estira fins a
+`endZone` i la sortida ocupa `[endZone − dur, endZone]`, queden **ENCAVALCADES** a la pista.
+Mesurat a TN MEDIODIA V1 (15/10, V6): congelat `1.36→32.32 s` + sortida `32.08→32.32 s` = **6 frames
+de solapament** → la desaparició no es veia a pantalla.
+
+**Regla**: `_coberturaFreezeEnd(zoneEnd, reverseStart, exitPlaced)` = `min(zoneEnd, reverseStart)`
+quan la sortida s'ha col·locat **de veritat** (peça del gran o revers ffmpeg) i `zoneEnd` quan no
+(perquè el forat no quedi descobert). Resultat bo: `1.36→32.08` + `32.08→32.32` encadenats.
+
 ## Log esperat
 
 ```

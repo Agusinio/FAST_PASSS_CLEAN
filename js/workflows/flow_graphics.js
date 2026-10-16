@@ -100,6 +100,51 @@
         },
 
         /**
+         * _recordGraphics: (2026-10-15 · F5) Escriu GRAFISMES col·locats a la FONT ÚNICA
+         * (`.fastpass.json` v2.0 → `graphics.list`) via `Core.AnalysisCenter.writeGraphics`.
+         *
+         * ⚠️ La clau de deduplicació del manifest és `num|name|track` (vegeu
+         * `AnalysisCenter._key`): col·lapsaria dues col·locacions del MATEIX fitxer a la
+         * MATEIXA pista en instants diferents (i `_insideWindow` reparteix els grafismes
+         * als ítems pel `startSec`, així que es perdria una col·locació). Per això aquí
+         * SEMPRE s'hi adjunta una `key` explícita amb el temps (`tipus|track|start`), que
+         * `_key` respecta; el context és el de SESSIÓ (`MainButton._setupContext()`), igual
+         * que a `runInOutCocinado`.
+         *
+         * Xarxa de seguretat: quan s'arriba aquí el gràfic JA és a la timeline → un error
+         * d'escriptura del manifest es loga i NO fa fracassar l'operació.
+         * @param {Array} records - registres { tipus, name, track, startSec, endSec?, key? }
+         * @param {string} label - etiqueta de l'acció (p.ex. 'PlaceBackground')
+         */
+        _recordGraphics: async function(records, label) {
+            if (!records || records.length === 0) return;
+            try {
+                const AC = FASTPASS_UI.Core && FASTPASS_UI.Core.AnalysisCenter;
+                if (!AC || !AC.writeGraphics) {
+                    log(`   ⚠️ [${label}] AnalysisCenter.writeGraphics no disponible → ${records.length} gràfic(s) NO registrats al manifest`, "WARN");
+                    return;
+                }
+                const ctx = await FASTPASS_UI.Workflows.MainButton._setupContext();
+                if (!ctx || !ctx.progData) {
+                    log(`   ⚠️ [${label}] sense progData → ${records.length} gràfic(s) NO registrats al manifest`, "WARN");
+                    return;
+                }
+                const recs = records.map(function(r) {
+                    if (r.key === undefined || r.key === null) {
+                        r.key = String(r.tipus || 'GRAF') + '|' + ((r.track === undefined || r.track === null) ? '' : r.track) +
+                            '|' + Number(r.startSec || 0).toFixed(2);
+                    }
+                    return r;
+                });
+                const res = await AC.writeGraphics(ctx, recs, { reason: 'graphics:' + label });
+                const n = (res && res.graphics && res.graphics.count !== undefined) ? res.graphics.count : '?';
+                log(`📊 [${label}] manifest: +${recs.length} gràfic(s) → graphics.list (total ${n})`);
+            } catch (eM) {
+                log(`   ⚠️ [${label}] manifest (graphics.list): ${eM.message}`, "WARN");
+            }
+        },
+
+        /**
          * runPlaceGraph169: Aplica format 16:9 amb fons.
          */
         runPlaceGraph169: async function () {
@@ -115,6 +160,10 @@
                 await callJSX(`Clips.setProp(${T_MP4}, ${info.index}, 'ADBE Motion', 'ADBE Video Scale', 140, 'video')`);
                 const bgName = "Fons_16_9_GENERIC.png";
                 await callJSX(`Clips.insert('${getUtils().escape(bgName)}', ${T_FONS}, ${info.start}, ${info.end}, 'video')`);
+                // (2026-10-15 · F5) Font única: el fons col·locat → manifest (graphics.list).
+                await this._recordGraphics([
+                    { tipus: 'FONS', name: bgName, track: T_FONS, startSec: info.start, endSec: info.end }
+                ], 'Graph169');
             } catch (e) { getUtils().handleError(e, "Graph169"); }
         },
 
@@ -130,6 +179,11 @@
                 const cti = parseFloat(await callJSX('Timeline.get()') || "0");
                 const bgName = "Fons_Vertical_Generic.png";
                 await callJSX(`Clips.insert('${getUtils().escape(bgName)}', ${T_FONS}, ${cti}, null, 'video')`);
+                // (2026-10-15 · F5) Font única: el fons col·locat → manifest (graphics.list).
+                // Sense `endSec`: l'insert no porta final (el clip dura el que dura el PNG).
+                await this._recordGraphics([
+                    { tipus: 'FONS', name: bgName, track: T_FONS, startSec: cti }
+                ], 'PlaceBackground');
                 getUtils().status("Fons colocat", "exito");
             } catch (e) { getUtils().handleError(e, "PlaceBackground"); }
         },
@@ -147,9 +201,7 @@
                 const clipCuts = clips.map(function(c) { return c.start; });
 
                 const ctx = await FASTPASS_UI.Workflows.MainButton._setupContext();
-                const analysis = await FASTPASS_UI.Logic.Analysis._load(
-                    FASTPASS_UI.Logic.Analysis._getPath(ctx)
-                );
+                const analysis = await FASTPASS_UI.Logic.Analysis._load(ctx);
                 const waCrudo = analysis.crudo || {};
 
                 // 🛡️ (2026-10-14) Un NaN al JSON de la fase 'crudo' faria que el snap i el

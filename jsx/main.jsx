@@ -486,8 +486,10 @@ $.global.Clips = {
     endAt: function(ti, startSec, newEndSec, type) {
         return ($.global.FASTPASS.Clips) ? FASTPASS.Clips.endAt(ti, startSec, newEndSec, type || "video") : "ERR";
     },
-    removeAt: function(ti, startSec, type) {
-        return ($.global.FASTPASS.Clips) ? FASTPASS.Clips.removeAt(ti, startSec, type || "video") : "ERR";
+    removeAt: function(ti, startSec, type, ripple) {
+        // (2026-10-16) `ripple` (opcional) es passa tal qual: `false` = esborrar DEIXANT
+        // el forat (el botó 🔀 de la fila CHY ho necessita per no moure la pista).
+        return ($.global.FASTPASS.Clips) ? FASTPASS.Clips.removeAt(ti, startSec, type || "video", ripple) : "ERR";
     },
     inPoint: function(ti, ci, v, type) {
         return ($.global.FASTPASS.Clips) ? FASTPASS.Clips.inPoint(ti, ci, v, type || "video") : "ERR";

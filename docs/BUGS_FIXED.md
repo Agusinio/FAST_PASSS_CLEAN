@@ -1,9 +1,9 @@
 # Registre de bugs i funcionalitats
 
-Projecte **FAST >>> PASS** - versio **2.9.5 (LIPO-PRO)** - cataleg actualitzat: 2026-10-15
+Projecte **FAST >>> PASS** - versio **2.9.5 (LIPO-PRO)** - cataleg actualitzat: 2026-10-16
 
 Aquest fitxer es genera automaticament des del cataleg viu del projecte (`features.json`).
-Total: 109 entrades - **103 resoltes/tancades** - 6 en curs o pendents.
+Total: 112 entrades - **106 resoltes/tancades** - 6 en curs o pendents.
 
 ---
 
@@ -876,7 +876,79 @@ Ordre cronologic pel numero d incident. 103 entrades.
 
 **NOTA**: El #154 (que el nom base PNG ↔ MP4 quedi GARANTIT) segueix pendent: sense homònim a EXPORTS PROVISIONALS el nom es resol amb `buildRenderName(seqActiva)` + hora (amb WARN), no s'inventa res més.
 
-### AUDIO_GRAFISMOS - resolt (2026-09-22)
+### #164 - resolt (2026-10-16)
+
+**SIMPTOMA**: TNC V3 (bloc 14 «FAUNA ALIADA PER L'AGRICULTURA», 15/10): una **TRADUCCIÓ** acabava a **V7**, duplicada damunt del nom-càrrec legítim («…_644349_TRADUCCIO [2-3] Només n'existei…» → V7 59.72→64.60, la mateixa que V8) i el nom-càrrec es perdia.
+
+**CAUSA ARREL**: El filtre de la fase NOM (`placeChyronNom`) era `c.name.indexOf('Nom')` sobre el nom SENCER del fitxer, que **inclou el TEXT del rètol**: el text «Només n'existei…» feia casar la traducció amb la família NOM.
+
+**SOLUCIO**: nou predicat accent-safe `_isTraduccioWott` (accepta «TRADUCCIO»/«TRADUCCIÓ», al rol o com a token) + guarda a les fases LLOC/NOM/RESTO + invariant a `_placeChyronsByType` (una traducció només pot quedar-se a la fase TRADUCCIÓ). Eina nova `bin/analyze_prproj_tracks.py` per llegir les pistes del `.prproj`.
+
+**FITXERS**: `js/workflows/flow_chyrons.js`, `bin/analyze_prproj_tracks.py`
+
+**VALIDACIO**: smoke `bin/smoke/fp_smoke_build.ps1`: PASS (secció `14-chyrons-families`: filtre NOM, filtre LLOC i fase TRADUCCIÓ).
+
+**NOTA**: Registrat des del CHANGELOG del 16/10 (sessió de TNC V3); el detall del cas viu als comentaris de la secció §14 de l'smoke.
+
+### #165 - resolt (2026-10-16)
+
+**SIMPTOMA**: TN MEDIODIA V1 (bloc «PG Intro / PENSIONS ENTREN EN PRECAMPANYA», emissió 15/10; mesurat al V6 auto-desat de les 09:52): el **Tema-Títol GRAN** entrava **32 s tard** (32.32 s, sobre l'altre ítem) i el **CONDUCTOR** no es col·locava enlloc.
+
+**CAUSA ARREL**: El 1r marcador del bloc és l'ítem de PLATÓ que obre el bloc —«01 PGi - PG Intro» (color -1 al .prproj; `colorIdx:6` només en el moment de col·locar)— i porta un **ESPAI** entre el número i el sufix d'ítem. La regex que decidia si un comentari de marcador és ESTRUCTURAL (`/^\d+[a-z]{0,5}\s*-\s*.+$/`, i `{0,3}` en dues fases més) **no acceptava aquell espai**: «01 PGi - PG Intro» queia FORA de `structuralMarkers` mentre que «01 - PENSIONS …» (base «1») hi entrava. Conseqüències: (a) el gran de l'ítem «01 PGi» baixava al respatller per BASE i s'ancorava al marcador de l'ALTRE ítem («01» @32.32 s) → 32 s tard; (b) `_isPresenterTitle` mirava el títol del marcador («PG Intro») i cap token de plató casava (el prefix de plató «PG » no es despullava) → cap marcador de plató ⇒ **Conductor omès**.
+
+**SOLUCIO**: (1) `js/workflows/flow_chyrons.js` — nou filtre ÚNIC de mòdul `isStructuralMarkerComment(comment)` = `/^\d+\s*[a-z]{0,5}\s*-\s*.+$/i`, que substitueix les **6** còpies inline («01 PGi» ara és estructural a totes les fases: marcador, F2, F3.5, F4·Faro, Titol…) + `Chyrons._isStructuralMarkerComment` per a l'smoke. (2) `_isPresenterTitle` accepta el títol **sense el prefix de plató** (PG/PLA/PLATO/ESTUDI) → «PG Intro» → «INTRO» casa amb el token de presentadora ⇒ el Conductor torna. (3) `js/workflows/flow_markers.js` — el tram IPD (`runAplicarIpdDesdeMarkers`) feia servir la seva pròpia regex `/^\d+[a-z]?\s*-\s*.+$/i` + `color === 6`; com que el marcador acaba amb **color -1**, l'ítem de plató quedava fora ⇒ ara delega al filtre únic (`isStructuralMarkerComment`, consultat a `Chyrons` en temps de crida amb xarxa idèntica) i exposa `Markers._isStructuralMarkerComment`. (4) `index.html`: `flow_markers.js?v=66→67` i `flow_chyrons.js?v=73→74`.
+
+**FITXERS**: `js/workflows/flow_chyrons.js`, `js/workflows/flow_markers.js`, `index.html`
+
+**VALIDACIO**: `bin/check_js_v8.ps1`: TOTAL 58 | OK 58 | FAIL 0 · smoke `bin/smoke/fp_smoke_build.ps1`: **PASS 118 FAIL 0** (secció nova `15-tnm-marcador-pgi`: filtre amb espai al sufix, no-estructurals, «PG Intro»/`_isPresenterLine` i delegació de `flow_markers`) · **pendent el test a Premiere** amb el projecte del bloc.
+
+**NOTA**: El cas va arribar amb els TRES símptomes alhora (gran tard + Conductor omès + sortida tapada, BUG #166) perquè l'ítem de plató que obre el bloc no era reconegut com a estructural.
+
+### #166 - resolt (2026-10-16)
+
+**SIMPTOMA**: TN MEDIODIA V1 (15/10, V6): la **peça de SORTIDA** del titulillo (desaparició del Tema-Títol gran) no es veia a pantalla — quedava «mig amagada» per la cua del congelat.
+
+**CAUSA ARREL**: A la cobertura del buit (`_fillTitulilloGaps`) el **CONGELAT** s'estirava fins a `zoneEnd` (IN del gran) i la **SORTIDA** es col·locava DESPRÉS, a `[reverseStart, endZone]` (6 frames ABANS d'on acabava el congelat). Com que totes dues peces entren amb `Clips.moveToRange` (NO destructiu, **sense** `overwriteClip`), el congelat no retallava res i les dues quedaven **ENCAVALCADES** a la pista. Mesura: congelat `1.36→32.32` + sortida `32.08→32.32` = **6 frames de solapament**.
+
+**SOLUCIO**: `js/workflows/flow_chyrons.js` — (1) nou `Chyrons._coberturaFreezeEnd(zoneEnd, reverseStart, exitPlaced)` = `min(zoneEnd, reverseStart)` quan la sortida s'ha col·locat **de veritat** (peça del gran o revers ffmpeg) i `zoneEnd` si no (perquè el forat no quedi descobert); (2) a `_fillTitulilloGaps` es **REORDENA**: primer la SORTIDA i després el CONGELAT, que ara acaba a l'IN de la sortida → `1.36→32.08` + `32.08→32.32` **encadenats** (mateixa mecànica que el CasB de `_placeTemaTitolTransicions`); (3) la SORTIDA s'**ancora a `zoneEnd`** (= `max(marcador, IN del gran)`, el veritable final de la zona) i ja no a `endZone` (= marcador si n'hi ha): si el marcador va ABANS del gran, l'ancoratge vell deixava la sortida 6 frames abans del gran i, amb el congelat ja encadenat, hauria obert un **forat** davant del gran (fins a `CONDUCTOR_TAIL`); (4) `index.html`: `flow_chyrons.js?v=74` → `?v=75`.
+
+**FITXERS**: `js/workflows/flow_chyrons.js`
+
+**VALIDACIO**: `bin/check_js_v8.ps1`: TOTAL 58 | OK 58 | FAIL 0 · smoke: **PASS 118 FAIL 0** (secció `15-tnm-marcador-pgi`: `_coberturaFreezeEnd` amb sortida col·locada / sense / amb `reverseStart` no finit + `cadena congelat→sortida→gran` amb l'ancoratge real a `zoneEnd`) · **pendent el test a Premiere**.
+
+**NOTA**: No s'ha tocat cap crida a `Clips.*`: el problema era l'**ORDRE** de col·locació i el **FINAL** de les dues peces, no l'API.
+
+### #167 - resolt (2026-10-16)
+
+**SIMPTOMA**: TN MEDIODIA V2 (bloc «VIMBODÍ I POBLET», emissió 15/10): el rètol de **LOCALITZACIÓ DEL DIRECTE** («…_644353_Directe_PRESENCIAL_Vimbodí i P.») sortia a **0.40 s**, o sigui **34 s ABANS** que el lloc fos a pantalla — el directe del bloc arrenca a l'IPD («05 - +++IPD POBLET VISITA» @34.36 s).
+
+**CAUSA ARREL**: el generador de ròtols emet aquest wott amb el lineID de l'**ÍTEM D'INTRO del DIFERIT** («04i - intro DIFERIT (VIMBODÍ I POBLET)» @0 s), no amb el de l'IPD. Com que `_baseTimeForChyron` ancora cada rètol al marcador del **SEU** ítem (+0.40 s de tc), el rètol del lloc queia a l'inici del bloc. L'ancoratge a la connexió (`_connexioMarkerTime`) només resolia el cas dels ENVIAT: el marcador de l'IPD no conté «CONNEXIÓ» ni acaba en «dir» i el wott de localització no hi arribava mai.
+
+**SOLUCIO**: `js/workflows/flow_chyrons.js` — (1) predicats nous `_isDirecteSenyalWott` (família DIRECTE/PRESENCIAL pel **CAMP** `rol` = `parts[7]` de `13_Parse.meta`, o pel **TOKEN exacte** del nom — MAI pel text lliure), `_isIpdDirecteMarker` (IPD/«+++»/id·`DIR`/«DIRECTE» al títol/sufix `dir` del bloc) i `_firstIpdDirecteAfter` (primer IPD/directe **ESTRICTAMENT** posterior); (2) `Chyrons._ipdAnchorPlan(markersFull, structureById, filterFn, label)` → `{de, per, moved}`: per a cada rètol d'aquesta família, a **QUIN** marcador IPD/directe va; (3) `markersFull` ara porta `label` (el comentari **SENCER** del marcador), que és el que permet detectar l'IPD (abans només s'hi desava el número d'ítem i el títol «+++IPD …» es perdia); (4) a `_placeChyronsByType` el rètol es treu del seu ítem i s'afegeix a l'ítem IPD/directe, amb el **MATEIX patró** que el bloc de CONNEXIÓ (i el seu log «📍 … LOCALITZACIÓ: … penja de l'ítem X → va a l'ítem IPD/directe Y»); (5) `index.html`: `flow_chyrons.js?v=75→76`.
+
+**FITXERS**: `js/workflows/flow_chyrons.js`, `index.html`, `bin/smoke/fp_probe_ipd_chyron.js`
+
+**VALIDACIO**: `bin/check_js_v8.ps1`: TOTAL 58 | OK 58 | FAIL 0 · smoke `bin/smoke/fp_smoke_build.ps1`: **PASS 138 FAIL 0** (secció nova `15-ipd-chyron`, amb les dades REALS del run TNM V2: família, detecció d'IPD/directe, primer IPD posterior, el pla amb **1 sol moviment** cap a 34.36 s — 34.76 s de col·locació—, l'ENVIAT i el nom-càrrec intactes, i les guardes d'ítem propi / filtre de fase / bloc sense IPD) · **pendent el test a Premiere**.
+
+**NOTA**: Guardes de l'ancoratge: (a) només la família DIRECTE/PRESENCIAL i passant el filtre de la fase que crida (els ENVIAT tenen la seva regla; els nom-càrrec, Tema-Títol, Lloc/Data i traduccions no es toquen mai aquí); (b) si el rètol **JA** penja d'un ítem IPD/directe es queda on és (convenció d'usuari del 2026-09-21); (c) només es mou cap **ENDAVANT**.
+
+### #168 - resolt (2026-10-16)
+
+**SIMPTOMA**: TN MEDIODIA V2 (bloc «VIMBODÍ I POBLET», emissió 15/10): a l'entrega hi havia **dues** còpies del rètol de localització (`…_644353_Directe_PRESENCIAL_Vimbodí i P.`) —una a **0.40 s** (ítem d'intro `04i`, romanent del run de les 08:52) i una a **34.76 s** (IPD `05`, del #167)— i el rètol d'ENVIAT (`…_644409_Enviat_No_Laura Catalan Asenjo`) es quedava clavat a **0.40 s**. Petició d'usuari: «si apareix un rètol de PRESENCIAL i/o ENVIAT en una intro, s'ha de moure al SEGÜENT ítem DIRECTE o DIFERIT». (El manifest del run de les 09:35 ho confirma: el PRESENCIAL es va col·locar a 34.76 s però l'ENVIAT s'hi va quedar a 0.40 s.)
+
+**CAUSA ARREL**: (1) l'ENVIAT només sabia anar al **punt de connexió** (`_connexioMarkerTime`); en aquest bloc no hi ha cap marcador de connexió → es quedava al marcador del SEU ítem, la intro (0.40 s); (2) el destí del pla #167 era NOMÉS IPD/directe → als blocs on la peça que arrenca és un **DIFERIT** no hi havia destinació possible, encara que el rètol parli justament d'aquell ítem («04 - DIFERIT LAURA CATALAN» ↔ «Enviat_No_Laura Catalan Asenjo»).
+
+**SOLUCIO**: `js/workflows/flow_chyrons.js` — (1) predicats nous `_isIntroMarker` (sufix `i`/`intro` de `13_Parse`, `type === 'intro'`, id acabat en «I» —`04i`, `01 PGi`— o títol INTRO/PG Intro) i `_isDiferitMarker` (sufix `dif` o títol «DIFERIT/DIFERIDO»); (2) `_sigTokens` (mots de 5+ lletres del nom del wott, fora les capçaleres del format: WOTT/INTRO/DIFERIT/DIRECTE/PRESENCIAL/ENVIAT…) i `_pickDirecteDiferitAfter(markersFull, structureById, fromTime, name)` → `{time, marker, kind}`: candidats = marcadors ESTRICTAMENT posteriors que obren un ítem **DIRECTE** o **DIFERIT** (la intro no compta mai); **AFINITAT** de títol primer (mana el candidat que comparteix un mot significatiu amb el rètol) i, sense afinitat, mana el DIRECTE amb el DIFERIT com a **pla B** (convenció #167); `_firstDirecteDiferitAfter` és l'embolcall de temps; (3) `_ipdAnchorPlan` — **condició nova**: l'ENVIAT entra al pla **només si penja d'una INTRO** (la família DIRECTE/PRESENCIAL segueix entrant sempre) i la guarda «el seu ítem ja és el destí» ara cobreix IPD/directe **i DIFERIT**, però **no** la intro (que és l'origen normal); (4) `_placeChyronsByType`: el pla es calcula **ABANS** del bloc de CONNEXIÓ → un ENVIAT d'intro **sense** punt de connexió mana per la regla nova (log `🔌 … mana l'ítem DIRECTE/DIFERIT @ Xs`) i un ENVIAT **amb** punt de connexió real es treu del pla i es queda a la connexió (com sempre); (5) `index.html`: `flow_chyrons.js?v=76→77`.
+
+**FITXERS**: `js/workflows/flow_chyrons.js`, `index.html`, `bin/smoke/fp_probe_ipd_chyron.js`
+
+**VALIDACIO**: `bin/check_js_v8.ps1`: TOTAL 58 | OK 58 | FAIL 0 · smoke `bin/smoke/fp_smoke_build.ps1`: **PASS 152 FAIL 0** (secció nova `16-intro-directe-diferit`, amb les dades REALS del TNM V2: 14 assercions —intro i DIFERIT, tokens del nom del wott, destí de l'ENVIAT de Laura a 18.36 s, destí del PRESENCIAL de Vimbodí a 34.36 s, `null` sense cap DIRECTE/DIFERIT posterior, les 2 guardes i el log) · **pendent el test a Premiere**.
+
+**NOTA**: Amb el cas real, el PRESENCIAL de Vimbodí va a l'IPD `05` @34.36 s (34.76 s de col·locació, com al #167) i l'ENVIAT de Laura va al DIFERIT `04` @18.36 s. Aquesta entrada **substitueix** el punt del #167 que deia que «l'ENVIAT es queda intacte» (i la seva asserció d'1 sol moviment, ara 2). ⚠️ Cap run no esborra clips de runs ANTERIORS: la còpia de 0.40 s del run de les 08:52 s'ha d'esborrar a mà (o recol·locar sobre pista neta), perquè el fix evita el mal lloc però no neteja el timeline.
+
+
+
+
 
 **SIMPTOMA**: Grafismos/rótulos colocaban su audio enlazado (A1, o A2+ según targeting)
 

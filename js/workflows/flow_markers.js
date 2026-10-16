@@ -24,6 +24,22 @@
     const log = (m, lvl) => getUtils().log(m, lvl || "DEBUG");
     const callJSX = (s) => getUtils().callJSX(s);
 
+    /**
+     * itemsOf: Ítems d'escaleta del manifest amb l'accés UNIFICAT v2.0.
+     * Delega a `SessionManifest.getItems()`: vista `structure` → master
+     * `escaletaItems` (el desa el «Muntar») → mirall d'anàlisi
+     * (`analysis.escaleta.itemsBloc`). Els objectes retornats són els MATEIXOS
+     * de l'escaleta mare, cosa que necessita `_deduceOnAirEntrada` (compara
+     * per identitat amb `indexOf`).
+     * @param {Object} manifest
+     * @returns {Array<Object>}
+     */
+    const itemsOf = (manifest) => {
+        const SM = window.FASTPASS_UI.SessionManifest;
+        if (SM && typeof SM.getItems === 'function') return SM.getItems(manifest) || [];
+        return (manifest && Array.isArray(manifest.escaletaItems)) ? manifest.escaletaItems : [];
+    };
+
     // Función para formatear segundos a timecode (HH:MM:SS:FF) asumiendo 25 fps
     const formatTC = (seconds) => {
         const fps = 25;
@@ -91,6 +107,31 @@
         } catch (eFs) { return false; }
     }
 
+    /**
+     * isStructuralMarkerComment(cm): el comentari d'un marcador és d'ÍTEM ESTRUCTURAL
+     * (format "num - títol")?
+     *
+     * (2026-10-16) El filtre CANÒNIC (`isStructuralMarkerComment`) viu a flow_chyrons.js i
+     * aquí es consulta en TEMPS DE CRIDA via `Chyrons._isStructuralMarkerComment`: aquest
+     * mòdul es carrega ABANS (index.html) però els usos són dins de funcions, no a
+     * l'arrencada. La xarxa (mateixa regex) cobreix el cas que flow_chyrons no hi sigui,
+     * i així NO queda cap camí amb el filtre vell: la versió antiga (`[a-z]{0,3}`, sense
+     * espai) NO veia «01 PGi - PG Intro» —TN MEDIODIA V1 15/10, l'ítem de PLATÓ que obre el
+     * bloc— i el tram IPD s'estirava fins al marcador estructural següent.
+     *
+     * @param {string} cm comentari (o títol) del marcador
+     * @returns {boolean}
+     */
+    function isStructuralMarkerComment(cm) {
+        try {
+            var CH = window.FASTPASS_UI && window.FASTPASS_UI.Workflows && window.FASTPASS_UI.Workflows.Chyrons;
+            if (CH && typeof CH._isStructuralMarkerComment === 'function') {
+                return CH._isStructuralMarkerComment(cm);
+            }
+        } catch (eSm) {}
+        return /^\d+\s*[a-z]{0,5}\s*-\s*.+$/i.test(String(cm || '').trim());
+    }
+
     FASTPASS_UI.Workflows.Markers = {
 
         // ═══════════════════════════════════════════════════════════════
@@ -136,6 +177,16 @@
             var m = clean.match(/^\d+(.*)$/);
             if (!m) return null;
             return m[1];
+        },
+
+        /**
+         * _isStructuralMarkerComment(cm): versió MÈTODE de l'ajudant de mòdul (per poder-la
+         * provar a l'smoke test i perquè el filtre sigui el MATEIX a totes les fases).
+         * @param {string} cm
+         * @returns {boolean}
+         */
+        _isStructuralMarkerComment: function (cm) {
+            return isStructuralMarkerComment(cm);
         },
 
         _graphicSuffixesNorm: function () {
@@ -321,12 +372,12 @@
          * acaba deixant el marcador amb el color PER DEFECTE de Premiere = VERD.
          * Per tant, tot placement que mogui un marcador existent ha de portar `colorIdx`.
          *
-         * @param {Object} manifest - Manifest de sessió (usa escaletaItems)
+         * @param {Object} manifest - Manifest de sessió (usa itemsOf → SessionManifest.getItems)
          * @returns {Object} { num: colorIdx }
          */
         _colorByNumFromManifest: function (manifest) {
             var out = {};
-            var all = (manifest && manifest.escaletaItems) ? manifest.escaletaItems : [];
+            var all = itemsOf(manifest);
             for (var i = 0; i < all.length; i++) {
                 var it = all[i];
                 if (!it || !it.num) continue;
@@ -589,7 +640,7 @@
                     refF1Origen = 'OnAir (1r EMÈS: ' + (refLine.num || '?') + ')';
                 } else {
                     refLine = structuralItems[0];
-                    var rfDeduced = reader._deduceOnAirEntrada(refLine, manifest.escaletaItems, null);
+                    var rfDeduced = reader._deduceOnAirEntrada(refLine, itemsOf(manifest), null);
                     if (rfDeduced !== null) {
                         refF1 = rfDeduced;
                         refF1Origen = 'OnAirDeducido (1r: ' + (refLine.num || '?') + ')';
@@ -618,7 +669,7 @@
                     anchorEfectiva = reader.tcToSeconds(fOnAir);
                     anchorEfOrigen = 'OnAir (1r: ' + (firstLine.num || '?') + ')';
                 } else {
-                    var fDeduced = reader._deduceOnAirEntrada(firstLine, manifest.escaletaItems, null);
+                    var fDeduced = reader._deduceOnAirEntrada(firstLine, itemsOf(manifest), null);
                     if (fDeduced !== null) {
                         anchorEfectiva = fDeduced;
                         anchorEfOrigen = 'OnAirDeducido (1r: ' + (firstLine.num || '?') + ')';
@@ -1261,7 +1312,7 @@
             }
 
             // (2026-09-17) El marcador d'inici (00:00) és el del PRIMER ÍTEM ESTRUCTURAL del
-            // bloc recorregut en ORDRE D'ESCALETA (`lines`, que ve de manifest.escaletaItems
+            // bloc recorregut en ORDRE D'ESCALETA (`lines`, que ve de SessionManifest.getItems()
             // filtrat pel bloc) — MAI en ordre de TC: ordenar per TC és el que fa entrar els
             // OnAir mentiders (el realitzador llança ítems abans del programa). Cas TNC: el
             // 1r estructural és "08i" (va abans del "10" a l'escaleta). L'usuari confirma
@@ -1358,7 +1409,7 @@
                     continue;
                 }
 
-                var deduced = reader._deduceOnAirEntrada(line, manifest.escaletaItems, null);
+                var deduced = reader._deduceOnAirEntrada(line, itemsOf(manifest), null);
                 if (deduced === null) continue;
 
                 var idealPosSec = anchorEfTimelineSec + (deduced - anchorEfectiva);
@@ -1440,7 +1491,7 @@
             log('   🟢 [F3·Coinc] Marcadors existents al timeline: ' + existingMarkers.length);
 
             var densityData = this._calcDensityFootprint(clips);
-            var snapResult = this._correlationSnap(existingMarkers, clips, densityData, manifest.escaletaItems, reader);
+            var snapResult = this._correlationSnap(existingMarkers, clips, densityData, itemsOf(manifest), reader);
             var snapDeltaReal = (snapResult && snapResult.delta !== null) ? snapResult.delta : 0;
             // (2026-09-24) FIX · DOBLE APLICACIÓ DEL Δ: la fase dedicada al Δ de correlació és
             // F3.5·CorrelationSnap (té la seva pròpia confiança/log i s'executa a continuació).
@@ -1554,7 +1605,7 @@
             log('   🔸 [F3.5] Marcadors al timeline: ' + allMarkers.length);
 
             // ── Pas 4: Només OnAir + Deducits (els Previstos els tracta F4) ──
-            var manifestItems = manifest.escaletaItems || [];
+            var manifestItems = itemsOf(manifest);
             var prefixToItem = {};
             for (var ii = 0; ii < manifestItems.length; ii++) {
                 var mItem = manifestItems[ii];
@@ -1594,7 +1645,7 @@
             }
 
             // ── Pas 5: Δ consensuat ──
-            var snapResult = this._correlationSnap(candidateMarkers, clips, densityData, manifest.escaletaItems, reader);
+            var snapResult = this._correlationSnap(candidateMarkers, clips, densityData, itemsOf(manifest), reader);
             if (!snapResult || snapResult.delta === null) {
                 log('🟠 [F3.5·CorrelationSnap] Sense Δ fiable (confiança=' + (((snapResult && snapResult.confidence) || 0) * 100).toFixed(0) + '%). ✓ FINALITZAT.');
                 return;
@@ -1765,7 +1816,7 @@
          */
         _seqOrderForItems: function (manifest, lines, numSet) {
             var tmp = [];
-            var all = (manifest && manifest.escaletaItems) ? manifest.escaletaItems : [];
+            var all = itemsOf(manifest);
             for (var i = 0; i < all.length; i++) {
                 var it = all[i];
                 if (!it || !it.num) continue;
@@ -1816,7 +1867,7 @@
             if (!mks || mks.length < 2) return { revisats: (mks ? mks.length : 0), moguts: 0, gap: GAP };
 
             var seqByNum = {}, onAirByNum = {};
-            var all = (manifest && manifest.escaletaItems) ? manifest.escaletaItems : [];
+            var all = itemsOf(manifest);
             for (var i = 0; i < all.length; i++) {
                 var it = all[i];
                 if (!it || !it.num) continue;
@@ -1933,7 +1984,7 @@
             if (!mks || mks.length === 0) return { assignats: 0, ancles: 0, gap: GAP };
 
             var seqByNum = {}, onAirByNum = {};
-            var all = (manifest && manifest.escaletaItems) ? manifest.escaletaItems : [];
+            var all = itemsOf(manifest);
             for (var i = 0; i < all.length; i++) {
                 var it = all[i];
                 if (!it || !it.num) continue;
@@ -2885,8 +2936,8 @@
                 if (lines[l6] && lines[l6].num) lineByNumF6[String(lines[l6].num)] = lines[l6];
             }
 
-            // Ordre d'escaleta: num → sequencia (font: manifest.escaletaItems)
-            var allEs = (manifest && manifest.escaletaItems) ? manifest.escaletaItems : [];
+            // Ordre d'escaleta: num → sequencia (font: SessionManifest.getItems)
+            var allEs = itemsOf(manifest);
             var seqByNum = {};
             for (var i = 0; i < allEs.length; i++) {
                 var it = allEs[i];
@@ -3427,10 +3478,10 @@
         // ═══════════════════════════════════════════════════════════════
 
         /**
-         * dumpMarkersSnapshot: Desa un SNAPSHOT dels marcadors que hi ha ARA a la
-         * seqüència (posició, comentari, color) a la carpeta del projecte:
-         *   MARCADORS_<yyyy-mm-dd_hhmm>.txt   (llegible, per revisar a mà)
-         *   MARCADORS_<yyyy-mm-dd_hhmm>.json  (cru, per comparar/diff)
+         * dumpMarkersSnapshot: Desa els marcadors que hi ha ARA a la seqüència i,
+         * a més, en deixa constància al manifest de sessió (FONT ÚNICA):
+         *   .fastpass.json → `markers.list` (via AnalysisCenter.writeMarkers) + `structure`
+         *   MARCADORS_<yyyy-mm-dd_hhmm>.txt  (mirall llegible, derivat del manifest)
          * Serveix per tenir constància de COM s'han col·locat abans de moure'ls a mà.
          * @returns {Promise<number>} nombre de marcadors desats, -1 si ha fallat
          */
@@ -3439,6 +3490,18 @@
                 var raw = await callJSX('Markers.get()');
                 var list = [];
                 if (raw && raw !== '[]') { try { list = JSON.parse(raw); } catch (e) { } }
+
+                // (2026-10-15) CENTRALITZACIÓ: el snapshot viu al manifest; els fitxers
+                // derivats (.txt/.json) ja no són font de res.
+                var AC = window.FASTPASS_UI.Core && window.FASTPASS_UI.Core.AnalysisCenter;
+                var ctx = await FASTPASS_UI.Workflows.MainButton._setupContext();
+                if (AC && AC.writeMarkers) {
+                    await AC.writeMarkers(ctx, list, { source: 'Markers.get (snapshot)', reason: 'markers' });
+                } else {
+                    log('⚠️ [SNAP] AnalysisCenter no disponible: el snapshot NO va al manifest', 'WARN');
+                }
+                var manifest = await FASTPASS_UI.SessionManifest.load(ctx);
+                var txt = (AC && AC.mirrorMarkersTxt) ? AC.mirrorMarkersTxt(manifest) : '';
 
                 var folder = await callJSX('Context.folder()');
                 if (!folder || String(folder).indexOf('ERR') === 0) {
@@ -3452,39 +3515,13 @@
                     '_' + p2(d.getHours()) + p2(d.getMinutes());
                 var base = String(folder).replace(/\\/g, '/') + '/MARCADORS_' + stamp;
 
-                var tc = function (sec) {
-                    var s = Math.max(0, sec || 0);
-                    var h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
-                    var ss = Math.floor(s % 60), ms = Math.round((s - Math.floor(s)) * 1000);
-                    var pad = function (n, w) { var t = String(n); while (t.length < w) t = '0' + t; return t; };
-                    return pad(h, 2) + ':' + pad(m, 2) + ':' + pad(ss, 2) + '.' + pad(ms, 3);
-                };
-
-                var txt = 'SNAPSHOT MARCADORS · ' + d.toISOString() + '\n' +
-                    'Marcadors a la seqüència: ' + list.length + '\n' +
-                    '------------------------------------------------------------\n' +
-                    '#    segons      TC                color  comentari\n';
-                for (var i = 0; i < list.length; i++) {
-                    var m = list[i];
-                    var t = (typeof m.time === 'number') ? m.time : parseFloat(m.time);
-                    if (isNaN(t)) t = 0;
-                    var col = (m.color !== undefined && m.color !== null) ? m.color : '-';
-                    var cmt = (m.comments || m.comment || '').replace(/\r?\n/g, ' ');
-                    txt += (i + 1) + '.\t' + t.toFixed(3) + '\t' + tc(t) + '\t' + col + '\t' + cmt + '\n';
-                }
-
                 var r1 = await callJSX("IO.writeTxt('" + base.replace(/'/g, "") + ".txt', '" + txt.replace(/\\/g, "\\\\").replace(/'/g, "\\'").replace(/\r?\n/g, "\\n") + "')");
-                var json = JSON.stringify({ capturedAt: d.toISOString(), count: list.length, markers: list }, null, 2);
-                // Els salts de línia i les cometes simples han d'anar escapats: la crida
-                // JSX és una línia de codi ExtendScript amb el contingut entre cometes.
-                var jsonEsc = json.replace(/\\/g, "\\\\").replace(/'/g, "\\'").replace(/\r?\n/g, "\\n");
-                var r2 = await callJSX("IO.writeTxt('" + base.replace(/'/g, "") + ".json', '" + jsonEsc + "')");
 
-                if (r1 === 'OK' || r2 === 'OK') {
-                    log('💾 [SNAP] Snapshot desat: ' + list.length + ' marcadors → ' + base + '.txt/.json');
+                if (r1 === 'OK') {
+                    log('💾 [SNAP] Snapshot desat: ' + list.length + ' marcadors → manifest + ' + base + '.txt');
                     return list.length;
                 }
-                log('⚠️ [SNAP] No s\'ha pogut escriure el snapshot (' + r1 + ' / ' + r2 + ')');
+                log('⚠️ [SNAP] No s\'ha pogut escriure el mirall (' + r1 + ')');
                 return -1;
             } catch (e) {
                 log('⚠️ [SNAP] Error desant el snapshot: ' + e.message);
@@ -3501,9 +3538,8 @@
                 await FASTPASS_UI.Workflows.Markers.placeScheduledMarkers();
 
                 const ctx = await FASTPASS_UI.Workflows.MainButton._setupContext();
-                const analysis = await FASTPASS_UI.Logic.Analysis._load(
-                    FASTPASS_UI.Logic.Analysis._getPath(ctx)
-                );
+                // (2026-10-15) Les fases d'anàlisi es llegeixen del MANIFEST (FONT ÚNICA)
+                const analysis = await FASTPASS_UI.Logic.Analysis._load(ctx);
                 const marksCrudo = analysis.crudo || { markers: [] };
 
                 const markersRaw = await callJSX("Markers.get()");
@@ -3546,9 +3582,7 @@
             log("📍 [CAPTURA INOUT] Llegint VALID_IN/VALID_OUT del timeline...");
             try {
                 const ctx = await FASTPASS_UI.Workflows.MainButton._setupContext();
-                const analysis = await FASTPASS_UI.Logic.Analysis._load(
-                    FASTPASS_UI.Logic.Analysis._getPath(ctx)
-                );
+                const analysis = await FASTPASS_UI.Logic.Analysis._load(ctx);
                 const inoutCocinado = analysis.cocinado || {};
                 const markersRaw = await callJSX("Markers.get()");
                 var markers = [];
@@ -3583,9 +3617,7 @@
             log("📍 [CAPTURA MARKS] Llegint marcadors del timeline...");
             try {
                 const ctx = await FASTPASS_UI.Workflows.MainButton._setupContext();
-                const analysis = await FASTPASS_UI.Logic.Analysis._load(
-                    FASTPASS_UI.Logic.Analysis._getPath(ctx)
-                );
+                const analysis = await FASTPASS_UI.Logic.Analysis._load(ctx);
                 const marksCrudo = analysis.crudo || { markers: [] };
                 const marksCocinado = analysis.cocinado || { markers: [] };
 
@@ -3685,7 +3717,12 @@
                     const nextStruct = markers.find(function (x) {
                         if ((x.time || 0) <= t + 0.05) return false;
                         const cm = String(x.comments || x.title || '').trim();
-                        return x.color === 6 || /^\d+[a-z]?\s*-\s*.+$/i.test(cm);
+                        // (2026-10-16) Filtre ÚNIC d'ítem estructural (`isStructuralMarkerComment`,
+                        // vegeu capçalera): la regex local era `/^\d+[a-z]?\s*-\s*.+$/i` i NO veia
+                        // «01 PGi - PG Intro» (TN MEDIODIA V1 15/10, ítem de PLATÓ que obre el
+                        // bloc i que a la seqüència acaba amb color -1: el `color === 6` tampoc
+                        // no el salvava) → el tram IPD s'estirava fins al següent estructural.
+                        return x.color === 6 || isStructuralMarkerComment(cm);
                     });
                     const lim = nextStruct ? (nextStruct.time || 0) : Infinity;
                     // TOTS els clips del TRAM: des del marcador IPD fins al següent marker

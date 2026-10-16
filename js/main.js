@@ -129,6 +129,34 @@ function setReframeActive(on) {
 }
 
 /**
+ * syncChyronCasButton: Refresca l'ASPECTE del botó 🔀 (fila CHY) amb l'ESTAT del cas de la
+ * intro que porta el mòdul de Chyrons ('A' = intro LLARGA · 'B' = intro CURTA · 'AUTO').
+ * (2026-10-16 · BUG #170) L'estat és persistent i canvia COM s'insereixen el Tema-Títol i el
+ * Conductor a l'inici del bloc, per això el botó sempre l'ha de mostrar (etiqueta A/B + títol).
+ */
+function syncChyronCasButton() {
+    var btn = document.getElementById('btnChyronCas');
+    if (!btn) return;
+    var mode = 'AUTO';
+    try {
+        var mod = window.FASTPASS_UI && FASTPASS_UI.Workflows && FASTPASS_UI.Workflows.Chyrons;
+        if (mod && typeof mod.getTitolCaseMode === 'function') mode = mod.getTitolCaseMode();
+    } catch (eM) { }
+    btn.classList.toggle('cas-A', mode === 'A');
+    btn.classList.toggle('cas-B', mode === 'B');
+    var comu = ' Un clic alterna l\'ESTAT i TORNA A COL·LOCAR l\'inici del bloc (Conductor + ' +
+        'Tema-Títol); després, totes les col·locacions d\'aquest inici (🎯 COLOCAR, Conduct…) ' +
+        'ixen amb eixe cas. Ctrl+clic = torna a AUTO (auto-detecció).';
+    btn.title = (mode === 'AUTO')
+        ? 'Tema-Títol / Conductor: ESTAT AUTO (auto-detecció per marge). CasA = intro LLARGA ' +
+          '(l\'inici del bloc l\'obre el Tema-Títol) · CasB = intro CURTA (l\'obre el Conductor).' + comu
+        : 'Tema-Títol / Conductor: ESTAT ACTIU = Cas' + mode + ' · intro ' +
+          (mode === 'A' ? 'LLARGA (obre el Tema-Títol; el Conductor va després del gran)'
+                        : 'CURTA (obre el Conductor; el Tema-Títol entra quan acaba la seua animació)') + '.' + comu;
+    if (window.FASTPASS_UI && FASTPASS_UI.LayoutMode) btn.setAttribute('data-cas', mode);
+}
+
+/**
  * applySliderLimits: Ajusta el recorregut FÍSIC del slider al rang en píxels
  * del reencuadre horitzontal (min=-351 px, max=959 px). El valor del slider és
  * directament la posició X en PÍXELS (no una escala relativa), de manera que el
@@ -738,6 +766,17 @@ if (btnMarksC1) btnMarksC1.addEventListener('click', () => callWorkflow('Markers
         if (btnChyronResto) btnChyronResto.addEventListener('click', () => callWorkflow('Chyrons', 'placeChyronResto'));
         const btnChyronRepartir = document.getElementById('btnChyronRepartir');
         if (btnChyronRepartir) btnChyronRepartir.addEventListener('click', () => callWorkflow('Chyrons', 'repartirChyronTraduccio'));
+        // (2026-10-16 · BUG #170) 🔀 ESTAT de la intro del bloc: TOC entre intro LLARGA
+        // (CasA: l'obri el Tema-Títol) ⇄ intro CURTA (CasB: l'obri el Conductor). Canvia
+        // l'ESTAT (com s'insereixen aquests chyrons) i re-col·loca l'inici del bloc.
+        // Ctrl+clic = torna l'estat a AUTO (auto-detecció), sense tocar el timeline.
+        const btnChyronCas = document.getElementById('btnChyronCas');
+        if (btnChyronCas) btnChyronCas.addEventListener('click', async (e) => {
+            await callWorkflow('Chyrons', 'switchTitolConductorCase',
+                (e && (e.ctrlKey || e.metaKey)) ? 'AUTO' : null);
+            syncChyronCasButton();
+        });
+        syncChyronCasButton();
         const btnChyronColocar = document.getElementById('btnChyronColocar');
         if (btnChyronColocar) btnChyronColocar.addEventListener('click', () => runPlaceAllChyrons());
 

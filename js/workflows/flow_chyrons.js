@@ -30,6 +30,62 @@
     // entrava aquests 15 frames TARD → s'avancen amb aquest offset.
     const CONDUCTOR_TAIL = 15 * REV_FRAME;   // 0,60 s
 
+    // (2026-10-16 · BUG #170) CAS del bloc (intro LLARGA vs intro CURTA): constants compartides
+    // per `placeChyronConductor` i `_blockStartTime` (abans eren literals duplicats dins de
+    // `placeChyronConductor`) i pel planificador del cas forçat (`_casForceTimes`).
+    const CAS_MARGEN_INICIO = 0.40;     // 0:10 · marge d'inici del bloc (el conductor obre el bloc)
+    const CAS_DUR_TEMA_TITOL = 6.24;    // 6:06 · durada de la part VIVA del Tema-Títol gran
+
+    // (2026-10-16 · BUG #170) ESTAT del cas de la intro (botó 🔀 de la fila CHY):
+    //   'A' = intro LLARGA (l'inici del bloc l'obre el Tema-Títol; el Conductor va després)
+    //   'B' = intro CURTA  (l'inici del bloc l'obre el Conductor; el Tema-Títol entra després)
+    //   AUTO = auto-detecció per marge (comportament històric, sense estat fixat)
+    // És un ESTAT PERSISTENT (no d'un sol ús): mentre estiga fixat, TOTES les col·locacions
+    // següents de l'inici del bloc (🎯 COLOCAR, ↔️ REPARTIR, Conduct solt…) ixen amb eixe cas;
+    // el botó 🔀 l'alterna entre A i B i el Ctrl+clic el torna a AUTO. Es recorda entre
+    // recàrregues del panell (localStorage) perquè el bloc el continua treballant el mateix
+    // operador; el 🎯/🔀 sempre mostren l'estat actiu al títol del botó.
+    const CAS_MODE_KEY = 'fastpass_titol_case_mode';
+    const CAS_MODE_AUTO = 'AUTO';
+
+    /** _llegirCasMode: estat del cas desat (null = AUTO si no n'hi ha cap o no és vàlid). */
+    const _llegirCasMode = function () {
+        try {
+            const v = String((window.localStorage && window.localStorage.getItem(CAS_MODE_KEY)) || '')
+                .trim().toUpperCase();
+            return (v === 'A' || v === 'B') ? v : null;
+        } catch (e) { return null; }
+    };
+
+    /** _desarCasMode: desa l'estat del cas ('A'/'B'; qualsevol altra cosa = AUTO/esborra). */
+    const _desarCasMode = function (cas) {
+        try {
+            if (!window.localStorage) return;
+            if (cas === 'A' || cas === 'B') window.localStorage.setItem(CAS_MODE_KEY, cas);
+            else window.localStorage.removeItem(CAS_MODE_KEY);
+        } catch (e) { }
+    };
+
+    /**
+     * isStructuralMarkerComment: Indica si el comentari d'un marcador és ESTRUCTURAL,
+     * és a dir si comença per l'ID d'un ítem d'escaleta amb el format "num - títol".
+     *
+     * (2026-10-16) TN MEDIODIA V1 (bloc "PG Intro / PENSIONS ENTREN EN PRECAMPANYA",
+     * emissió 15/10): el 1r marcador del bloc era "01 PGi - PG Intro" (l'ítem de PLATÓ
+     * que obre el bloc, amb la presentadora en càmera). La regex ANTIGA
+     * (`/^\d+[a-z]{0,5}\s*-\s*.+$/`, i fins i tot `{0,3}` en dues fases) NO el
+     * reconeixia perquè entre el número i el sufix "PGi" hi ha un ESPAI:
+     *   · "01 PGi - PG Intro"  →  quedava FORA de `structuralMarkers`
+     *   · "01 - PENSIONS …"    →  sí que hi entrava (base "1")
+     * Conseqüències mesurades: (a) el Tema-Títol gran del ítem "01 PGi" queia al
+     * respatller per BASE i s'anclava al marcador de l'ALTRE ítem ("01" @32.32s) → el
+     * gran entrava 32 s tard; (b) el Conductor no trobava cap marcador de plató → s'ometia.
+     * Ara el sufix admet espais davant i el filtre és ÚNIC per a totes les fases.
+     */
+    const isStructuralMarkerComment = function (comment) {
+        return /^\d+\s*[a-z]{0,5}\s*-\s*.+$/i.test(String(comment || '').trim());
+    };
+
     FASTPASS_UI.Workflows.Chyrons = {
 
         // (2026-10-13) Marca de sessió: l'índex del bin CHY ja s'ha recarregat amb
@@ -37,6 +93,21 @@
         // re-escanejar el bin una vegada per traducció. Es reinicia a cada entrada
         // de TRAD (`placeChyronTraduccio`) i REPARTIR (`repartirChyronTraduccio`).
         _tradIdxReloaded: false,
+
+        // (2026-10-16 · BUG #170) ESTAT del cas de la intro (botó 🔀): 'A' (intro LLARGA) o
+        // 'B' (intro CURTA); null = AUTO (auto-detecció per marge, comportament històric).
+        // Es carrega del localStorage (vegeu `CAS_MODE_KEY`) i el fan servir `_blockStartTime`
+        // i `placeChyronConductor`; `switchTitolConductorCase`/`setTitolCaseMode` el canvien.
+        _titolCaseMode: _llegirCasMode(),
+
+        // Últim cas efectivament aplicat (l'informa `_blockStartTime`): el titulillo el fa
+        // servir com a xarxa de seguretat quan no es pot deduir el cas de res més.
+        _lastTitolCase: null,
+
+        // (2026-10-16 · BUG #170) Inici del bloc FORÇAT (només mentre el botó 🔀 re-col·loca
+        // l'inici del bloc sota el CABEZAL): el fan servir `placeChyronTitol` i
+        // `placeChyronConductor` en comptes de deduir-lo (clips[0] / marcador de plató).
+        _blockStartForce: null,
 
         // ═══════════════════════════════════════════════════════════════
         // ASSEMBLATGE AUTOMÀTIC (THE MAGIC)
@@ -258,7 +329,9 @@
         runGuidedAssembly: async function () {
             if (!(await getUtils().validateActiveSequence())) return;
             try {
-                const ctx = FASTPASS_UI.State;
+                // (2026-10-15) El manifest necessita el ctx de SESSIÓ COMPLET: `State`
+                // sol no porta `dateDir` i `save` escriuria en un manifest fantasma (§5.2).
+                const ctx = await this._manifestCtx();
                 await FASTPASS_UI.SessionManifest.save(ctx, { phases: { clipAnalysisDone: true } });
                 const res = await window.FASTPASS_UI.Logic.Assembly.runGuidedAssembly();
                 if (res && res.indexOf("OK") !== -1) getUtils().status("Rètols col·locats OK", "exito");
@@ -914,6 +987,83 @@
         },
 
         /**
+         * _manifestCtx: (2026-10-15 · F4) CONTEXT DE SESSIÓ COMPLET per LLEGIR/ESCRIURE el
+         * manifest (`.fastpass.json`).
+         *
+         * ⚠️ `_wfCtx()` NO n'hi ha prou per a l'ESCRIPTURA: retorna `State`, i
+         * `State.dateDir` és `null` gairebé tot el flux (només `main.js` en carregar
+         * projecte i el RESET l'omplen; `4_Context.checkContext` el torna a `null` en
+         * canviar de programa/bloc). `Utils.workFolder(ctx)` construeix la carpeta amb
+         * `ctx.dateDir`, per tant un `State` sense data apunta el manifest a
+         * `<base><prog>/` (SENSE dia ni bloc) mentre la resta de fluxos
+         * (`MainButton._setupContext()`, el que fan servir el «Muntar», `flow_graphics`…)
+         * l'apunta a `<base><prog>/<dateDir>/<bloc>`: el rètol s'escrivia en un manifest
+         * FANTASMA i el de debò quedava sense `chyrons.placed`.
+         *
+         * Ordre de resolució:
+         *   1) `MainButton._setupContext()` → { config, progData, programa, bloque, dateDir }
+         *      (el MATEIX ctx que la resta d'escriptors del manifest).
+         *   2) `_wfCtx()` (State) amb la data completada des de
+         *      `Core.Context._targetDateDir()` (data del projecte obert / HOY-AHIR) mentre
+         *      el panell no estigui llest.
+         * @returns {Promise<Object>} ctx (pot quedar incomplet si no hi ha panell NI State)
+         */
+        _manifestCtx: async function () {
+            try {
+                const MB = FASTPASS_UI.Workflows && FASTPASS_UI.Workflows.MainButton;
+                if (MB && typeof MB._setupContext === 'function') {
+                    const ctx = await MB._setupContext();
+                    if (ctx && ctx.progData && ctx.progData.wott && ctx.bloque && ctx.dateDir) return ctx;
+                }
+            } catch (eSC) { /* panell no llest → State */ }
+            const S = this._wfCtx();
+            try {
+                if (!S.dateDir) {
+                    const Ctx = FASTPASS_UI.Core && FASTPASS_UI.Core.Context;
+                    if (Ctx && typeof Ctx._targetDateDir === 'function') S.dateDir = Ctx._targetDateDir();
+                }
+            } catch (eD) { }
+            return S;
+        },
+
+        /**
+         * _recordPlacedChyrons: (2026-10-15 · F4) Escriu els rètols COL·LOCATS a la FONT
+         * ÚNICA (`.fastpass.json` v2.0 → `chyrons.placed`) via
+         * `Core.AnalysisCenter.writeChyronsPlaced`.
+         *
+         * ⚠️ NO se li ha de passar el ctx LOCAL de `_placeChyronsByType`
+         * (`ctx = { busy, placed }`, el dels solapaments): el manifest necessita el ctx de
+         * SESSIÓ COMPLET (`_manifestCtx()`, amb `progData` I `dateDir`), si no
+         * `SessionManifest.getPath` peta amb «Cannot read properties of undefined
+         * (reading 'wott')» o, pitjor, resol una ruta sense el dia de treball.
+         *
+         * Xarxa de seguretat: en aquest punt la col·locació JA ha acabat, així que un
+         * error escrivint el manifest no l'ha de fer fracassar mai → es loga i prou.
+         * @param {Array} records - registres { num, name, track, startSec, endSec, tipus }
+         * @param {string} label - etiqueta de la fase (conductor/titol/lloc/nom/resto…)
+         */
+        _recordPlacedChyrons: async function (records, label) {
+            if (!records || records.length === 0) return;
+            try {
+                const AC = FASTPASS_UI.Core && FASTPASS_UI.Core.AnalysisCenter;
+                if (!AC || !AC.writeChyronsPlaced) {
+                    log(`   ⚠️ [${label}] AnalysisCenter.writeChyronsPlaced no disponible → ${records.length} rètol(s) NO registrats al manifest`, "WARN");
+                    return;
+                }
+                const wctx = await this._manifestCtx();
+                if (!wctx.progData) {
+                    log(`   ⚠️ [${label}] sense progData → ${records.length} rètol(s) NO registrats al manifest`, "WARN");
+                    return;
+                }
+                const res = await AC.writeChyronsPlaced(wctx, records, { bin: wctx.bloque, reason: 'chyrons:' + label });
+                const n = (res && res.chyrons && res.chyrons.countPlaced !== undefined) ? res.chyrons.countPlaced : '?';
+                log(`📊 [${label}] manifest: +${records.length} rètol(s) → chyrons.placed (total ${n})`);
+            } catch (eM) {
+                log(`   ⚠️ [${label}] manifest (chyrons.placed): ${eM.message}`, "WARN");
+            }
+        },
+
+        /**
          * _fileExists: existeix aquest fitxer? (CEP fs.stat — mateix criteri que
          * `flow_chyrons._capturePng` i `flow_render.waitFile`).
          * @param {string} path
@@ -1110,8 +1260,10 @@
                     } else {
                     // ⚠️ (2026-10-06, FIX) El manifest NO es pot llegir amb `p.ctx`: això és el
                     // ctx de COL·LOCACIÓ ({busy, placed}) i `SessionManifest.getPath` fa
-                    // `ctx.progData.wott` → TypeError. Es fa servir el ctx de SESSIÓ.
-                    const wctx = p.wfCtx || this._wfCtx();
+                    // `ctx.progData.wott` → TypeError. Es fa servir el ctx de SESSIÓ COMPLET
+                    // (`_manifestCtx()`: `_setupContext()` o State + dateDir completat).
+                    let wctx = p.wfCtx;
+                    if (!wctx) wctx = await this._manifestCtx();
                     const anc = await this._titoletAnchor(p, wctx);
                     if (!anc.ok) {
                         log(`   ⚠️ [${p.label}] ${TAG} detecció: ${anc.why} → fallback`, 'WARN');
@@ -1449,6 +1601,64 @@
         },
 
         /**
+         * _isDirecteSenyalWott: el rètol és de la família LOCALITZACIÓ/DIRECTE
+         * («Directe_PRESENCIAL <lloc>», «Directe_PROGRAMES <canal>», «Directe_<lloc>»)?
+         *
+         * PER QUÈ: aquests rètols els genera el sistema de ròtols amb el lineID de l'ÍTEM
+         * D'INTRO del DIFERIT (cas real TN MEDIODIA V2 16/10: l'ítem «04i - intro DIFERIT
+         * (VIMBODÍ I POBLET)» porta el wott «…_644353_Directe_PRESENCIAL_Vimbodí i P.»,
+         * @0.40s), però el lloc només és a pantalla quan ARRENCA EL DIRECTE del bloc, que
+         * aquí obre l'IPD («05 - +++IPD POBLET VISITA» @34.36s) → el rètol sortia 34 s
+         * abans del directe. Vegeu `_firstIpdDirecteAfter` i l'ancoratge a
+         * `_placeChyronsByType`.
+         *
+         * ⚠️ Es mira NOMÉS el CAMP DEL ROL (`rol` = `parts[7]` de `13_Parse.meta`, que és
+         * l'ETIQUETA del generador) o el TOKEN exacte del nom: el TEXT LLIURE del rètol pot
+         * contenir «directe» («Directe a les 21h») i no ha de canviar de família per això.
+         * Els ENVIAT NO entren aquí: tenen la seva pròpia regla (`_isEnviatWott` →
+         * punt de connexió).
+         *
+         * @param {Object} chy - {name, rol}
+         * @returns {boolean}
+         */
+        _isDirecteSenyalWott: function (chy) {
+            if (!chy) return false;
+            const rol = String(chy.rol || '').toUpperCase().trim();
+            if (/^(DIRECTE|PRESENCIAL)([_\-\s]|$)/.test(rol)) return true;
+            const toks = String(chy.name || '').toUpperCase().split('_');
+            return toks.some(t => {
+                const tk = t.trim();
+                return tk === 'DIRECTE' || tk === 'PRESENCIAL' ||
+                    tk === 'DIRECTEPRESENCIAL' || tk === 'DIRECTE-PRESENCIAL';
+            });
+        },
+
+        /**
+         * _isTraduccioWott: El rètol és una TRADUCCIÓ?
+         *
+         * ⚠️ CAS REAL (TNC V3 · 2026-10-15 · bloc 14 «FAUNA ALIADA PER L'AGRICULTURA»):
+         * el filtre del botó NOM era `c.name.includes("Nom")` sobre el NOM SENCER del
+         * fitxer, que inclou el TEXT del rètol. La traducció
+         * «…_644349_TRADUCCIO [2-3] Només n'existei…» conté "Només" → la fase NOM se la
+         * va quedar, la va col·locar a V7 (pista de noms) SOBRE el nom-càrrec legítim
+         * («Hobun Ikeya_director») i la traducció va quedar DUPLICADA: V7 @ 59.72→64.60
+         * amb la durada del nom + V8 @ 59.32→61.08 / 61.08→62.84 / 62.84→64.60.
+         * El mateix podia passar amb "Lloc", "Data" o "Firma" al text traduït.
+         *
+         * Criteri (MAI el text lliure): el rol de `13_Parse.meta` o el TOKEN del nom
+         * delimitat per guions baixos que COMENÇA per TRADUCC(O/Ó) — amb accent o sense,
+         * cas que el filtre antic (`.includes("TRADUCCIO")`) no cobria.
+         * @param {Object} chy - {name, rol}
+         * @returns {boolean}
+         */
+        _isTraduccioWott: function (chy) {
+            if (!chy) return false;
+            if (/TRADUCCI[OÓ]/.test(String(chy.rol || '').toUpperCase())) return true;
+            const toks = String(chy.name || '').toUpperCase().split('_');
+            return toks.some(t => /^TRADUCCI[OÓ]/.test(t.trim()));
+        },
+
+        /**
          * _isConexioMarker: El marcador és el punt de connexió del directe?
          * Criteris: el comentari conté CONNEXIÓ/CONNEXIO/CONEXIO o el seu id
          * acaba en "dir" (ex: "01dir - CONNEXIÓ DIRECTE ILLA").
@@ -1476,6 +1686,266 @@
             const after = cands.filter(m => m.time >= fromTime - 0.001);
             if (after.length > 0) return after[0].time;
             return cands[cands.length - 1].time;
+        },
+
+        /**
+         * _isIpdDirecteMarker: el marcador obre un IPD o un DIRECTE — és a dir, l'instant
+         * en què EL LLOC / LA CONNEXIÓ del bloc és a pantalla?
+         *
+         * Criteris (tots ells ja vigents al repo, no se n'inventa cap):
+         *   · IPD   → el comentari del marcador conté «IPD» (regla canònica
+         *             `Workflows.Markers.isIpdLine` = `/IPD/i` sobre num+títol) o el
+         *             prefix «+++» amb què l'escaleta marca aquests ítems
+         *             (`ITEM_CLASSIFICATION.md` §IPD i `13_Parse.classify`).
+         *   · DIRECTE → l'id del marcador acaba en «dir» («01dir - CONNEXIÓ DIRECTE ILLA»,
+         *             mateixa convenció que `_isConexioMarker`), el títol conté la paraula
+         *             «DIRECTE» o el sufix del bloc és «dir»
+         *             (`FORCED_STRUCTURAL_SUFFIXES` de `flow_markers`).
+         *
+         * @param {Object} m - {comments, name, time}
+         * @param {Object} [entry] - ítem de l'estructura (13_Parse: {id, numBase, suffix,…})
+         * @returns {boolean}
+         */
+        _isIpdDirecteMarker: function (m, entry) {
+            const lbl = String((m && (m.comments || m.label || m.name)) || '').toUpperCase();
+            if (lbl.indexOf('IPD') !== -1 || lbl.indexOf('+++') !== -1) return true;
+            const id = (lbl.split('-')[0] || '').trim();
+            if (/DIR$/.test(id)) return true;
+            if (/\bDIRECTE\b/.test(lbl)) return true;
+            const suf = String((entry && entry.suffix) || '').toLowerCase().trim();
+            return suf === 'dir';
+        },
+
+        /**
+         * _isIntroMarker: el marcador obre l'ÍTEM D'INTRO del bloc?
+         *
+         * (2026-10-16 · BUG #168) El generador de ròtols emet els wotts de PRESENCIAL i ENVIAT
+         * amb el lineID de la INTRO de l'ítem que anuncien («04i - intro DIFERIT (VIMBODÍ I
+         * POBLET)»), i per això queden clavats a l'inici del bloc. Petició d'usuari: si un
+         * rètol d'aquestes famílies penja d'una INTRO, s'ha de moure al SEGÜENT ítem DIRECTE
+         * o DIFERIT (vegeu `_pickDirecteDiferitAfter`).
+         *
+         * Criteris (els MATEIXOS que ja fa servir el repo per classificar les intro):
+         *   · sufix de l'ítem de `13_Parse.meta` = `i` / `intro`, o `entry.type === 'intro'`
+         *     (el que posen `_getStructureFromMarkers` i `ITEM_CLASSIFICATION.md`);
+         *   · l'id del marcador acaba en «I» («04i», «01 PGi»);
+         *   · el títol comença per INTRO, amb el prefix de plató inclòs («PG Intro»).
+         *
+         * @param {Object} m - {comments, label, name, time}
+         * @param {Object} [entry] - ítem de `13_Parse` ({id, suffix, type, chyrons})
+         * @returns {boolean}
+         */
+        _isIntroMarker: function (m, entry) {
+            const suf = String((entry && entry.suffix) || '').toLowerCase().trim();
+            if (suf === 'i' || suf === 'intro') return true;
+            if (String((entry && entry.type) || '').toLowerCase().trim() === 'intro') return true;
+            const lbl = String((m && (m.comments || m.label || m.name)) || '').toUpperCase().trim();
+            if (!lbl) return false;
+            const id = (lbl.split('-')[0] || '').trim();
+            if (/I$/.test(id)) return true;
+            const titol = lbl.substring(id.length).replace(/^[\s\-]+/, '');
+            return /^(PG|PLA|PLATO|ESTUDI)\s*INTRO\b/.test(titol) || /^INTRO\b/.test(titol);
+        },
+
+        /**
+         * _isDiferitMarker: el marcador obre un ÍTEM DIFERIT (peça gravada)?
+         *
+         * (2026-10-16 · BUG #168) Segon destí possible dels rètols de PRESENCIAL/ENVIAT que
+         * penjaven d'una intro: quan el bloc no té directe, la peça que arrenca és el DIFERIT
+         * («04 - DIFERIT LAURA CATALAN» @18.36 s) i és allà on el rètol ha de sortir.
+         *
+         * ⚠️ L'ÍTEM D'INTRO també porta «DIFERIT» al títol («04i - intro DIFERIT…»): qui el
+         * consumeixi l'ha de descartar ABANS amb `_isIntroMarker` (ho fa
+         * `_pickDirecteDiferitAfter`).
+         *
+         * @param {Object} m - {comments, label, name, time}
+         * @param {Object} [entry] - ítem de `13_Parse` ({id, suffix, type, chyrons})
+         * @returns {boolean}
+         */
+        _isDiferitMarker: function (m, entry) {
+            const suf = String((entry && entry.suffix) || '').toLowerCase().trim();
+            if (suf === 'dif' || suf === 'diferit') return true;
+            const lbl = String((m && (m.comments || m.label || m.name)) || '').toUpperCase();
+            return /\bDIFERIT\b/.test(lbl) || /\bDIFERIDO\b/.test(lbl);
+        },
+
+        /**
+         * _sigTokens: mots SIGNIFICATIUS del nom d'un wott (per emparellar el rètol amb el
+         * títol d'un ítem DIRECTE/DIFERIT).
+         *
+         * (2026-10-16 · BUG #168) El nom del wott barreja camps del GENERADOR (WOTT, programa,
+         * el TÍTOL de l'ítem d'intro, l'etiqueta del rol) amb el TEXT del rètol. Els primers
+         * fan soroll —«DIFERIT» hi surt encara que el rètol no hi tingui res a veure—, així que
+         * només compten els mots de 5+ lletres que no siguin capçaleres del format. Exemples
+         * REALS (TNM V2, 15/10): «…_644353_Directe_PRESENCIAL_Vimbodí i P.» → [VIMBODI, POBLE]
+         * i «…_644409_Enviat_No_Laura Catalan Asenjo» → [LAURA, CATALAN, ASENJO, VIMBODI, POBLE].
+         *
+         * @param {string} name
+         * @returns {Array<string>} tokens en MAJÚSCULES, sense accents ni dígits
+         */
+        _sigTokens: function (name) {
+            const STOP = {
+                WOTT: 1, INTRO: 1, DIFERIT: 1, DIFERIDO: 1, DIRECTE: 1, DIRECTO: 1,
+                PRESENCIAL: 1, ENVIAT: 1, CONNEXIO: 1, CONEXIO: 1, IPD: 1, LEAD: 1, OFF: 1,
+                NOMCARREC: 1, NOMCAREC: 1, PROGRAMES: 1, FIRMA: 1, LLOC: 1, DATA: 1,
+                RESTO: 1, TEMA: 1, TITOL: 1, TITOLET: 1, TRADUCCIO: 1
+            };
+            const out = {};
+            for (const raw of String(name || '').toUpperCase().split(/[_\s]+/)) {
+                const t = raw.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^A-Z]/g, '');
+                if (t.length < 5 || STOP[t]) continue;
+                out[t] = 1;
+            }
+            return Object.keys(out);
+        },
+
+        /**
+         * _pickDirecteDiferitAfter: a QUIN ítem DIRECTE o DIFERIT va un rètol de
+         * PRESENCIAL/ENVIAT que penja d'una INTRO (2026-10-16 · BUG #168).
+         *
+         * REGLA (petició d'usuari): «si apareix un rètol de PRESENCIAL i/o ENVIAT en una intro,
+         * s'ha de moure al SEGÜENT ítem DIRECTE o DIFERIT».
+         *
+         * Ordre de decisió:
+         *   1. Candidats = marcadors ESTRICTAMENT posteriors que obren un ítem DIRECTE
+         *      (`_isIpdDirecteMarker`: IPD / «+++» / id·`dir` / «DIRECTE») o DIFERIT
+         *      (`_isDiferitMarker`). La intro d'origen NO és mai candidata.
+         *   2. AFINITAT: si el títol d'un candidat parla del mateix que el rètol (comparteix un
+         *      mot significatiu de `_sigTokens`: «Enviat_No_Laura Catalan Asenjo» ↔ «04 - DIFERIT
+         *      LAURA CATALAN»), mana el candidat MÉS PROPER.
+         *   3. Sense afinitat mana el DIRECTE (convenció ja validada al BUG #167: «…_644353_
+         *      Directe_PRESENCIAL_Vimbodí i P.» @0.40 s → «05 - +++IPD POBLET VISITA» @34.36 s) i
+         *      el DIFERIT queda com a PLA B per als blocs sense directe.
+         *
+         * @param {Array} markersFull - [{fullId, blockNum, time, label}]
+         * @param {Object} structureById - id → ítem de `13_Parse`
+         * @param {number} fromTime - instant del marcador d'on penja el rètol
+         * @param {string} [name] - nom del wott (per a l'afinitat)
+         * @returns {{time: number, marker: Object, kind: string}|null} null si no hi ha destí
+         */
+        _pickDirecteDiferitAfter: function (markersFull, structureById, fromTime, name) {
+            const dir = [], dif = [];   // files de {m, kind}
+            for (const m of (markersFull || [])) {
+                if (!m || !isFinite(m.time) || m.time <= fromTime + 0.05) continue;
+                const e = (structureById || {})[m.fullId];
+                if (this._isIntroMarker(m, e)) continue;                 // la intro d'origen no compta
+                if (this._isIpdDirecteMarker(m, e)) { dir.push({ m: m, kind: 'DIRECTE' }); continue; }
+                if (this._isDiferitMarker(m, e)) dif.push({ m: m, kind: 'DIFERIT' });
+            }
+            if (dir.length === 0 && dif.length === 0) return null;
+            const byTime = (a, b) => a.m.time - b.m.time;
+            const cands = dir.concat(dif).sort(byTime);
+            const tok = this._sigTokens(name);
+            if (tok.length > 0) {
+                const aff = cands.filter(c => {
+                    const lbl = String((c.m.label || c.m.comments || c.m.name) || '').toUpperCase()
+                        .normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+                    return tok.some(t => lbl.indexOf(t) !== -1);
+                });
+                if (aff.length > 0) return { time: aff[0].m.time, marker: aff[0].m, kind: aff[0].kind };
+            }
+            const best = (dir.length > 0) ? dir.sort(byTime)[0] : dif.sort(byTime)[0];
+            return { time: best.m.time, marker: best.m, kind: best.kind };
+        },
+
+        /**
+         * _firstDirecteDiferitAfter: instant del primer ítem DIRECTE o DIFERIT posterior (o
+         * null). Embolcall de `_pickDirecteDiferitAfter` per a qui només vol el temps.
+         *
+         * @param {Array} markersFull
+         * @param {Object} structureById
+         * @param {number} fromTime
+         * @param {string} [name]
+         * @returns {number|null}
+         */
+        _firstDirecteDiferitAfter: function (markersFull, structureById, fromTime, name) {
+            const p = this._pickDirecteDiferitAfter(markersFull, structureById, fromTime, name);
+            return p ? p.time : null;
+        },
+
+        /**
+         * _firstIpdDirecteAfter: instant del PRIMER marcador IPD/DIRECTE ESTRICTAMENT
+         * posterior a `fromTime` (o null si no n'hi ha cap).
+         *
+         * PER QUÈ «després»: el rètol de localització ve penjat de l'ÍTEM que l'anuncia
+         * (la intro del DIFERIT) i el directe del bloc sempre és més endavant. Amb
+         * «estrictament després» un rètol que ja és al seu ítem de directe no es pot
+         * arrossegar a un IPD anterior del mateix bloc.
+         *
+         * @param {Array} markersFull - [{fullId, blockNum, time}]
+         * @param {Object} structureById - id → ítem de `State.structure`
+         * @param {number} fromTime
+         * @returns {number|null}
+         */
+        _firstIpdDirecteAfter: function (markersFull, structureById, fromTime) {
+            let best = null;
+            for (const m of (markersFull || [])) {
+                if (!m || !isFinite(m.time) || m.time <= fromTime + 0.05) continue;
+                if (!this._isIpdDirecteMarker(m, (structureById || {})[m.fullId])) continue;
+                if (best === null || m.time < best) best = m.time;
+            }
+            return best;
+        },
+
+        /**
+         * _ipdAnchorPlan: PLA d'ancoratge dels rètols de LOCALITZACIÓ DEL DIRECTE a l'ítem
+         * IPD/DIRECTE del bloc (2026-10-16 · BUG #167).
+         *
+         * Cas real: el sistema de ròtols emet «…_644353_Directe_PRESENCIAL_Vimbodí i P.» amb
+         * el lineID de l'ÍTEM D'INTRO del DIFERIT («04i - intro DIFERIT (VIMBODÍ I POBLET)»),
+         * de manera que el rètol del lloc sortia a l'inici del bloc (0.40 s) quan el directe
+         * no arrenca fins a l'IPD del bloc («05 - +++IPD POBLET VISITA» @34.36 s → 34.76 s de
+         * col·locació). El pla diu, per a cada rètol d'aquesta família, a QUIN marcador va.
+         *
+         * GUARDES (vegeu els tests de `bin/smoke/fp_probe_ipd_chyron.js`):
+         *   (a) FAMÍLIES: `_isDirecteSenyalWott` (DIRECTE/PRESENCIAL) SEMPRE, i ENVIAT
+         *       (`_isEnviatWott`) **NOMÉS si penja d'una INTRO** (2026-10-16 · BUG #168; petició
+         *       d'usuari: «si apareix un rètol de PRESENCIAL i/o ENVIAT en una intro, s'ha de
+         *       moure al SEGÜENT ítem DIRECTE o DIFERIT»). Els nom-càrrec, Tema-Títol, Lloc/Data
+         *       i traduccions NO es toquen mai aquí, i el filtre de la FASE sempre mana.
+         *   (b) si el SEU ítem JA és el DESTÍ (IPD/directe/DIFERIT — però NO una intro, que és
+         *       l'origen normal), el rètol es queda on és (convenció d'usuari 2026-09-21:
+         *       «Directe PRESENCIAL Berlín/Programes es queden al seu ítem» quan el seu ítem ÉS
+         *       el punt de connexió).
+         *   (c) només es mou cap ENDAVANT: primer ítem DIRECTE o DIFERIT ESTRICTAMENT posterior
+         *       (`_pickDirecteDiferitAfter`; mana el DIRECTE i el DIFERIT és el pla B, tret que
+         *       l'afinitat de títol triï un DIFERIT que parla del mateix rètol).
+         *
+         * @param {Array} markersFull - [{fullId, blockNum, time, label}]
+         * @param {Object} structureById - id d'ítem → ítem (`13_Parse`: {id, suffix, chyrons…})
+         * @param {Function} filterFn - filtre de família de la fase que crida
+         * @param {string} label - nom de la fase (per al log)
+         * @returns {{de: Object, per: Object, moved: number}} de: nom→time · per: "time"→[chyrons]
+         */
+        _ipdAnchorPlan: function (markersFull, structureById, filterFn, label) {
+            const de = {};    // nom del rètol → time del marcador IPD/directe
+            const per = {};   // time del marcador IPD/directe (2 decimals) → [chyrons]
+            let moved = 0;
+            for (const mk0 of (markersFull || [])) {
+                const e0 = (structureById || {})[mk0.fullId];
+                if (!e0 || !e0.chyrons) continue;
+                // (2026-10-16 · BUG #168) La INTRO **sí** que és origen (és el lineID amb què el
+                // generador enganxa aquests wotts): la guarda només aparta els ítems que JA són
+                // el DESTÍ, per no tornar a moure un rètol que ja és al seu lloc (idempotència
+                // entre fases i entre execucions).
+                const srcIntro = this._isIntroMarker(mk0, e0);
+                if (!srcIntro && (this._isIpdDirecteMarker(mk0, e0) || this._isDiferitMarker(mk0, e0))) continue;
+                for (const c0 of e0.chyrons) {
+                    if (!filterFn(c0)) continue;
+                    // CONDICIÓ NOVA (#168): l'ENVIAT només entra aquí si PENJA D'UNA INTRO; abans
+                    // només tenia el punt de connexió i, si no n'hi havia cap, es quedava a
+                    // l'inici del bloc. La família DIRECTE/PRESENCIAL conserva la regla #167.
+                    if (!this._isDirecteSenyalWott(c0) && !(srcIntro && this._isEnviatWott(c0))) continue;
+                    const pick = this._pickDirecteDiferitAfter(markersFull, structureById, mk0.time, c0.name);
+                    if (!pick) continue;
+                    de[c0.name] = pick.time;
+                    const kDest = pick.time.toFixed(2);
+                    (per[kDest] = per[kDest] || []).push(c0);
+                    moved++;
+                    log(`   📍 [${label}] LOCALITZACIÓ${srcIntro ? ' (intro)' : ''}: "${String(c0.name).substring(0, 50)}…" penja de l'ítem ${mk0.fullId} @ ${mk0.time.toFixed(2)}s → va a l'ítem ${pick.kind} ${pick.marker.fullId} @ ${pick.time.toFixed(2)}s`);
+                }
+            }
+            return { de: de, per: per, moved: moved };
         },
 
         /**
@@ -2069,11 +2539,9 @@
             try {
                 const markersRaw = await callJSX('Markers.get()');
                 const allMarkers = markersRaw ? JSON.parse(markersRaw) : [];
-                const STRUCTURAL_COMMENTS_RE = /^\d+[a-z]{0,3}\s*-\s*.+$/i;
-                const structuralMarkers = allMarkers.filter(m => {
-                    const cmt = (m.comments || "").trim();
-                    return STRUCTURAL_COMMENTS_RE.test(cmt);
-                });
+                // (2026-10-16) Filtre unificat (vegeu `isStructuralMarkerComment`): admet
+                // l'ESPAI entre el número i el sufix ("01 PGi - PG Intro").
+                const structuralMarkers = allMarkers.filter(m => isStructuralMarkerComment(m.comments));
                 if (structuralMarkers.length === 0) {
                     log(`⚠️ [${label}] No hi ha marcadors estructurals. Clica MARCADORS primer.`, "WARN");
                     return;
@@ -2085,7 +2553,14 @@
                         const rawId = parts[0].trim();
                         const numMatch = rawId.match(/^(\d+)/);
                         if (numMatch) {
-                            markersFull.push({ fullId: rawId, blockNum: numMatch[1].padStart(2, "0"), time: m.time });
+                            // (2026-10-16 · BUG #167) `label` = comentari SENCER del marcador:
+                            // el necessiten els detectors que treballen sobre `markersFull`
+                            // (l'IPD/directe de `_isIpdDirecteMarker`), que abans només tenien
+                            // el número d'ítem i perdien el títol («+++IPD …»).
+                            markersFull.push({
+                                fullId: rawId, blockNum: numMatch[1].padStart(2, "0"), time: m.time,
+                                label: String(m.comments || '')
+                            });
                         }
                     }
                 }
@@ -2118,6 +2593,16 @@
 
                 let allClipsV1 = [];
                 try { allClipsV1 = await getClipsLogic().getTrackClips(1, 'video'); } catch (eCL) { log(`⚠️ [${label}] Sense clips de V1: ${eCL.message}`); }
+                // ── PLA D'ANCORATGE (2026-10-16 · BUG #167 + #168) ─────────────────
+                // El rètol de LOCALITZACIÓ DEL DIRECTE i els de PRESENCIAL/ENVIAT que pengen
+                // d'una INTRO no es queden al seu ítem: van a l'ítem DIRECTE o DIFERIT que ve
+                // darrere. Es calcula AQUÍ, ABANS del bloc de CONNEXIÓ, perquè les dues regles
+                // poden voler el MATEIX rètol: si l'ENVIAT penja d'una INTRO mana aquesta (el
+                // bloc de connexió el deixa passar), i si té un marcador de connexió real, mana
+                // la connexió (allà no es descarta res).
+                const ipdPlan = this._ipdAnchorPlan(markersFull, structureById, filterFn, label);
+                const ipdDe = ipdPlan.de;    // nom del rètol → time del marcador DIRECTE/DIFERIT
+                const ipdPer = ipdPlan.per;  // time del marcador destí (2 dec.) → [chyrons]
                 // (2026-09-21) ÍTEMS DE CONNEXIÓ: un rètol "Enviat/Directe/Presencial" pot venir
                 // penjat a un ítem ANTERIOR (tipus donapas) perquè el sistema de ròtols el
                 // genera amb el lineID del donapas. Mana el seu ÍTEM DE CONNEXIÓ: es busca el
@@ -2135,14 +2620,43 @@
                         // "Directe PRESENCIAL Berlín"/Programes es queden al seu ítem, com sempre).
                         if (!filterFn(c0) || !this._isEnviatWott(c0)) continue;
                         const tCx = this._connexioMarkerTime(allMarkers, mk0.time);
-                        if (tCx === null || Math.abs(tCx - mk0.time) < 0.05) continue;   // ja és al seu ítem
+                        const teConnexio = (tCx !== null && Math.abs(tCx - mk0.time) >= 0.05);
+                        // (2026-10-16 · BUG #168) Si el rètol penja d'una INTRO i NO hi ha cap punt
+                        // de connexió, mana la regla #168 (ja resolta a `ipdDe`: ítem DIRECTE o
+                        // DIFERIT): aquí no s'ha de tocar.
+                        if (ipdDe[c0.name] !== undefined && !teConnexio) {
+                            log(`   🔌 [${label}] CONNEXIÓ: "${String(c0.name).substring(0, 50)}…" penja d'una INTRO i no té punt de connexió → mana l'ítem DIRECTE/DIFERIT @ ${ipdDe[c0.name].toFixed(2)}s`);
+                            continue;
+                        }
+                        if (!teConnexio) continue;   // ja és al seu ítem
+                        // Un ENVIAT AMB punt de connexió real mana sobre la regla #168: es treu del
+                        // pla del directe/diferit i es queda a la connexió, com sempre.
+                        if (ipdDe[c0.name] !== undefined) {
+                            delete ipdDe[c0.name];
+                            for (const k0 of Object.keys(ipdPer)) {
+                                ipdPer[k0] = ipdPer[k0].filter(c => c.name !== c0.name);
+                            }
+                        }
                         conexioDe[c0.name] = tCx;
                         const k = tCx.toFixed(2);
                         (conexioPer[k] = conexioPer[k] || []).push(c0);
                         log(`   🔌 [${label}] CONNEXIÓ: "${String(c0.name).substring(0, 50)}…" ve penjat a l'ítem ${mk0.fullId} @ ${mk0.time.toFixed(2)}s → es col·locarà a l'ítem de connexió "${labelDe(tCx)}" @ ${tCx.toFixed(2)}s`);
                     }
                 }
+                // ── RÈTOL DE LOCALITZACIÓ DEL DIRECTE → ÍTEM DIRECTE/DIFERIT (BUG #167 + #168) ──
+                // Cas real (TN MEDIODIA V2, 15/10): «…_644353_Directe_PRESENCIAL_Vimbodí i P.»
+                // penja de l'ÍTEM D'INTRO del DIFERIT («04i - intro DIFERIT (VIMBODÍ I POBLET)»
+                // @0s, perquè el generador de ròtols l'emet amb aquell lineID) i es col·locava a
+                // 0.40 s, 34 s ABANS que el lloc fos a pantalla: el directe del bloc obre l'IPD
+                // («05 - +++IPD POBLET VISITA» @34.36s). El mateix passa amb l'ENVIAT de la
+                // intro («…_644409_Enviat_No_Laura Catalan Asenjo» → «04 - DIFERIT LAURA
+                // CATALAN» @18.36 s; BUG #168). El PLA (`ipdDe`/`ipdPer`) s'ha calculat MÉS
+                // AMUNT, ABANS del bloc de CONNEXIÓ (perquè aquella regla pugui cedir-li el
+                // rètol); aquí només es trasllada, igual que fa el bloc de connexió.
                 let placedCount = 0;
+                // (2026-10-15 · F4) Registres per al manifest (`chyrons.placed`): un cop
+                // acabi el bucle s'escriuen a la FONT ÚNICA (vegeu `_recordPlacedChyrons`).
+                const placedRecs = [];
                 for (const mk of markersFull) {
                     const entry = structureById[mk.fullId];
                     let matching = (entry && entry.chyrons) ? entry.chyrons.filter(c => filterFn(c)) : [];
@@ -2155,6 +2669,32 @@
                     if (vinguts.length > 0) {
                         matching = matching.concat(vinguts);
                         log(`   🔌 [${label}] Marcador ${mk.fullId} @ ${mk.time.toFixed(2)}s: +${vinguts.length} rètol(s) de connexió provinents d'un altre ítem`);
+                    }
+                    // ── LOCALITZACIÓ DEL DIRECTE → ÍTEM IPD/DIRECTE (2026-10-16 · BUG #167) ──
+                    // Mateix patró que la connexió: el rètol que penja de l'ÍTEM D'INTRO del
+                    // DIFERIT es treu del seu ítem (sortia 34 s abans del directe) i s'afegeix
+                    // al PRIMER ítem IPD/directe posterior, que és quan el lloc és a pantalla.
+                    if (matching.length > 0 && Object.keys(ipdDe).length > 0) {
+                        matching = matching.filter(c => !(ipdDe[c.name] !== undefined &&
+                            Math.abs(ipdDe[c.name] - mk.time) > 0.05));
+                    }
+                    const vingutsIpd = (ipdPer[mk.time.toFixed(2)] || []).filter(c => !matching.some(m => m.name === c.name));
+                    if (vingutsIpd.length > 0) {
+                        matching = matching.concat(vingutsIpd);
+                        log(`   📍 [${label}] Marcador ${mk.fullId} @ ${mk.time.toFixed(2)}s: +${vingutsIpd.length} rètol(s) de localització del directe (venien de l'ítem d'intro)`);
+                    }
+                    // ── INVARIANT DE FAMÍLIA (2026-10-16) ─────────────────────────
+                    // Cap fase que NO sigui la de traducció no pot col·locar un wott de
+                    // TRADUCCIÓ. Els filtres de cada botó ja ho eviten, però el bug de
+                    // TNC V3 (una traducció col·locada a V7 per la fase NOM, damunt del
+                    // nom-càrrec legítim) va néixer de filtres duplicats i divergents:
+                    // això és la xarxa final ABANS d'escriure al timeline.
+                    if (label !== "Traducció") {
+                        const nTrad = matching.filter(c => this._isTraduccioWott(c)).length;
+                        if (nTrad > 0) {
+                            matching = matching.filter(c => !this._isTraduccioWott(c));
+                            log(`   🛡️ [${label}] ${nTrad} traducció(ns) fora de família: les col·loca la fase TRADUCCIÓ`, "WARN");
+                        }
                     }
                     if (matching.length === 0) continue;
                     // TITOLET: el sistema genera variants de posició i versions del
@@ -2197,7 +2737,7 @@
                             placedCount += await this._placeTitoletChain({
                                 mk: mk, itemEnd: itemEndChain, titolets: cremats,
                                 wottIdx: wottIdx, cfg: cfg, ctx: ctx, label: label,
-                                wfCtx: this._wfCtx(), clipsV1: allClipsV1,
+                                wfCtx: await this._manifestCtx(), clipsV1: allClipsV1,
                                 tag: this._burnedGrafTag(cremats)
                             });
                             matching = matching.filter(c => !this._isBurnedGrafWott(c));
@@ -2309,7 +2849,21 @@
                                 log(`   ⚠️ [${label}] endAt V${slot.track} @ ${slot.start.toFixed(2)}s → ${rEndAt}`, "WARN");
                             }
                         }
-                        this._addPlaced(ctx, slot.track, slot.start, (placeEnd !== null) ? placeEnd : slot.start + Math.max(durInfo.dur, 0.5));
+                        const endRec = (placeEnd !== null) ? placeEnd : slot.start + Math.max(durInfo.dur, 0.5);
+                        this._addPlaced(ctx, slot.track, slot.start, endRec);
+                        // (2026-10-15 · F4) MATEIXA dada que el log, però a la font única: el
+                        // manifest (`chyrons.placed`). `num` = Nº de l'ítem que ALLOTJA el rètol
+                        // (perquè `structure.items[].chyrons` el pugui lligar pel NUM); la clau de
+                        // deduplicació del manifest és `num|name|track`, així recol·locar el
+                        // mateix rètol ACTUALITZA el registre en lloc de duplicar-lo.
+                        placedRecs.push({
+                            num: String(mk.fullId || ''),
+                            name: String(chy.name || ''),
+                            track: slot.track,
+                            startSec: slot.start,
+                            endSec: endRec,
+                            tipus: (this._isTitolet(chy) ? 'TITOLET' : 'CHY')
+                        });
                         log(`   ✅ [${label}] ${chy.name} → V${slot.track} @ ${slot.start.toFixed(2)}s` +
                             ((placeEnd !== null) ? ` → ${placeEnd.toFixed(2)}s (dur ${(placeEnd - slot.start).toFixed(1)}s)` : ` (dur ${durInfo.dur.toFixed(1)}s)`) +
                             (slot.moved ? ` ⟵ desplaçat per no trepitjar (ideal ${snapped.toFixed(2)}s)` : '') +
@@ -2323,6 +2877,8 @@
                 } else {
                     log(`🎬 [${label}] ${placedCount} chyron(s) col·locat(s).`, "INFO");
                     getUtils().status(`${label}: ${placedCount} col·locat(s)`, "exito");
+                    // (2026-10-15 · F4) Els rètols col·locats van a la FONT ÚNICA.
+                    await this._recordPlacedChyrons(placedRecs, label);
                 }
             } catch (e) { getUtils().handleError(e, label); }
         },
@@ -2357,8 +2913,9 @@
                 // [a-z]{0,3} el marcador propi d'un ítem "01lead" quedava FORA dels
                 // estructurals i el Tema-Títol anava a parar a markersByBase (el marcador
                 // d'un ALTRE ítem de la mateixa base, p. ex. el "01chy" del GF).
-                const STRUCTURAL_RE = /^\d+[a-z]{0,5}\s*-\s*.+$/i;
-                const structuralMarkers = allMarkers.filter(m => STRUCTURAL_RE.test((m.comments || "").trim()));
+                // (2026-10-16) Filtre unificat (`isStructuralMarkerComment`): el sufix d'ítem
+                // pot portar espai davant ("01 PGi - PG Intro" = ítem de plató del TNM V1).
+                const structuralMarkers = allMarkers.filter(m => isStructuralMarkerComment(m.comments));
                 const markersById = {};
                 const markersByBase = {};
                 for (const m of structuralMarkers) {
@@ -2386,7 +2943,14 @@
 
                 // ── 3. REFERÈNCIA I FINAL DEL BLOC ──────────────────────────────
                 const clips = await getClipsLogic().getTrackClips(1, "video");
-                const clipStart = clips.length > 0 ? clips[0].start : 0;
+                let clipStart = clips.length > 0 ? clips[0].start : 0;
+                // (2026-10-16 · BUG #170) 🔀 inici del bloc FORÇAT: el botó 🔀 re-col·loca
+                // l'inici del bloc que hi ha SOTA EL CABEZAL (les taules de marcadors i la
+                // resta del flux no es toquen; només canvia el punt d'ancoratge de l'inici).
+                if (this._blockStartForce !== null && isFinite(this._blockStartForce)) {
+                    clipStart = this._blockStartForce;
+                    log(`🎯 [Titol·🔀] inici del bloc forçat pel botó: ${clipStart.toFixed(2)}s`);
+                }
                 let seqEnd = null;
                 try { seqEnd = parseFloat(await callJSX("Timeline.getOut()") || "0"); } catch (e) {}
                 if (!seqEnd || seqEnd <= 0) {
@@ -2566,6 +3130,113 @@
                 }
             } catch (e) { getUtils().handleError(e, "Titol"); }
         },
+
+        /**
+         * getTitolCaseMode: ESTAT actual del cas de la intro (per a la UI i els tests).
+         * @returns {string} 'A' (intro LLARGA) | 'B' (intro CURTA) | 'AUTO'
+         */
+        getTitolCaseMode: function () {
+            return (this._titolCaseMode === 'A' || this._titolCaseMode === 'B')
+                ? this._titolCaseMode : CAS_MODE_AUTO;
+        },
+
+        /**
+         * setTitolCaseMode: FIXA l'ESTAT de la intro del bloc (botó 🔀) i el desa.
+         * Mentre estiga fixat, `_blockStartTime` i `placeChyronConductor` el fan servir en
+         * comptes de l'auto-detecció per marge → totes les col·locacions de l'inici del bloc
+         * que vinguen DESPRÉS (🎯 COLOCAR, ↔️ REPARTIR, Conduct solt…) ixen amb eixe cas.
+         * @param {string|null} cas - 'A' (intro LLARGA) | 'B' (intro CURTA) | null/'AUTO'
+         * @returns {string} estat resultant: 'A' | 'B' | 'AUTO'
+         */
+        setTitolCaseMode: function (cas) {
+            const v = (cas === 'A' || cas === 'B') ? cas : null;
+            this._titolCaseMode = v;
+            _desarCasMode(v);
+            log(`🔀 [Cas] ESTAT → ${v || CAS_MODE_AUTO}` + (v
+                ? ` (intro ${v === 'A' ? 'LLARGA: obre el Tema-Títol' : 'CURTA: obre el Conductor'}) ·` +
+                  ' les properes col·locacions de l\'inici del bloc faran servir eixe cas'
+                : ' (auto-detecció per marge, com sempre)'), 'INFO');
+            return this.getTitolCaseMode();
+        },
+
+        /**
+         * switchTitolConductorCase: BOTÓ 🔀 DE LA FILA CHY (2026-10-16 · BUG #170).
+         * ALTERNA l'ESTAT de la intro del bloc entre intro LLARGA (CasA: l'inici del bloc
+         * l'obre el Tema-Títol) i intro CURTA (CasB: l'obre el Conductor). És un TOC:
+         *   1. Mira l'estat actiu (`_titolCaseMode`) i, si no n'hi ha cap, el cas que hi ha AL
+         *      TIMELINE (`_titolCasoActual`: posició del conductor) → el nou estat és el contrari.
+         *   2. Fixa l'estat (`setTitolCaseMode`): a partir d'ARA, TOTES les col·locacions de
+         *      l'inici del bloc (🎯 COLOCAR, ↔️ REPARTIR, Conduct solt…) ixen amb eixe cas.
+         *   3. Re-col·loca l'inici del bloc SOTA EL CABEZAL amb l'estat nou: retira el clúster
+         *      (Conductor + Tema-Títol/titulillo) amb `_cleanCasoBloc` (esborrat SENSE ripple →
+         *      la resta de la pista no es mou) i torna a passar `placeChyronConductor` +
+         *      `placeChyronTitol` amb `_blockStartForce` = inici del bloc sota el cabezal.
+         * Cridat amb 'AUTO'/'RESET' (Ctrl+clic al botó) només torna l'estat a AUTO i NO toca
+         * el timeline. Els temps de cada cas els planifica `_casForceTimes`.
+         * @param {string} [modeArg] - 'AUTO'/'RESET' per a desfixar l'estat (Ctrl+clic)
+         * @returns {Promise<string>} estat resultant: 'A' | 'B' | 'AUTO'
+         */
+        switchTitolConductorCase: async function (modeArg) {
+            if (modeArg === 'AUTO' || modeArg === 'RESET') {
+                this.setTitolCaseMode(null);
+                getUtils().status('Cas A/B: AUTO', 'exito');
+                log('🔀 [Cas] Timeline intacte (només s\'ha desfixat l\'estat).', 'INFO');
+                return this.getTitolCaseMode();
+            }
+            if (!(await getUtils().validateActiveSequence())) return this.getTitolCaseMode();
+            const cfg = FASTPASS_UI.Config.get();
+            try {
+                // ── 1. Inici del bloc = IN del clip de V1 sota el CABEZAL (o el primer) ──
+                let cti = null;
+                try { cti = parseFloat(await callJSX('Timeline.get()') || '0'); } catch (eCti) { }
+                let clipsV1 = [];
+                try { clipsV1 = await getClipsLogic().getTrackClips(cfg.tracks.video.mp4 || 1, 'video'); }
+                catch (eV1) { log(`   ⚠️ [Cas] No puc llegir V1: ${eV1.message}`, 'WARN'); }
+                let blockClip = null;
+                if (cti !== null && isFinite(cti)) {
+                    for (const cl of clipsV1) { if (cl.start <= cti + 0.01 && cl.end > cti) { blockClip = cl; break; } }
+                }
+                if (!blockClip) {
+                    for (const cl of clipsV1) { if (cl.start >= ((cti || 0) - 0.05)) { blockClip = cl; break; } }
+                }
+                if (!blockClip && clipsV1.length > 0) blockClip = clipsV1[0];
+                const clipStart = blockClip ? blockClip.start : 0;
+                // ── 2. Estat ACTIU (o cas del timeline) → ESTAT NOU (el contrari) ──
+                const cur = await this._titolCasoActual(cfg, clipStart);
+                const target = (cur.cas === 'B') ? 'A' : 'B';
+                const pla = this._casForceTimes(target, clipStart, cur.condEnd, null);
+                log(`🔀 [Cas] Bloc a ${clipStart.toFixed(2)}s · cas ACTUAL=${cur.cas}` +
+                    (this._titolCaseMode ? ' [estat fixat]' : ` (${cur.ref})`) +
+                    ` → ESTAT ${target} · ${pla.motiu}`, 'INFO');
+                this.setTitolCaseMode(target);
+                // ── 3. Finestra de neteja: el clúster de l'inici del bloc ──
+                const span = (cur.condEnd !== null) ? Math.max(16, (cur.condEnd - clipStart) + 12) : 16;
+                const cl = await this._cleanCasoBloc(cfg, clipStart, span);
+                // ── 4. Re-col·loca l'inici del bloc amb l'ESTAT nou (Conductor → Tema-Títol,
+                //       com el 🎯) ancorat a l'inici del bloc sota el CABEZAL ──
+                this._blockStartForce = clipStart;
+                try {
+                    await this.placeChyronConductor();
+                    await getUtils().delay(300);
+                    await this.placeChyronTitol();
+                } finally {
+                    this._blockStartForce = null;   // no afecta la resta de fluxos
+                }
+                // ── 5. Xarxa de seguretat: veïns de V6/V7 a la seua posició exacta ──
+                try {
+                    const placed = [[clipStart, clipStart + span]];
+                    await this._repararClipsV7(cfg.tracks.video.tematitol, cl.snap.tema, placed, 'Cas' + target);
+                    await this._repararClipsV7(cfg.tracks.video.chyrons, cl.snap.config, placed, 'Cas' + target);
+                } catch (eRep) { log(`   ⚠️ [Cas] Reparació de veïns: ${eRep.message}`, 'WARN'); }
+                try { await callJSX('Timeline.refresh()'); } catch (eRf) { }
+                log(`🏁 [Cas] ESTAT ${target} (intro ${target === 'A' ? 'LLARGA' : 'CURTA'}) · ` +
+                    `Tema-Títol del bloc @ ${pla.titol.toFixed(2)}s · Conductor @ ${pla.conductor.toFixed(2)}s · ` +
+                    `següent clic → ${target === 'A' ? 'B' : 'A'} (Ctrl+clic → AUTO)`, 'INFO');
+                getUtils().status(`Cas ${target}: intro ${target === 'A' ? 'llarga' : 'curta'}`, 'exito');
+            } catch (e) { getUtils().handleError(e, 'Cas A/B'); }
+            return this.getTitolCaseMode();
+        },
+
         /**
          * _logTitolDiagnostic: Log de diagnòstic quan no hi ha cap Tema‑Titol gran.
          * Mostra quants n'hi ha a l'estructura, la durada resolta i la seva font,
@@ -2613,8 +3284,8 @@
          */
         _blockStartTime: async function (clipStart, allMarkers) {
             const cfg = FASTPASS_UI.Config.get();
-            const MIN_MARGEN_CASA = 0.40 + 6.24 + 4.40; // ~11.04s
-            let placeTime = clipStart + 0.40;
+            const MIN_MARGEN_CASA = CAS_MARGEN_INICIO + CAS_DUR_TEMA_TITOL + 4.40; // ~11.04s
+            let placeTime = clipStart + CAS_MARGEN_INICIO;
             // (2026-09-21) Es guarda el CAS triat: el TEMA-TÍTOL PETIT (titulillo) fa la
             // transició d'entrada només en CasB (el gran va DESPRÉS del conductor).
             this._lastTitolCase = 'A';
@@ -2623,6 +3294,21 @@
                 if (v6Count > 0) {
                     const firstV6 = JSON.parse(await callJSX(`Clips.get(${cfg.tracks.video.chyrons}, 0, 'video')`));
                     const isConductor = firstV6 && firstV6.name && firstV6.name.toUpperCase().includes("CONDUCT");
+                    // (2026-10-16 · BUG #170) ESTAT del cas (botó 🔀 de la fila CHY): si l'usuari
+                    // l'ha fixat, MANA sobre l'auto-detecció per marge i es manté per a totes
+                    // les col·locacions següents (no és d'un sol ús). El final REAL del rètol
+                    // del conductor es llig de la pista CHY (si n'hi ha un al bloc) perquè en
+                    // CasB el gran hi entra quan acaba la seua animació.
+                    if (this._titolCaseMode) {
+                        const condEndF = (firstV6 && isConductor && isFinite(firstV6.end) && firstV6.end > 0)
+                            ? firstV6.end : null;
+                        const ft = this._casForceTimes(this._titolCaseMode, clipStart, condEndF, null);
+                        this._lastTitolCase = ft.cas;
+                        log(`📌 [Titol·ESTAT ${ft.cas}] inici del bloc @ ${ft.titol.toFixed(2)}s — ${ft.motiu}` +
+                            (condEndF !== null ? ` [fi del rètol conductor @ ${condEndF.toFixed(2)}s]` : '') +
+                            ` (estat fixat pel botó 🔀; Ctrl+clic al 🔀 = AUTO)`);
+                        return ft.titol;
+                    }
                     if (isConductor && Math.abs(firstV6.start - clipStart) < 0.5) {
                         const sortedM = (allMarkers || []).slice().sort((a, b) => a.time - b.time);
                         let nextMarkerTime = clipStart + 30;
@@ -2650,14 +3336,14 @@
                         // com a últim recurs si no es pot llegir el final del conductor.
                         const condEnd = (firstV6 && isFinite(firstV6.end) && firstV6.end > 0) ? firstV6.end : null;
                         if (margen >= MIN_MARGEN_CASA) {
-                            placeTime = clipStart + 0.40;                 // CasA: Tema-Títol primer
+                            placeTime = clipStart + CAS_MARGEN_INICIO;                 // CasA: Tema-Títol primer
                         } else if (condEnd !== null) {
                             // (2026-10-01 · #128) El clip del conductor té ~15 frames BUIDES al final
                             // (l'animació ja ha acabat): el Tema-Títol gran hi ha d'entrar aquests
                             // 15 frames ABANS, i el revers + el congelat del titulillo el segueixen.
                             placeTime = condEnd - CONDUCTOR_TAIL;         // CasB: quan acaba l'animació
                         } else {
-                            placeTime = clipStart + 0.40 + 4.40;          // CasB (fallback)
+                            placeTime = clipStart + CAS_MARGEN_INICIO + 4.40;          // CasB (fallback)
                         }
                         this._lastTitolCase = (margen >= MIN_MARGEN_CASA) ? 'A' : 'B';
                         log(`📌 [Titol·Cas${margen >= MIN_MARGEN_CASA ? 'A' : 'B'}] inici del bloc @ ` +
@@ -2669,6 +3355,139 @@
                 }
             } catch (e) { }
             return placeTime;
+        },
+
+        /**
+         * _casForceTimes: PLA de l'INICI DEL BLOC per a un CAS FORÇAT (intro llarga/corta).
+         *   CasA (intro LLARGA): obre el Tema-Títol gran → gran @ clipStart+0,40 (o el seu
+         *     marcador real si en té) i el Conductor @ gran + 6,24 s.
+         *   CasB (intro CURTA): obre el Conductor @ clipStart+0,40 i el gran entra quan acaba
+         *     la seua animació (fi REAL del clip − 0,60 s); si no es pot llegir el final del
+         *     clip, cau al marge clàssic clipStart+0,40+4,40.
+         * Mètode PUR (sense timeline ni JSX): el fan servir `_blockStartTime`,
+         * `placeChyronConductor` i el botó 🔀 (`switchTitolConductorCase`), i el valida el
+         * harness headless.
+         * @param {'A'|'B'} cas
+         * @param {number} clipStart
+         * @param {number|null} [condEnd] - final REAL del clip del Conductor (per al CasB)
+         * @param {number|null} [ttPlaceTime] - posició REAL del Tema-Títol gran de l'ítem de plató
+         * @returns {{cas:string, titol:number, conductor:number, motiu:string}}
+         */
+        _casForceTimes: function (cas, clipStart, condEnd, ttPlaceTime) {
+            const base = (Number(clipStart) || 0) + CAS_MARGEN_INICIO;
+            const ttAnchor = (typeof ttPlaceTime === 'number' && isFinite(ttPlaceTime) && ttPlaceTime >= 0)
+                ? ttPlaceTime : base;
+            if (cas === 'B') {
+                const hasEnd = (typeof condEnd === 'number' && isFinite(condEnd) && condEnd > 0);
+                const titol = hasEnd ? (condEnd - CONDUCTOR_TAIL) : (base + 4.40);
+                return {
+                    cas: 'B',
+                    titol: titol,
+                    conductor: base,
+                    motiu: 'intro CURTA: el Conductor obre el bloc (' + base.toFixed(2) + 's) i el Tema-Títol ' +
+                        (hasEnd
+                            ? 'entra quan acaba la seua animació (' + titol.toFixed(2) + 's = ' + condEnd.toFixed(2) + 's − 0,60 s)'
+                            : 'va al marge clàssic (' + titol.toFixed(2) + 's, sense fi de conductor llegible)')
+                };
+            }
+            return {
+                cas: 'A',
+                titol: ttAnchor,
+                conductor: ttAnchor + CAS_DUR_TEMA_TITOL,
+                motiu: 'intro LLARGA: el Tema-Títol obre el bloc (' + ttAnchor.toFixed(2) + 's) i el Conductor ' +
+                    'va després del gran (+' + CAS_DUR_TEMA_TITOL.toFixed(2) + 's → ' +
+                    (ttAnchor + CAS_DUR_TEMA_TITOL).toFixed(2) + 's)'
+            };
+        },
+
+        /**
+         * _titolCasoActual: CAS del bloc que HI HA AL TIMELINE (el llig el botó 🔀 abans
+         * d'aplicar el cas contrari). Es dedueix de la posició del CONDUCTOR a la pista CHY:
+         *   · conductor arrancant al marge d'inici del bloc (clipStart+0,40) → CasB (intro CURTA).
+         *   · conductor més endavant (després del Tema-Títol) → CasA (intro LLARGA).
+         *   · sense conductor a la pista → es pren el cas de l'última col·locació (`_lastTitolCase`).
+         * @param {Object} cfg
+         * @param {number} clipStart
+         * @returns {Promise<{cas:string, condStart:number|null, condEnd:number|null, ref:string}>}
+         */
+        _titolCasoActual: async function (cfg, clipStart) {
+            const T_CHY = cfg.tracks.video.chyrons;
+            const base = (Number(clipStart) || 0) + CAS_MARGEN_INICIO;
+            let clips = [];
+            try { clips = await getClipsLogic().getTrackClips(T_CHY, 'video'); }
+            catch (eC) { log(`   ⚠️ [Cas] No puc llegir V${T_CHY}: ${eC.message}`, 'WARN'); }
+            let cond = null;
+            for (const c of clips) {
+                if (String(c.name || '').toUpperCase().indexOf('CONDUCT') === -1) continue;
+                if (!cond || c.start < cond.start) cond = c;
+            }
+            if (!cond) {
+                const last = this._lastTitolCase || 'A';
+                return {
+                    cas: last, condStart: null, condEnd: null,
+                    ref: `sense conductor a V${T_CHY} → cas de l'última col·locació (${last})`
+                };
+            }
+            const isB = Math.abs(cond.start - base) <= 0.35;
+            return {
+                cas: isB ? 'B' : 'A',
+                condStart: cond.start,
+                condEnd: (isFinite(cond.end) ? cond.end : null),
+                ref: `conductor a ${cond.start.toFixed(2)}s (marge d'inici del bloc = ${base.toFixed(2)}s) → Cas${isB ? 'B' : 'A'}`
+            };
+        },
+
+        /**
+         * _cleanCasoBloc: RETIRA del timeline el CLÚSTER DE L'INICI DEL BLOC (el que defineix
+         * el cas): el clip del CONDUCTOR de la pista CHY i les peces del Tema-Títol de V6 que
+         * COMENCEN dins de [clipStart, clipStart+span] (gran + congelat + titulillo
+         * entrant/congelat/sortint). La resta de cada pista NO es toca.
+         * (2026-10-16 · BUG #170) L'esborrat es fa amb `Clips.removeAt(..., ripple=false)`:
+         * deixa el forat i NO desplaça la resta de clips de la pista. Si el motor JSX fos
+         * antic (4t argument ignorat) l'esborrat seria amb ripple → els veïns es desplacen,
+         * però `switchTitolConductorCase` els torna amb `_repararClipsV7`.
+         * @param {Object} cfg
+         * @param {number} clipStart
+         * @param {number} [spanSec] - amplada de la finestra (per defecte 16 s)
+         * @returns {Promise<{removed:number, failed:number, snap:{config:Array, tema:Array}}>}
+         */
+        _cleanCasoBloc: async function (cfg, clipStart, spanSec) {
+            const span = (Number(spanSec) > 0) ? Number(spanSec) : 16;
+            const from = clipStart - 0.05;
+            const to = clipStart + span;
+            const out = { removed: 0, failed: 0, snap: { config: [], tema: [] } };
+            const jobs = [
+                { track: cfg.tracks.video.chyrons, key: 'config', onlyConductor: true },
+                { track: cfg.tracks.video.tematitol, key: 'tema', onlyConductor: false }
+            ];
+            for (const jb of jobs) {
+                let clips = [];
+                try { clips = await getClipsLogic().getTrackClips(jb.track, 'video'); }
+                catch (eC) { log(`   ⚠️ [Cas·neteja] No puc llegir V${jb.track}: ${eC.message}`, 'WARN'); continue; }
+                clips.sort((a, b) => a.start - b.start);
+                for (const c of clips) {
+                    const isCond = String(c.name || '').toUpperCase().indexOf('CONDUCT') !== -1;
+                    const inside = (c.start >= from - 0.001) && (c.start < to);
+                    if (!(inside && (!jb.onlyConductor || isCond))) {
+                        out.snap[jb.key].push({ name: c.name, start: c.start, end: c.end });
+                        continue;
+                    }
+                    const res = String(await callJSX(
+                        `Clips.removeAt(${jb.track}, ${(Number(c.start) || 0).toFixed(4)}, 'video', false)`) || '');
+                    if (res.indexOf('OK') === 0) {
+                        out.removed++;
+                        log(`   🧹 [Cas·neteja] V${jb.track} «${String(c.name || '').substring(0, 45)}» @ ${c.start.toFixed(2)}s retirat [${res}]`);
+                    } else {
+                        out.failed++;
+                        log(`   ⚠️ [Cas·neteja] V${jb.track} «${String(c.name || '').substring(0, 45)}» @ ${c.start.toFixed(2)}s NO retirat [${res}]`, 'WARN');
+                    }
+                    await getUtils().delay(60);
+                }
+            }
+            log(`   🧹 [Cas·neteja] ${out.removed} peça(es) de l'inici del bloc retirades` +
+                (out.failed ? ` · ${out.failed} sense poder retirar` : '') +
+                ` (finestra ${from.toFixed(2)}→${to.toFixed(2)}s)`);
+            return out;
         },
 
         /**
@@ -3161,9 +3980,8 @@
                 const mAll = mRaw ? JSON.parse(mRaw) : [];
                 // (2026-09-29) {0,5} per reconèixer sufíxs de 4-5 lletres ("01lead"), com a
                 // placeChyronTitol: el marcador propi de l'ítem ha de manar sobre la base.
-                const STRUCT_RE = /^\d+[a-z]{0,5}\s*-\s*.+$/i;
                 for (const m of mAll) {
-                    if (!STRUCT_RE.test((m.comments || '').trim())) continue;
+                    if (!isStructuralMarkerComment(m.comments)) continue;
                     const norm = FASTPASS_UI.Logic.Project.normItemId(String(m.comments || "").split('-')[0].trim());
                     if (!norm) continue;
                     if (markersById[norm] === undefined || m.time < markersById[norm]) markersById[norm] = m.time;
@@ -3204,6 +4022,8 @@
                 const ttTime = ordenats[i].placeTime;
                 // (2026-09-22) El revers (titulillo de SALIDA) acaba al TC del MARCADOR de
                 // l'ítem; si l'ítem no té marcador propi es manté la posició del gran.
+                // (2026-10-16 · #166) La cobertura (sortida + congelat) mai no s'atura abans
+                // del gran: `zoneEnd` = el MÉS GRAN dels dos.
                 const mkTime = markerTimeForItem(ordenats[i].item);
                 const endZone = (mkTime !== null) ? mkTime : ttTime;
                 const zoneEnd = Math.max(endZone, ttTime);   // el congelat mai deixa forat davant del gran
@@ -3227,11 +4047,16 @@
                 // (2026-10-07) SORTINT = peça de desaparició del propi Tema-Títol gran
                 // (cfg.temaTitolExit). Ja no es prepara cap inversió ffmpeg aquí.
                 const exitDur = snapDur(exitCfg.durSec);
-                const reverseStart = Math.ceil((endZone - exitDur) / FRAME - 1e-6) * FRAME;
-                const sortMax = (mkTime !== null) ? mkTime : ttTime;
+                // (2026-10-16 · #166) La SORTIDA s'ancora al FINAL DE LA ZONA (`zoneEnd` = IN del
+                // gran), NO al TC del marcador (`endZone`): si el marcador va ABANS del gran,
+                // `zoneEnd > endZone` i, com que el congelat s'estira només fins a l'IN de la
+                // sortida (`_coberturaFreezeEnd`), l'antic ancoratge deixava un forat de fins a
+                // `CONDUCTOR_TAIL` davant del gran.
+                const reverseStart = Math.ceil((zoneEnd - exitDur) / FRAME - 1e-6) * FRAME;
+                const sortMax = zoneEnd;
                 const sortPosOk = (sortMax - exitDur) > gapStart + 0.20;
                 log(`   🕳️ [Titol·Petit·cobertura] Buit de ${gapDur.toFixed(2)}s a V${T} (${gapStart.toFixed(2)}s→${zoneEnd.toFixed(2)}s): titulillo + congelat + desaparició` +
-                    ` · sortida fins a ${sortMax.toFixed(2)}s (${mkTime !== null ? 'marcador de l\'ítem ' + ordenats[i].item : 'el gran'})` +
+                    ` · sortida fins a ${sortMax.toFixed(2)}s (IN del gran${mkTime !== null ? ' · marcador de l\'ítem ' + ordenats[i].item + ' @ ' + mkTime.toFixed(2) + 's' : ''})` +
                     (sortPosOk ? '' : ' [sense espai per a la sortida]') + '.');
 
                 // 1) Titulillo ANIMAT a l'inici del buit. (2026-10-07) L'OUT va 1 frame ABANS
@@ -3243,30 +4068,45 @@
                 const freezeStart = entrantOut;
                 // SORTIDA (desaparició del gran): el seu IN (`reverseStart`, alineat a la rejilla
                 // de frames a partir de la durada de config) i el final enganxat EXACTAMENT al
-                // Tema-Títol gran (endZone).
+                // Tema-Títol gran (`zoneEnd` = IN del gran, mai abans del seu marcador).
 
-                // 2) CONGELAT: frame congelat del FINAL del titulillo, estirat fins al final de la
-                //    zona (el revers el retallarà pel davant).
-                //    (2026-10-01 · #128) Mateixa mecànica que la transició ENTRANT→SORTINT del
-                //    CasB → delegat a `_freezeTitulilloStill` per no duplicar lògica.
-                if ((zoneEnd - freezeStart) > 0.40) {
-                    await this._freezeTitulilloStill(petit, T, freezeStart, zoneEnd, '🧊 [cobertura] congelat estirat');
-                }
-
-                // 3) SORTINT (desaparició del gran) just abans del Tema-Títol gran (transició).
-                //    (2026-09-22) Acaba a endZone = TC del MARCADOR de l'ítem.
+                // 2) SORTINT (desaparició del gran) just abans del Tema-Títol gran (transició).
+                //    (2026-09-22) Acaba a `zoneEnd` = IN del gran (marcador de l'ítem o la seva
+                //    posició, la que sigui MÉS GRAN).
                 //    (2026-10-07) És un retall del PROPI gran (cfg.temaTitolExit); el revers
                 //    ffmpeg queda només com a xarxa de seguretat (`useReverseFallback`).
+                //    (2026-10-16) ARA ES COL·LOCA ABANS DEL CONGELAT. Les dues peces es
+                //    posen amb `Clips.moveToRange` (NO destructiu): el congelat NO retallava
+                //    la sortida i quedaven encavalcades a la pista (TNM V1: congelat
+                //    1.36→32.32 + sortida 32.08→32.32 = 6 frames solapats i la desaparició
+                //    invisible a pantalla). El congelat s'estira només fins a l'IN de la
+                //    sortida (`_coberturaFreezeEnd`).
+                let exitPlaced = false;
                 if (reverseStart > gapStart + 0.20) {
                     const bigName = ordenats[i].name;
                     const okExit = (exitCfg.enabled && bigName)
-                        ? await this._insertTemaTitolExit(bigName, T, reverseStart, endZone, exitCfg.atSec)
+                        ? await this._insertTemaTitolExit(bigName, T, reverseStart, zoneEnd, exitCfg.atSec)
                         : false;
+                    exitPlaced = okExit;
                     if (!okExit && exitCfg.fallbackRev) {
                         const rv = await getRev();
-                        if (rv.ok) await insEnd(rv.name, reverseStart, endZone, '🔴 [cobertura] titulillo SORTINT (revers ffmpeg)');
-                        else log('   ⚠️ [Titol·Petit·cobertura] Sense peça de desaparició ni versió invertida per al gran', 'WARN');
+                        if (rv.ok) {
+                            await insEnd(rv.name, reverseStart, zoneEnd, '🔴 [cobertura] titulillo SORTINT (revers ffmpeg)');
+                            exitPlaced = true;
+                        } else {
+                            log('   ⚠️ [Titol·Petit·cobertura] Sense peça de desaparició ni versió invertida per al gran', 'WARN');
+                        }
                     }
+                }
+
+                // 3) CONGELAT: frame congelat del FINAL del titulillo, estirat fins a l'IN de la
+                //    peça de sortida (o fins a `zoneEnd` si la sortida no s'ha pogut col·locar,
+                //    perquè el forat no quedi descobert).
+                //    (2026-10-01 · #128) Mateixa mecànica que la transició ENTRANT→SORTINT del
+                //    CasB → delegat a `_freezeTitulilloStill` per no duplicar lògica.
+                const freezeEnd = this._coberturaFreezeEnd(zoneEnd, reverseStart, exitPlaced);
+                if ((freezeEnd - freezeStart) > 0.40) {
+                    await this._freezeTitulilloStill(petit, T, freezeStart, freezeEnd, '🧊 [cobertura] congelat estirat');
                 }
                 fets++;
             }
@@ -3280,6 +4120,43 @@
                 if (cl.start <= timeSec && cl.end > timeSec) return cl;
             }
             return null;
+        },
+
+        /**
+         * _isStructuralMarkerComment: Versió MÈTODE de l'ajudant de mòdul
+         * `isStructuralMarkerComment` (exposada per poder-la provar a l'smoke test).
+         * @param {string} comment
+         * @returns {boolean}
+         */
+        _isStructuralMarkerComment: function (comment) {
+            return isStructuralMarkerComment(comment);
+        },
+
+        /**
+         * _coberturaFreezeEnd: Final del CONGELAT de cobertura del titulillo.
+         *
+         * (2026-10-16) El congelat s'estira fins a l'IN de la peça de SORTIDA (quan
+         * aquesta s'ha pogut col·locar) i no fins a `zoneEnd` com abans: les dues peces
+         * es col·loquen amb `Clips.moveToRange` (NO destructiu, sense overwriteClip), de
+         * manera que el congelat NO retallava la sortida i les dues quedaven
+         * ENCAVALCADES a la pista.
+         *
+         * Cas mesurat TN MEDIODIA V1 (Xavi Coral, 15/10/2026, V6):
+         *   congelat 1.36→32.32s  +  sortida 32.08→32.32s  →  6 frames de solapament:
+         *   l'usuari veia el clip de sortida "mig amagat / no surt a pantalla".
+         * Amb la regla nova: congelat 1.36→32.08 + sortida 32.08→32.32 ✓ encadenats.
+         * Si la sortida NO s'ha pogut col·locar, es torna a `zoneEnd` perquè el forat
+         * no quedi descobert.
+         *
+         * @param {number} zoneEnd final de la zona a cobrir (TC del gran / del marcador)
+         * @param {number} reverseStart IN de la peça de sortida
+         * @param {boolean} exitPlaced si la sortida s'ha col·locat de veritat
+         * @returns {number}
+         */
+        _coberturaFreezeEnd: function (zoneEnd, reverseStart, exitPlaced) {
+            if (!exitPlaced) return zoneEnd;
+            if (!isFinite(reverseStart)) return zoneEnd;
+            return Math.min(zoneEnd, reverseStart);
         },
 
         /**
@@ -3310,8 +4187,20 @@
                 'OFF', 'OFD', 'OFT', 'DONAPAS', 'DONA', 'CONNEXIO', 'CONN',
                 'INTRO', 'DIRECTE', 'BONDIA', 'BONDIADIA', 'SALUTACIO'
             ];
-            for (var i = 0; i < tokens.length; i++) {
-                if (clean.indexOf(tokens[i]) === 0) return true;
+            // (2026-10-16) TN MEDIODIA V1 (15/10): l'ítem de PLATÓ que obre el bloc és
+            // "01 PGi - PG Intro" (títol "PG Intro" = pla general d'entrada amb la
+            // presentadora en càmera). El títol NO comença per cap token de presentació
+            // ("PGINTRO"): es prova també SENSE el prefix de plató (PG / PLA / PLATO /
+            // ESTUDI) perquè "PG Intro" → "INTRO" hi entri. Sense això el Conductor
+            // s'ometia ("Cap ítem de plató (intro/donapas/off/directe...)") en un bloc
+            // que sí que té presentadora.
+            var variants = [clean];
+            var stripped = clean.replace(/^(PG|PLA|PLATO|ESTUDI)/, '');
+            if (stripped !== clean) variants.push(stripped);
+            for (var v = 0; v < variants.length; v++) {
+                for (var i = 0; i < tokens.length; i++) {
+                    if (variants[v].indexOf(tokens[i]) === 0) return true;
+                }
             }
             return false;
         },
@@ -3524,15 +4413,18 @@
             }
             log(`👤 [Conductor] Fitxer: ${conductorFile}`);
 
-            // Constants
-            const MARGEN_INICIO = 0.40;         // 0:10
-            const DUR_TEMA_TITOL = 6.24;        // 6:06
+            // Constants (2026-10-16 · BUG #170: ara són les COMPARTIDES del mòdul, perquè el
+            // planificador del cas forçat `_casForceTimes` fa servir els mateixos valors)
+            const MARGEN_INICIO = CAS_MARGEN_INICIO;    // 0:10
+            const DUR_TEMA_TITOL = CAS_DUR_TEMA_TITOL;  // 6:06
 
             try {
                 const markersRaw = await callJSX('Markers.get()');
                 const allMarkers = markersRaw ? JSON.parse(markersRaw) : [];
-                const STRUCTURAL_RE = /^\d+[a-z]{0,3}\s*-\s*.+$/i;
-                const structuralMarkers = allMarkers.filter(m => STRUCTURAL_RE.test((m.comments || "").trim()));
+                // (2026-10-16) Filtre unificat: el marcador de plató pot portar ESPAI al sufix
+                // de l'ítem ("01 PGi - PG Intro", TNM V1) → amb la regex antiga ({0,3}, sense
+                // espai) el Conductor no trobava cap marcador de plató i s'ometia.
+                const structuralMarkers = allMarkers.filter(m => isStructuralMarkerComment(m.comments));
                 structuralMarkers.sort((a, b) => a.time - b.time);
 
                 // ── Trobar el MARCADOR de PLATÓ on col·locar el conductor ─────────
@@ -3685,12 +4577,31 @@
                         }
                     }
                     if (!blockClip && clips.length > 0) blockClip = clips[clips.length - 1];
-                    const clipStart = blockClip ? blockClip.start : (clips.length > 0 ? clips[0].start : 0);
-                    const clipEnd = blockClip ? blockClip.end : (clips.length > 0 ? clips[0].end : targetTime + 10);
+                    let clipStart = blockClip ? blockClip.start : (clips.length > 0 ? clips[0].start : 0);
+                    let clipEnd = blockClip ? blockClip.end : (clips.length > 0 ? clips[0].end : targetTime + 10);
+                    // (2026-10-16 · BUG #170) 🔀 inici del bloc FORÇAT: el botó 🔀 re-col·loca
+                    // l'inici del bloc que hi ha SOTA EL CABEZAL, i els fluxos el desduirien del
+                    // primer marcador de plató/clips[0] → es pren l'inici detectat pel botó.
+                    if (this._blockStartForce !== null && isFinite(this._blockStartForce)) {
+                        const fc = clips.find(c => c.start <= this._blockStartForce + 0.01 && c.end > this._blockStartForce);
+                        clipStart = this._blockStartForce;
+                        if (fc) clipEnd = fc.end;
+                        log(`📌 [Conductor·🔀] inici del bloc forçat pel botó: ${clipStart.toFixed(2)}→${clipEnd.toFixed(2)}s`);
+                    }
                     const margenDisponible = clipEnd - clipStart;
                     const MIN_MARGEN = MARGEN_INICIO + DUR_TEMA_TITOL + 4.40; // ~11.04s
 
-                    if (ttPlaceTime !== null && ttHasRealMarker && (clipEnd - (ttPlaceTime + DUR_TEMA_TITOL)) >= 0.5) {
+                    // (2026-10-16 · BUG #170) ESTAT del cas (botó 🔀 de la fila CHY): si l'usuari
+                    // l'ha fixat, MANA sobre l'auto-detecció per marge. CasA = el Tema-Títol
+                    // obre el bloc i el Conductor va DESPRÉS del gran; CasB = el Conductor obre
+                    // el bloc. L'estat es manté per a totes les col·locacions següents.
+                    if (this._titolCaseMode) {
+                        const ft = this._casForceTimes(this._titolCaseMode, clipStart, null, ttPlaceTime);
+                        conductTime = ft.conductor;
+                        log(`📌 [Conductor·ESTAT ${ft.cas}] ${ft.motiu} → Conductor @ ${conductTime.toFixed(2)}s` +
+                            ` (bloc @ ${clipStart.toFixed(2)}s) [informatiu: Tema-Títol del bloc @ ${ft.titol.toFixed(2)}s]` +
+                            ` (estat fixat pel botó 🔀; Ctrl+clic al 🔀 = AUTO)`);
+                    } else if (ttPlaceTime !== null && ttHasRealMarker && (clipEnd - (ttPlaceTime + DUR_TEMA_TITOL)) >= 0.5) {
                         // Cas A: just després del Tema‑Titol REAL
                         conductTime = ttPlaceTime + DUR_TEMA_TITOL;
                         log(`📌 [Conductor·CasA] Després del Tema‑Titol real: ${ttPlaceTime.toFixed(2)} + ${DUR_TEMA_TITOL.toFixed(2)} → @ ${conductTime.toFixed(2)}s`);
@@ -3729,7 +4640,11 @@
 
         placeChyronLloc: async function () {
             await this._placeChyronsByType(
-                c => c.name.includes("Lloc") || c.name.includes("Data") || (c.rol || '').toUpperCase() === "LLOCDATA",
+                // (2026-10-16) GUARDA DE FAMÍLIA: una TRADUCCIÓ no entra mai a LLOC/DATA
+                // — el TEXT traduït pot contenir "Lloc" o "Data" (bug TNC V3, vegeu
+                // `_isTraduccioWott`). La col·loca la fase TRADUCCIÓ.
+                c => !this._isTraduccioWott(c) &&
+                    (c.name.includes("Lloc") || c.name.includes("Data") || (c.rol || '').toUpperCase() === "LLOCDATA"),
                 (c, cfg) => [cfg.tracks.video.llocdata, cfg.tracks.video.lloc, cfg.tracks.video.chyrons],
                 "Lloc"
             );
@@ -3741,7 +4656,12 @@
             // Cas real TNV 2026-09-21: el rètol "Directe PRESENCIAL Berlín" queia a V7
             // perquè V6 estava ocupat.
             await this._placeChyronsByType(
-                c => (c.rol || '').toUpperCase() === "NOMCARREC" || c.name.includes("Nom") || c.name.includes("Carrec"),
+                // (2026-10-16) GUARDA DE FAMÍLIA (bug TNC V3 2026-10-15): la traducció
+                // «…_644349_TRADUCCIO [2-3] Només n'existei…» era capturada aquí pel
+                // `includes("Nom")` del TEXT → acabava a V7 damunt del nom-càrrec i
+                // duplicada a V8. Una TRADUCCIÓ NOMÉS la col·loca `placeChyronTraduccio`.
+                c => !this._isTraduccioWott(c) &&
+                    ((c.rol || '').toUpperCase() === "NOMCARREC" || c.name.includes("Nom") || c.name.includes("Carrec")),
                 (c, cfg) => [cfg.tracks.video.chyrons],
                 "Nom"
                 // ── Reencuadre automàtic DESACTIVAT de moment: el botó NOM només col·loca
@@ -3771,11 +4691,9 @@
             try {
                 const markersRaw = await callJSX('Markers.get()');
                 const allMarkers = markersRaw ? JSON.parse(markersRaw) : [];
-                const STRUCTURAL_COMMENTS_RE = /^\d+[a-z]{0,3}\s*-\s*.+$/i;
-                const structuralMarkers = allMarkers.filter(m => {
-                    const cmt = (m.comments || "").trim();
-                    return STRUCTURAL_COMMENTS_RE.test(cmt);
-                });
+                // (2026-10-16) Filtre unificat (`isStructuralMarkerComment`): sufix amb espai
+                // ("01 PGi - PG Intro") inclòs.
+                const structuralMarkers = allMarkers.filter(m => isStructuralMarkerComment(m.comments));
                 if (structuralMarkers.length === 0) {
                     log("⚠️ [Traducció] No hi ha marcadors estructurals.", "WARN");
                     return;
@@ -3817,9 +4735,11 @@
                 for (const mk of markersFull) {
                     const entry = structureById[mk.fullId];
                     if (!entry || !entry.chyrons || entry.chyrons.length === 0) continue;
-                    const traduccionsRaw = entry.chyrons.filter(c =>
-                        (c.rol || '').toUpperCase().includes("TRADUCCIO") || c.name.toUpperCase().includes("TRADUCCIO")
-                    );
+                    // (2026-10-16) Predicat ÚNIC de traducció (`_isTraduccioWott`, ACCENT-SAFE):
+                    // abans era `.includes("TRADUCCIO")` sense accent → els wott anomenats
+                    // «_TRADUCCIÓ» quedaven fora d'aquesta fase (només col·locaven els
+                    // generats amb el rol sense accent, com a TNC V3).
+                    const traduccionsRaw = entry.chyrons.filter(c => this._isTraduccioWott(c));
                     // RE-GENERACIONS (#136, 2026-10-02): el MATEIX rètol de traducció
                     // re-generat (mateixa línia, tc, text i índex [i-N]) pot estar al NAS
                     // 2 cops. Com que el tc és idèntic, abans es col·locaven TOTS i sortien
@@ -3957,9 +4877,17 @@
             // TITOLET queden exclosos del Resto i no es col·loquen enlloc.
             const isTitol = c => (c.rol || '').toUpperCase() === "TEMA-TITOL" || c.name.includes("Tema-Titol");
             const isConductor = c => (c.rol || '').toUpperCase() === "CONDUCTOR";
-            const isLloc = c => c.name.includes("Lloc") || c.name.includes("Data") || (c.rol || '').toUpperCase() === "LLOCDATA";
-            const isNom = c => (c.rol || '').toUpperCase() === "NOMCARREC" || c.name.includes("Nom") || c.name.includes("Carrec");
-            const isTraduccio = c => (c.rol || '').toUpperCase().includes("TRADUCCIO") || c.name.toUpperCase().includes("TRADUCCIO");
+            // (2026-10-16) GUARDA DE FAMÍLIA: les 3 famílies amb text lliure porten el
+            // predicat de traducció. El TEXT del rètol traduït pot començar/contain
+            // "Nom", "Lloc", "Data" o "Firma" → sense guarda, la traducció cau a la
+            // família equivocada (bug TNC V3: traducció a V7 + duplicada a V8).
+            const isLloc = c => !this._isTraduccioWott(c) &&
+                (c.name.includes("Lloc") || c.name.includes("Data") || (c.rol || '').toUpperCase() === "LLOCDATA");
+            const isNom = c => !this._isTraduccioWott(c) &&
+                ((c.rol || '').toUpperCase() === "NOMCARREC" || c.name.includes("Nom") || c.name.includes("Carrec"));
+            // (2026-10-16) `_isTraduccioWott` és ACCENT-SAFE: el filtre antic
+            // (`.includes("TRADUCCIO")`) no veia «_TRADUCCIÓ» amb accent.
+            const isTraduccio = c => this._isTraduccioWott(c);
             await this._placeChyronsByType(
                 c => !isTitol(c) && !isConductor(c) && !isLloc(c) && !isNom(c) && !isTraduccio(c),
                 (c, cfg) => {

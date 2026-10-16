@@ -581,12 +581,35 @@
         },
 
         /**
+         * _isStill: Cert si el NOM del mèdia és una IMATGE FIXA (PNG/JPG/TIFF/PSD/BMP/GIF/
+         * EPS/AI). Mateixa regla que `flow_chyrons.js::_isStillMedia` (si el mòdul de
+         * Chyrons hi és, es reutilitza el seu; si no, s'aplica la mateixa expressió).
+         * (2026-10-16 · BUG #169) El «congelat» que es REPLICA a la pista del tema-títol
+         * NOMÉS pot ser una imatge fixa: un grafisme de vídeo (mov/mp4) no és cap congelat.
+         * @param {string} name
+         * @returns {boolean}
+         */
+        _isStill: function (name) {
+            var chy = W.Chyrons;
+            if (chy && typeof chy._isStillMedia === 'function') return chy._isStillMedia(name);
+            return /\.(png|jpe?g|tiff?|psd|bmp|gif|eps|ai)$/i.test(String(name || ''));
+        },
+
+        /**
          * _freezeUnderCti: CONGELAT que hi ha sota el CLIP DE REFERÈNCIA (el PNG/frame del
          * tema-títol de la pista de grafismes). Retorna { name, start, end } o null.
          * S'ha de llegir ABANS d'insertar el gràfic (després el clip que hi hauria sota la
          * referència seria el gràfic inserit).
          * El PNG de congelat s'ha d'estirar fins al FINAL D'AQUEST clip (no fins al final del
          * gràfic ni del clip del programa).
+         *
+         * (2026-10-16 · BUG #169) NOMÉS s'accepta com a congelat una IMATGE FIXA. ABANS
+         * qualsevol clip de V3 servia: si sota el cabezal hi havia un GRAFISME (el que acaba
+         * de col·locar aquest mateix flux, el d'un ítem anterior amb marcador, o el clip
+         * SELECCIONAT a V3) el seu NOM es replicava a la pista del tema-títol (V6) →
+         * «APP MAPA REVOLTES» apareixia a V3 I a V6 i, com que l'insert de V6 és una
+         * sobreescriptura ESTIRADA fins al final del gràfic, també TALLAVA el contingut
+         * que hi hagués a V6.
          */
         _freezeUnderCti: async function (refSec) {
             try {
@@ -595,6 +618,12 @@
                     var c = clips[i];
                     if (refSec >= c.start - 0.001 && refSec < c.end - 0.001) {
                         var nm = c.name || c.mediaName || stripExt(c.mediaPath || '');
+                        if (!this._isStill(nm)) {
+                            L('   ⏭️ [MAPA] V' + TRACK_GRAF + ' sota la referència: "' +
+                                String(nm).substring(0, 50) + '" NO és cap congelat (no és una ' +
+                                'imatge fixa) → no es replica a V' + TRACK_FREEZE, 'WARN');
+                            continue;
+                        }
                         L('🗺️ [MAPA] Congelat a V' + TRACK_GRAF + ': "' + nm + '" @ ' +
                             c.start.toFixed(2) + '-' + c.end.toFixed(2) + 's');
                         return { name: nm, start: c.start, end: c.end };
@@ -928,7 +957,9 @@
             // 4. CONGELAT (PNG del tema-títol) a la pista de congelat, entre l'inici del clip
             //    de referència i el final del GRÀFIC real inserit (no fins al final del clip
             //    del gràfic ni del clip del programa).
-            if (freeze && freeze.name) {
+            //    (2026-10-16 · BUG #169) NOMÉS si el congelat és una IMATGE FIXA (vegeu
+            //    `_freezeUnderCti`): un grafisme NO es replica a V6.
+            if (freeze && freeze.name && this._isStill(freeze.name)) {
                 var fzEsc = U().escape(freeze.name);
                 var fzEnd = grafEnd;
                 var resF = await callJSX("Clips.insert('" + fzEsc + "', " + TRACK_FREEZE + ", " +
@@ -941,6 +972,12 @@
                 L('🗺️ [MAPA] V' + TRACK_FREEZE + ' (congelat): "' + freeze.name + '" @ ' +
                     refSec.toFixed(2) + 's → ' + fzEnd.toFixed(2) + 's (final del gràfic de V' +
                     TRACK_GRAF + ') [insert=' + resF + ' · endAt=' + resFE + ']');
+            } else if (freeze && freeze.name) {
+                // (2026-10-16 · BUG #169) Xarxa de seguretat: un «congelat» que NO siga una
+                // imatge fixa (p. ex. un grafisme) no s'ha de replicar MAI a V6: duplicaria
+                // el gràfic (V3+V6) i tallaria el contingut del tema-títol.
+                L('⚠️ [MAPA] El congelat de referència "' + String(freeze.name).substring(0, 50) +
+                    '" no és una imatge fixa → V' + TRACK_FREEZE + ' no es replica', 'WARN');
             } else if (!freeze) {
                 L('⚠️ [MAPA] Sense congelat de referència → V' + TRACK_FREEZE + ' no es replica', 'WARN');
             }

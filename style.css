@@ -298,10 +298,25 @@ button.icon-only.doble { font-size: 11px !important; letter-spacing: -0.5px; }
 .mode-work .graphics-group { display: flex; gap: 4px; align-items: flex-start; }
 .mode-work .gfx-col { display: flex; flex-direction: column; gap: 4px; flex: 1 1 0; min-width: 128px; }
 .mode-work .graphics-group > .row-break { display: none; }
-/* CHYRONS en TREBALL: COLOCAR/REPART en una sola fila i ocupant tot l'ample
-   (abans 2×30px fixos → sobrava un botó d'espai a la dreta). */
-.mode-work .graphics-strip.chy-strip { grid-template-columns: repeat(2, 1fr); }
-.mode-work .graphics-strip.chy-strip button { width: 100%; }
+/* CHYRONS en TREBALL: els 3 botons (🎯 COLOCAR · ↔️ REPARTIR · 🔀 CAS A/B) QUADRATS i
+   alineats amb els del grup GRÀFICS (3×30 px + gaps = 98 px, la mateixa amplada que cols-3).
+   (2026-10-16) ABANS: `repeat(2, 1fr)` + `width:100%` = dos botons ESTIRATS; amb el tercer
+   botó (cas intro llarga/corta) la fila passa a 3 botons quadrats de 30×30 px. */
+.mode-work .graphics-strip.chy-strip { grid-template-columns: repeat(3, 30px); }
+.mode-work .graphics-strip.chy-strip button { width: 30px; }
+/* ESTAT del cas de la intro (botó 🔀 de CHY, BUG #170): el botó duu SEMPRE l'estat actiu a la
+   cantonada (A = intro LLARGA · B = intro CURTA) i, quan l'estat està FIXAT, un anell de color
+   (A = ambre, B = cian). En AUTO no hi ha etiqueta ni anell (comportament històric). */
+#btnChyronCas { position: relative; }
+#btnChyronCas.cas-A { box-shadow: inset 0 0 0 2px #ffcc00; }
+#btnChyronCas.cas-B { box-shadow: inset 0 0 0 2px #4fc3f7; }
+#btnChyronCas.cas-A::after, #btnChyronCas.cas-B::after {
+    content: ''; position: absolute; top: 1px; right: 1px;
+    font-size: 8px !important; font-weight: 700; line-height: 1.1; padding: 0 1px;
+    border-radius: 2px; color: #151515;
+}
+#btnChyronCas.cas-A::after { content: 'A'; background: #ffcc00; }
+#btnChyronCas.cas-B::after { content: 'B'; background: #4fc3f7; }
 /* Separador de fila dins del .graphics-group */
 .row-break { flex-basis: 100%; width: 0; height: 0; margin: 0; padding: 0; }
 

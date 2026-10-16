@@ -1,10 +1,15 @@
 /**
  * ============================================================================
- * LOGIC: ANALYSIS - v1.1.0
- * Sistema de Depuración y Análisis de Marcadores de Ítems
- * Gestiona el archivo JSON de análisis con 4 fases:
- *   escaleta, crudo, cocinado, usuario
- * Cada fase usa MERGE para acumular sub-datos (inout + marks)
+ * LOGIC: ANALYSIS - v2.0.0
+ * Anàlisi d'estructura de projecte. Les 4 fases (escaleta, crudo, cocinado,
+ * usuario) viuen a la secció `analysis` del manifest de sessió
+ * (.fastpass.json → FASTPASS_UI.Core.AnalysisCenter, FONT ÚNICA).
+ * Cada fase usa MERGE per acumular sub-dades (inout + marks).
+ *
+ * (2026-10-15) CENTRALITZACIÓ: aquest mòdul ja NO és la font de les dades.
+ *   · _load(ctx)  → llegeix `manifest.analysis` (abans: analisis_estructura/*.json)
+ *   · saveEscaleta/appendPhase → escriuen la secció `analysis` del manifest
+ *   · _save(path) → només el MIRALL .json llegible (decoració per a humans)
  * ============================================================================
  */
 (function () {
@@ -13,6 +18,9 @@
 
     const callJSX = (s) => window.FASTPASS_UI.Utils.callJSX(s);
     const log = (m) => window.FASTPASS_UI.Utils.log(m, 'DEBUG');
+    /** AC: AnalysisCenter (font única). SM: SessionManifest. Es resolen a cada crida. */
+    const AC = () => window.FASTPASS_UI.Core && window.FASTPASS_UI.Core.AnalysisCenter;
+    const SM = () => window.FASTPASS_UI.SessionManifest;
 
     FASTPASS_UI.Logic.Analysis = {
 
@@ -29,18 +37,38 @@
         },
 
         /**
-         * Carga el archivo JSON de análisis existente, o retorna objeto vacío.
+         * _load: Llegeix les fases d'anàlisi.
+         *   · _load(ctx)  → secció `analysis` del manifest de sessió (PREFERENT)
+         *   · _load(path) → llegat: llegeix el mirall .json del disc
+         * @param {Object|string} ctxOrPath
+         * @returns {Promise<Object>} { meta, escaleta, crudo, cocinado, usuario }
          */
-        _load: async function (path) {
+        _load: async function (ctxOrPath) {
+            if (ctxOrPath && typeof ctxOrPath === 'object') {
+                const m = await SM().load(ctxOrPath);
+                return (m && m.analysis) ? m.analysis : {};
+            }
             // (2026-10-02) IO.readTxt llegeix amb ANSI: els títols amb accents de l'anàlisi
             // tornaven malmesos (i el re-desar els fixava definitivament).
-            const raw = window.FASTPASS_UI.Utils._fromMojibake(await callJSX("IO.readTxt('" + path + "')"), 'analisi');
+            const raw = window.FASTPASS_UI.Utils._fromMojibake(await callJSX("IO.readTxt('" + ctxOrPath + "')"), 'analisi');
             if (!raw || raw.startsWith('ERR') || raw === '') return {};
             try { return JSON.parse(raw); } catch (e) { return {}; }
         },
 
         /**
-         * Guarda el objeto data como JSON en la ruta especificada.
+         * _mirror: Reesriu el mirall .json (només humans) a partir del manifest.
+         * @param {Object} ctx
+         */
+        _mirror: async function (ctx) {
+            try {
+                const m = await SM().load(ctx);
+                await this._save(this._getPath(ctx), (m && m.analysis) || {});
+            } catch (eM) { log("⚠️ [Analysis] mirall: " + eM.message); }
+        },
+
+        /**
+         * _save: Escriu un MIRALL .json llegible (només per a humans). La font de
+         * dades és la secció `analysis` del manifest; això no la substitueix.
          */
         _save: async function (path, data) {
             const json    = JSON.stringify(data, null, 2);
@@ -72,8 +100,13 @@
          */
         saveEscaleta: async function (ctx, escaletaFile, lines, contextItems, trimBounds) {
             const path = this._getPath(ctx);
-            const ex   = await this._load(path);
+            const ex   = await this._load(ctx);
             const now  = new Date().toISOString();
+            const ac   = AC();
+            if (!ac || !ac.writeAnalysis) {
+                log("⚠️ [Analysis] AnalysisCenter no disponible: la fase escaleta NO es desa");
+                return;
+            }
 
             // Construir itemsBloc a partir de lines
             var itemsBloc = [];
@@ -94,25 +127,26 @@
                 });
             }
 
-            await this._save(path, {
-                ...ex,
+            // (2026-10-15) FONT ÚNICA: la fase va al manifest (`analysis.escaleta`);
+            // el .json d'analisis_estructura només és el mirall llegible.
+            await ac.writeAnalysis(ctx, {
                 meta: {
-                    ...(ex.meta || {}),
                     prog: ctx.progData.archivo,
                     bloc: ctx.bloque,
                     data: ctx.dateDir.substring(0, 5),
                     escaletaFile: escaletaFile,
-                    generatedAt: ex.meta ? (ex.meta.generatedAt || now) : now,
+                    generatedAt: (ex.meta && ex.meta.generatedAt) || now,
                     lastUpdatedAt: now,
-                    phases: { ...((ex.meta && ex.meta.phases) || {}), escaleta: true }
+                    phases: { escaleta: true }
                 },
                 escaleta: {
                     itemsBloc: itemsBloc,
                     itemsContexte: contextItems || {},
                     trimBounds: trimBounds || null
                 }
-            });
-            log("📊 [Analysis] escaleta → " + path);
+            }, { reason: 'escaleta' });
+            await this._mirror(ctx);
+            log("📊 [Analysis] escaleta → manifest (mirall: " + path + ")");
         },
 
         /**
@@ -124,24 +158,27 @@
          * @param {Object} phaseData - Sub-datos de la fase
          */
         appendPhase: async function (ctx, phaseName, phaseData) {
-            const path = this._getPath(ctx);
-            const ex   = await this._load(path);
-            const now  = new Date().toISOString();
+            const now = new Date().toISOString();
+            const ac  = AC();
+            if (!ac || !ac.writeAnalysis) {
+                log("⚠️ [Analysis] AnalysisCenter no disponible: la fase " + phaseName + " NO es desa");
+                return;
+            }
 
-            // MERGE en lugar de REPLACE: permite múltiples sub-fases (inout, marks)
-            // dentro de la misma fase (crudo, cocinado, usuario).
-            const mergedPhaseData = { ...(ex[phaseName] || {}), ...phaseData };
+            // (2026-10-15) FONT ÚNICA: la fase va al manifest (`analysis.<fase>`).
+            // El merge profund del manifest (SessionManifest._deepMerge) fa que
+            // afegir-hi sub-dades (inout, marks) NO trepitgi les anteriors: mateix
+            // comportament que l'antic `{ ...ex[fase], ...phaseData }`.
+            const patch = {
+                meta: { lastUpdatedAt: now, phases: {} },
+                // Clau dinàmica: la fase que arriba (crudo/cocinado/usuario/escaleta)
+                [phaseName]: phaseData || {}
+            };
+            patch.meta.phases[phaseName] = true;
 
-            await this._save(path, {
-                ...ex,
-                meta: {
-                    ...(ex.meta || {}),
-                    lastUpdatedAt: now,
-                    phases: { ...((ex.meta && ex.meta.phases) || {}), [phaseName]: true }
-                },
-                [phaseName]: mergedPhaseData
-            });
-            log("📊 [Analysis] " + phaseName + " → " + path);
+            await ac.writeAnalysis(ctx, patch, { reason: phaseName });
+            await this._mirror(ctx);
+            log("📊 [Analysis] " + phaseName + " → manifest (mirall: " + this._getPath(ctx) + ")");
         }
     };
 

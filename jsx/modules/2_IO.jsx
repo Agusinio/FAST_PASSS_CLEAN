@@ -176,6 +176,39 @@ FASTPASS.IO = (function () {
         },
 
         /**
+         * appendTxt: Afegeix contingut de text AL FINAL d'un fitxer existent.
+         *
+         * Per què: el manifest de sessió (`.fastpass.json`) s'ha fet gran (pretty
+         * print + seccions d'anàlisi) i el payload d'un `evalScript` no pot portar
+         * centenars de KB en un sol literal. `SessionManifest` l'escriu per trossos:
+         * el primer amb `writeTxt` i la resta amb aquesta funció.
+         *
+         * ⚠️ (2026-10-15) NO s'assigna `encoding` en mode append: ExtendScript
+         * escriu la marca BOM en OBRIR amb 'w' + UTF-8 i, si es repetís al mig del
+         * fitxer, el JSON quedaria corrupte. El text que s'hi aboca és ASCII pur
+         * (ja ve escapat amb \uXXXX des de `Utils.escape`), així que els bytes
+         * afegits són idèntics en qualsevol codificació.
+         *
+         * @param {string} path - Ruta completa del fitxer
+         * @param {string} content - Text ASCII a afegir
+         * @returns {string} "OK" o "ERR:..."
+         */
+        appendTxt: function(path, content) {
+            try {
+                var f = new File(path);
+                // Si el fitxer encara no hi és, el camí normal (amb BOM) és writeTxt.
+                if (!f.exists) return this.writeTxt(path, content);
+                if (!f.parent.exists) f.parent.create();
+                f.open('a');
+                f.write(content);
+                f.close();
+                return "OK";
+            } catch(e) {
+                return "ERR en IO.jsx (appendTxt): " + e.message;
+            }
+        },
+
+        /**
          * exists: Comprova si el fitxer existeix en el sistema d'arxius.
          */
         exists: function(path) {

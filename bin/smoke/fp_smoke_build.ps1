@@ -1,0 +1,115 @@
+# ============================================================================
+# fp_smoke_build.ps1 · Construeix i executa el harness headless del manifest
+# ----------------------------------------------------------------------------
+# Embolcalla (inline) el bootstrap + stubs/tests + els fitxers REALS del repo
+# (analysis_center.js, session_manifest.js, 16_Analysis_Logic.js) dins un HTML
+# i el passa per Edge headless amb --dump-dom.
+# El bootstrap (fp_smoke_boot.js) va PRIMER perque captura els SyntaxError dels
+# altres blocs i els deixa escrits dins <pre id="out">.
+# NOTA: en aquest equip Chrome te la politica HKLM UserDataDir fixada (per aixo
+#       no es pot usar en headless); Edge si que accepta --user-data-dir.
+# Ús:  powershell -NoProfile -ExecutionPolicy Bypass -File .\bin\smoke\fp_smoke_build.ps1
+#
+# (2026-10-15) VERSIONAT AL REPO: l'original vivia només a %TEMP%. Ara `$repo` es
+# dedueix de la ubicació de l'script (<repo>\bin\smoke\…) i els fitxers del
+# harness (boot/ac/runner/probe) es busquen PRIMER al costat de l'script i, si no
+# hi són, a $env:TEMP (còpia històrica de treball). Els artefactes (HTML, DOM,
+# resultat) segueixen escrivint-se a $env:TEMP.
+# ============================================================================
+$ErrorActionPreference = 'Stop'
+
+$repo = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+$tmp  = if ($env:TEMP) { $env:TEMP } else { 'c:\Users\gonz_agu\AppData\Local\Temp' }
+
+# Fitxers del harness: al costat de l'script (repo) → si no, a %TEMP%.
+function Resolve-Harness([string]$name) {
+    $local = Join-Path $PSScriptRoot $name
+    if (Test-Path $local) { return $local }
+    return (Join-Path $tmp $name)
+}
+
+$files = @(
+    (Resolve-Harness 'fp_smoke_boot.js'),
+    (Resolve-Harness 'fp_smoke_ac.js'),
+    (Join-Path $repo 'js\core\escaleta_timecode.js'),
+    (Join-Path $repo 'js\core\analysis_center.js'),
+    (Join-Path $repo 'js\core\session_manifest.js'),
+    (Join-Path $repo 'js\core\assembly_context.js'),
+    (Join-Path $repo 'js\logic\16_Analysis_Logic.js'),
+    (Join-Path $repo 'js\workflows\flow_markers.js'),
+    (Join-Path $repo 'js\workflows\flow_mainButton.js'),
+    # (2026-10-15) Prova F4/F5: productors que el harness no carregava.
+    (Join-Path $repo 'js\workflows\flow_chyrons.js'),
+    (Join-Path $repo 'js\workflows\flow_graphics.js'),
+    # (2026-10-16 · BUG #169) Guarda d'IMATGE FIXA del congelat que es replica a V6.
+    (Join-Path $repo 'js\workflows\flow_mapa.js'),
+    (Resolve-Harness 'fp_probe_f45.js'),
+    # (2026-10-16 · BUG #167) Rètol de localització del directe → ítem IPD/directe.
+    (Resolve-Harness 'fp_probe_ipd_chyron.js'),
+    # (2026-10-16 · BUG #170) ESTAT de la intro del bloc (botó 🔀) + neteja sense ripple.
+    (Resolve-Harness 'fp_probe_cas_intro.js'),
+    (Resolve-Harness 'fp_smoke_runner.js')
+)
+
+# Traçabilitat: quins fitxers entren al bundle i d'on surten (repo vs %TEMP%).
+Write-Host "REPO: $repo"
+foreach ($f in $files) {
+    $org = $f
+    if ($org.StartsWith($repo)) { $org = '<repo>' + $org.Substring($repo.Length) }
+    elseif ($org.StartsWith($tmp)) { $org = '<tmp>' + $org.Substring($tmp.Length) }
+    Write-Host ("  · $org")
+}
+
+$sb = New-Object System.Text.StringBuilder
+[void]$sb.AppendLine('<!DOCTYPE html><html lang="ca"><head><meta charset="utf-8"><title>FASTPASS smoke</title></head><body><pre id="out">RUNNING</pre>')
+foreach ($f in $files) {
+    if (-not (Test-Path $f)) { throw "no trobat: $f" }
+    [void]$sb.AppendLine('<script>')
+    [void]$sb.AppendLine((Get-Content -Raw -Encoding UTF8 $f))
+    [void]$sb.AppendLine('</script>')
+}
+[void]$sb.AppendLine('</body></html>')
+
+$html = Join-Path $tmp 'fp_smoke_ac.html'
+[System.IO.File]::WriteAllText($html, $sb.ToString(), (New-Object System.Text.UTF8Encoding($false)))
+Write-Host "HTML construit: $html ($([Math]::Round((Get-Item $html).Length / 1KB)) KB)"
+
+$browser = @(
+    "${env:ProgramFiles(x86)}\Microsoft\Edge\Application\msedge.exe",
+    "$env:ProgramFiles\Microsoft\Edge\Application\msedge.exe",
+    "$env:LOCALAPPDATA\Microsoft\Edge\Application\msedge.exe"
+) | Where-Object { Test-Path $_ } | Select-Object -First 1
+if (-not $browser) { throw 'msedge.exe no trobat: no es pot validar headless' }
+Write-Host "Navegador: $browser"
+
+$stamp = Get-Date -Format 'HHmmss'
+$prof  = Join-Path $tmp "fp_edge_profile_$stamp"
+New-Item -ItemType Directory -Force -Path $prof | Out-Null
+$raw = Join-Path $tmp 'fp_smoke_ac_dom.txt'
+$err = Join-Path $tmp 'fp_smoke_ac_err.txt'
+$url = 'file:///' + ($html -replace '\\', '/')
+
+$pargs = @(
+    '--headless=new', '--no-sandbox', '--disable-gpu', '--no-first-run',
+    '--no-default-browser-check', "--user-data-dir=$prof",
+    '--dump-dom', '--virtual-time-budget=30000', $url
+)
+$proc = Start-Process -FilePath $browser -ArgumentList $pargs -RedirectStandardOutput $raw -RedirectStandardError $err -Wait -PassThru -NoNewWindow
+Write-Host "exit=$($proc.ExitCode) dom=$((Get-Item $raw).Length) bytes"
+
+$dom = Get-Content -Raw $raw
+$m = [regex]::Match($dom, '(?s)<pre id="out">(.*?)</pre>')
+if (-not $m.Success) {
+    Write-Host '--- stderr ---'
+    Write-Host (Get-Content -Raw $err)
+    throw 'no s''ha pogut extreure <pre id="out"> del DOM'
+}
+$txt = $m.Groups[1].Value
+$txt = $txt -replace '&lt;', '<' -replace '&gt;', '>' -replace '&quot;', '"' -replace '&#39;', "'" -replace '&amp;', '&'
+$txt = $txt -replace "`r`n", "`n"
+
+$out = Join-Path $tmp 'fp_smoke_ac_result.txt'
+[System.IO.File]::WriteAllText($out, $txt, (New-Object System.Text.UTF8Encoding($false)))
+Write-Host "RESULTAT: $out"
+Write-Host ''
+Write-Host $txt

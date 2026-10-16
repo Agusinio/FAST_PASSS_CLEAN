@@ -12,6 +12,47 @@
     const log = (...args) => getUtils().log(...args);
     const callJSX = (s) => getUtils().callJSX(s);
 
+    /**
+     * toManifestItems: Converteix les línies de l'escaleta del bloc
+     * (`jsonData.escaleta.liniesEscaleta`) a la forma PERSISTIDA del master
+     * `escaletaItems` del manifest v2.0.
+     *
+     * (2026-10-15 · F6c) ÚNIC lloc on es defineix la forma del master: els tres
+     * escriptors de «Muntar» (camí de precisió, camí de fallback i
+     * reconstrucció) la compartien copiada-i-engolida; ara tots tres criden
+     * aquest helper perquè no divergeixin.
+     *
+     * Qui consumeix aquest master:
+     *   · `SessionManifest.getItems()` → `getEscaletaItems()` (el master mana
+     *     sobre el mirall `analysis.escaleta.itemsBloc` i sobre la vista).
+     *   · `SessionManifest.save()` → `_rebuild()` →
+     *     `AnalysisCenter.composeStructure()`, que reconstrueix la vista
+     *     `manifest.structure` a partir d'aquestes línies (finestres, clips,
+     *     rètols i gràfics per ítem). Per tant: si s'hi afegeix un camp, la
+     *     vista el veurà; si se n'hi treu, la vista el perdrà.
+     * @param {Array<Object>} allItems - línies de l'escaleta (JSON del bloc)
+     * @returns {Array<Object>} ítems del master `escaletaItems`
+     */
+    function toManifestItems(allItems) {
+        if (!Array.isArray(allItems)) return [];
+        return allItems.map(function (l) {
+            const it = l || {};
+            return {
+                sequencia: it.sequencia,
+                num: it.num,
+                titol: it.titol,
+                teVideo: it.teVideo,
+                horaEntradaOnAir: it.horaEntradaOnAir,
+                horaEntradaPrevista: it.horaEntradaPrevista,
+                horaSortidaPrevista: it.horaSortidaPrevista,
+                duradaOnAir: it.duradaOnAir,
+                durada: it.durada,
+                agrupacio: it.agrupacio,
+                flotant: it.flotant || false
+            };
+        });
+    }
+
     FASTPASS_UI.Workflows.MainButton = {
 
         runMainAction: async function (action, data) {
@@ -864,19 +905,7 @@
                                             ...bounds.ref,  // { worldSecMediaStart, mp4ExpandedInPoint, worldBlockStartSec, worldBlockEndSec, InTier, OutTier, tlClipStartSec:null, offsetSec:null }
                                             tlBlockInPointSec: bounds.mp4ExpandedInPoint  // mp4ExpandedInPoint SENSE offset global (sweet - handle)
                                         },
-                                        escaletaItems: allItems.map(l => ({
-                                            sequencia: l.sequencia,
-                                            num: l.num,
-                                            titol: l.titol,
-                                            teVideo: l.teVideo,
-                                            horaEntradaOnAir: l.horaEntradaOnAir,
-                                            horaEntradaPrevista: l.horaEntradaPrevista,
-                                            horaSortidaPrevista: l.horaSortidaPrevista,
-                                            duradaOnAir: l.duradaOnAir,
-                                            durada: l.durada,
-                                            agrupacio: l.agrupacio,
-                                            flotant: l.flotant || false
-                                        })),
+                                        escaletaItems: toManifestItems(allItems),
                                         phases: { boundsCalculated: true }
                                     }));
 
@@ -1251,19 +1280,7 @@
                                                 ...fallbackBounds.ref,
                                                 tlBlockInPointSec: fallbackBounds.mp4ExpandedInPoint  // expanded SENSE offset (consistent amb path principal)
                                             },
-                                            escaletaItems: allItems.map(l => ({
-                                                sequencia: l.sequencia,
-                                                num: l.num,
-                                                titol: l.titol,
-                                                teVideo: l.teVideo,
-                                                horaEntradaOnAir: l.horaEntradaOnAir,
-                                                horaEntradaPrevista: l.horaEntradaPrevista,
-                                                horaSortidaPrevista: l.horaSortidaPrevista,
-                                                duradaOnAir: l.duradaOnAir,
-                                                durada: l.durada,
-                                                agrupacio: l.agrupacio,
-                                                flotant: l.flotant || false
-                                            })),
+                                            escaletaItems: toManifestItems(allItems),
                                             phases: { boundsCalculated: true }
                                         });
                                         log(`📡 [Fallback] cleanFeed: in=${fallbackBounds.mp4ExpandedInPoint.toFixed(1)}s out=${fallbackBounds.mp4ExpandedOutPoint.toFixed(1)}s`);
@@ -1725,6 +1742,13 @@
                 window.FASTPASS_UI.State.hasMedia = !!media.mp4;
             }
             // Generar estructura de bloques a partir de los Wotts
+            // ⚠️ (2026-10-15 · F6c) NO CONFONDRE: aquest `State.structure` és la
+            // LLISTA DE BLOCS WOTT (rètols del NAS, via `Parse.files`) — una
+            // variable d'àmbit UI. La secció `structure` del manifest v2.0
+            // (`.fastpass.json` → `manifest.structure.items[]`) és una ALTRA
+            // cosa: la vista MESTRA per ítem d'escaleta, que es llegeix amb
+            // `SessionManifest.getItems()` / `AnalysisCenter.getStructure(m)` i
+            // la reconstrueix `AnalysisCenter.composeStructure()`. No barrejar-les.
             if (wotts.list && wotts.list.length > 0) {
                 window.FASTPASS_UI.State.structure = window.Parse.files(wotts.list, ctx.progData.wott, ctx.bloque);
                 window.FASTPASS_UI.State.pieceIndex = 0;
@@ -1909,19 +1933,7 @@
                     program: { escaletaFile: jsonMeta.filename },
                     cleanFeed: jsonData.cleanFeed,
                     blockBounds: bounds,
-                    escaletaItems: allItems.map(l => ({
-                        sequencia: l.sequencia,
-                        num: l.num,
-                        titol: l.titol,
-                        teVideo: l.teVideo,
-                        horaEntradaOnAir: l.horaEntradaOnAir,
-                        horaEntradaPrevista: l.horaEntradaPrevista,
-                        horaSortidaPrevista: l.horaSortidaPrevista,
-                        duradaOnAir: l.duradaOnAir,
-                        durada: l.durada,
-                        agrupacio: l.agrupacio,
-                        flotant: l.flotant || false
-                    })),
+                    escaletaItems: toManifestItems(allItems),
                     phases: { boundsCalculated: true }
                 };
                 if (!_keepExtractedRef) {

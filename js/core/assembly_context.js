@@ -14,6 +14,21 @@
 
     FASTPASS_UI.Core.AssemblyContext = {
 
+        /**
+         * _itemsOf: Ítems d'escaleta del manifest, amb l'ORDRE de precedència de
+         * v2.0 (delegat a `SessionManifest.getItems`): vista `structure` →
+         * master `escaletaItems` (el desa el «Muntar») → MIRALL d'anàlisi
+         * `analysis.escaleta.itemsBloc` (fase 1). Així aquest context funciona
+         * també quan el flux d'anàlisi encara no ha passat pel «Muntar».
+         * @param {Object} manifest
+         * @returns {Array<Object>} ítems amb la forma de l'escaleta
+         */
+        _itemsOf: function (manifest) {
+            var SM = FASTPASS_UI.SessionManifest;
+            if (SM && typeof SM.getItems === 'function') return SM.getItems(manifest) || [];
+            return (manifest && Array.isArray(manifest.escaletaItems)) ? manifest.escaletaItems : [];
+        },
+
         // ── Estat intern: caché de diagnòstic de clips ──
         _clipsLogged: false,
 
@@ -111,8 +126,9 @@
             const manifestPath = FASTPASS_UI.SessionManifest.getPath(ctx);
             log(`🔍 [AssemblyContext] Cercant manifest a: ${manifestPath}`);
             const manifest = await FASTPASS_UI.SessionManifest.load(ctx);
-            if (!manifest || !manifest.escaletaItems || manifest.escaletaItems.length === 0) {
-                log("⚠️ No es troben items d'escaleta al manifest. Executa primer «Muntar».", "ERROR");
+            const items = this._itemsOf(manifest);
+            if (!manifest || items.length === 0) {
+                log("⚠️ No es troben items d'escaleta al manifest (ni master «Muntar» ni mirall d'anàlisi).", "ERROR");
                 return null;
             }
 
@@ -126,7 +142,7 @@
             const reader = window.EscaletaReader || window.FASTPASS_UI.EscaletaReader;
             const targetBlock = ctx.bloque.toLowerCase();
 
-            let lines = manifest.escaletaItems.filter(l => {
+            let lines = items.filter(l => {
                 if (l.flotant === true) return false;
                 const ag = l.agrupacio;
                 return ag && ag.toString().toLowerCase() === targetBlock;
@@ -143,7 +159,8 @@
                 if (lines[i].num) lineIndexByNum[lines[i].num] = i;
             }
 
-            log(`📋 Estructura des del manifest: ${lines.length} items per al bloc ${ctx.bloque}`);
+            const srcItems = (FASTPASS_UI.SessionManifest.getItemsSource || function () { return '?'; })(manifest);
+            log(`📋 Estructura des del manifest [${srcItems}]: ${lines.length} items per al bloc ${ctx.bloque}`);
             if (lines.length === 0) {
                 log("⚠️ El bloc no té línies d'escaleta definides.", "WARN");
                 return null;
@@ -219,7 +236,8 @@
 
         /**
          * _detectFirstUngroupedItem(manifest, reader, lines, targetBlock)
-         * Escaneja manifest.escaletaItems per trobar el primer ítem amb
+         * Escaneja els ítems d'escaleta (`_itemsOf(manifest)`) per trobar el
+         * primer ítem amb
          * agrupacio:null que caigui cronològicament dins del rang del bloc.
          *
          * Cas d'ús: blocs amb items intercalats no agrupats (ex: 02DP, 02Dir, 02
@@ -244,7 +262,7 @@
             var out = [];
             try {
                 if (!lines || lines.length === 0) return out;
-                if (!manifest || !manifest.escaletaItems || manifest.escaletaItems.length === 0) return out;
+                if (!manifest || this._itemsOf(manifest).length === 0) return out;
 
                 var blockStartSec = (manifest.ref && manifest.ref.worldBlockStartSec != null)
                     ? manifest.ref.worldBlockStartSec : null;
@@ -259,7 +277,7 @@
                     if (blockStartSec === null || blockEndSec === null) return out;
                 }
 
-                var allItems = manifest.escaletaItems;
+                var allItems = this._itemsOf(manifest);
                 var cands = [];
                 for (var i = 0; i < allItems.length; i++) {
                     var item = allItems[i];
@@ -315,7 +333,7 @@
 
         _detectFirstUngroupedItem: function (manifest, reader, lines, targetBlock) {
             if (!lines || lines.length === 0) return null;
-            if (!manifest || !manifest.escaletaItems || manifest.escaletaItems.length === 0) return null;
+            if (!manifest || this._itemsOf(manifest).length === 0) return null;
 
             // Rang temporal del bloc
             var blockStartSec = (manifest.ref && manifest.ref.worldBlockStartSec != null)
@@ -334,7 +352,7 @@
             }
 
             // Escanejar tots els items del manifest, recollir tots els no agrupats
-            var allItems = manifest.escaletaItems;
+            var allItems = this._itemsOf(manifest);
             var ungroupedCandidates = [];
             for (var i = 0; i < allItems.length; i++) {
                 var item = allItems[i];

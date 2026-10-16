@@ -1,6 +1,6 @@
 # TITOLET — Detecció automàtica del rètol cremat
 
-> v1.7.0 · 2026-10-14 (7a passada: **ROI per etiqueta** `roiPerRole`/`roiDefault` + **TC del nom** · 6a: `cardTrimFrames` · artefactes #147/#148 · **#158** dues zones TITOLET · **#159/#159b** marge de mèdia + congelat ancorat al final real) · `titolet.*` a `Config` (`11_Configuracio.js`) · `bin/ocr.ps1` · `js/logic/17_TitoletDetect_Logic.js` (`?v=2`) · `15_FFmpeg_Logic.js` · `flow_chyrons.js` (`?v=73`) · `js/core/utils.js` (`?v=25`)
+> v1.7.0 · 2026-10-14 (7a passada: **ROI per etiqueta** `roiPerRole`/`roiDefault` + **TC del nom** · 6a: `cardTrimFrames` · artefactes #147/#148 · **#158** dues zones TITOLET · **#159/#159b** marge de mèdia + congelat ancorat al final real) · `titolet.*` a `Config` (`11_Configuracio.js`) · `bin/ocr.ps1` · `js/logic/17_TitoletDetect_Logic.js` (`?v=2`) · `15_FFmpeg_Logic.js` · `flow_chyrons.js` (`?v=75`) · `js/core/utils.js` (`?v=25`)
 >
 > 📄 Estat complet, proves, pendents i **agenda de la sessió següent**: `plans/HANDOFF_2026-10-08_TITOLETS.md`
 
