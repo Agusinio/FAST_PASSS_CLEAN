@@ -128,9 +128,9 @@ d'acceptació era impossible. S'ha resolt amb:
 | Resolutor PUR | `js/logic/20_Rutas_Logic.js` | `resolve` (producció, sense `{token}`), `resolveDetailed` (diu què falta), `normalize`, `join`, `fechaOf`, `tokensIn`, `mergeProfile`, `normalizeRutas` |
 | Config | `js/core/11_Configuracio.js` | càrrega + fusió del perfil, recàrrega per event, `resolvePath`/`applyProfile`, `rutas.*` noves a `get()` |
 | Esquema | `Profile.json` | `projectes`, `escaletes`, `escaletes_domini`, `grafismos`, `subtitulos`, `subtitulosSinteticos` (i `escaletaId` de MATINS, que el perfil no portava) |
-| Finestra | `setup.html` | 10 camps de ruta amb 🧪 «Prova» (resol + `cep.fs.stat`/`readdir`), targeta «Variables de Ruta» amb PROVA de plantilla; desa TOTS els `path-*` |
+| Finestra | `setup.html` | 10 camps de ruta amb 🧪 «Prova» (resol + `cep.fs.stat`/`readdir`), targeta «Variables de Ruta» amb PROVA de plantilla; desa TOTS els `path-*`; targeta «Gestió de Programes» amb `id`/`archivo`/**`dir`**/`wott`/`conductor` |
 | Consumidors | `escaleta_config.js`, `srt_editor.js`, `flow_mapa.js` | `ESCALETES_PATH`/`DOMAIN` són *getters* de la config; `_srt15MinDir()` i `_grafRoot()` lliguen la ruta en cada ús |
-| Guardes | `bin/check_rutas.ps1`, `bin/smoke/fp_probe_rutas.js` | cap literal UNC dins de cadenes a `js/` ni `jsx/` (fora dels defaults) + 27 assercions (resolutor, fusió, fitxers reals) |
+| Guardes | `bin/check_rutas.ps1`, `bin/smoke/fp_probe_rutas.js`, `bin/smoke/fp_probe_setup_ui.ps1` | cap literal UNC dins de cadenes a `js/` ni `jsx/` (fora dels defaults) + 29 assercions (resolutor, fusió, fitxers reals, `dir` dels programes) + 15 assercions de la FINESTRA (rutes dels `<script src>` al disc, cache-bust de l'iframe i DOM real de la targeta de programes) |
 
 **Derivació per a perfils vells**: si `Profile.json` no porta les claus noves,
 `normalizeRutas` les deriva de `vertical` (`ESCALETES`, `ZZZ_GRAFISME`,
@@ -148,10 +148,26 @@ noms de carpeta i crides). Els noms viuen a `Profile.json` (font real des de F2)
 als defaults de `11_Configuracio.js`. `Config.loadSelection` ara ignora un valor desat que ja no
 existeix (abans deixava el desplegable buit i el botó principal desactivat).
 
-**Forat detectat (2026-10-21, GESTIÓ DE PROGRAMES):** `setup.html` edita `id` / `archivo` / `wott` /
-`conductor` però **no `dir`**, i `addProg` crea el programa sense `dir` → `utils.workFolder` faria
-`destinoBase + '' + data` i el projecte cauria a l'ARREL de la carpeta de projectes. Cal afegir el
-camp `dir` a la targeta (o derivar-lo de `archivo` quan falti).
+**Camp `dir` a GESTIÓ DE PROGRAMES (FET 2026-10-21):** `dir` és la subcarpeta de projectes que
+fa servir `utils.workFolder` (`destinoBase + dir + data + bloc`). Abans `setup.html` editava
+`id` / `archivo` / `wott` / `conductor` però **no `dir`**, i `addProg` creava el programa sense
+`dir` → el projecte hauria caigut a l'ARREL de `PROVES` (barrejat amb els altres). Ara:
+
+- La targeta té una columna **CARPETA (dir)** editable (`'dir'` → `updateProg`, que ja era genèric)
+  i la graella passa a `fr` (6 columnes) perquè la columna nova no empenyi la fila fora de la
+  targeta en una finestra estreta.
+- `addProg` crea el programa amb `dir: ""` i `salvarTodo` **avisa** (llista programa → pestanya)
+  si es desa algun programa sense carpeta.
+- `Config._getLegacyMapping` normalitza `directorio` a `''` (mai `undefined` dins d'una ruta) i
+  deixa un `console.warn` per diagnosticar perfils vells.
+- Assercions noves `#F2/26` (tots els programes del `Profile.json` tenen `dir`) i `#F2/27`
+  (el camp és a la targeta).
+
+**Carpetes reals** (`\\DSMEDIA07\portal324\PROJECTE 9x16 PREMIERE 2\AAA_PROJECTES PREMIERE
+VERTICALITZACIO`, revisat 2026-10-21): `01_MATINS_PROJECTES`, `02_COMARQUES_PROJECTES`,
+`03_TN MIGDIA_PROJECTES`, `04_TN VESPRE_PROJECTES`, `05_VIDEOMATON`, `PROVES`. Els quatre `dir`
+del perfil hi coincideixen exactament (MATINS = `01_MATINS_PROJECTES`). `05_VIDEOMATON` encara no
+té cap programa associat (la pestanya «Fotomató» té `programas: []`).
 
 ### F2.1 · TO DO (deute tècnic): retirar `escaletes` i `escaletes_domini`
 

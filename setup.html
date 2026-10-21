@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Dashboard Config - FAST >>> PASS</title>
-    <script src="./lib/CSInterface.js"></script>
+    <script src="js/lib/CSInterface.js"></script>
     <style>
         :root {
             --bg-color: #1a1a1a;
@@ -94,11 +94,14 @@
         .track-item label { text-align: center; font-size: 9px; }
 
         /* PROGRAM LIST */
+        /* (2026-10-21) 6 columnes: ID/NOM · NOM ARXIU · CARPETA (dir) · WOTT · CONDUCTOR · esborrar.
+           En `fr` (no px) perque la finestra del panell es estreta: amb px la columna
+           nova empenyia la fila fora de la targeta. */
         .program-row { 
-            display: grid; grid-template-columns: 80px 100px 100px 120px 30px; 
-            gap: 10px; margin-bottom: 5px; align-items: center; background: #00000044; padding: 5px; border-radius: 4px;
+            display: grid; grid-template-columns: 1fr 1fr 1.3fr 0.55fr 1.2fr 24px; 
+            gap: 6px; margin-bottom: 5px; align-items: center; background: #00000044; padding: 5px; border-radius: 4px;
         }
-        .program-row input { font-size: 11px; padding: 4px; }
+        .program-row input { font-size: 11px; padding: 4px; min-width: 0; width: 100%; box-sizing: border-box; }
         .btn-delete { color: var(--danger); cursor: pointer; font-size: 14px; border:none; background:none; }
 
         footer {
@@ -262,13 +265,14 @@
                     <div class="card">
                         <h2>Gestió de Programes</h2>
                         <div class="program-row" style="background:transparent; border-bottom:1px solid #444; color:#666; font-size:9px">
-                            <span>ID / NOM (Selector)</span><span>NOM ARXIU</span><span>WOTT</span><span>CONDUCTOR</span><span></span>
+                            <span>ID / NOM (Selector)</span><span>NOM ARXIU</span><span>CARPETA (dir)</span><span>WOTT</span><span>CONDUCTOR</span><span></span>
                         </div>
                         <div id="prog-list-${tabName.replace(/ /g, '')}">
                             ${est.programas.map((p, idx) => `
                                 <div class="program-row">
                                     <input type="text" value="${p.id}" onchange="updateProg('${tabName}', ${idx}, 'id', this.value)" title="Text del desplegable PROGRAMA (pot portar espais; ha de ser unic)">
                                     <input type="text" value="${p.archivo}" onchange="updateProg('${tabName}', ${idx}, 'archivo', this.value)" title="NOM ARXIU: fa els noms de carpeta i de fitxer (TN_MIGDIA...)">
+                                    <input type="text" value="${p.dir || ''}" onchange="updateProg('${tabName}', ${idx}, 'dir', this.value)" title="CARPETA (dir): subcarpeta de projectes dins de PROJECTES (p.ex. 01_MATINS_PROJECTES). Es la que fa la ruta del projecte -> si falta, el projecte cau a l'ARREL">
                                     <input type="text" value="${p.wott}" onchange="updateProg('${tabName}', ${idx}, 'wott', this.value)" title="Prefixo Wott">
                                     <input type="text" value="${p.conductor || ''}" onchange="updateProg('${tabName}', ${idx}, 'conductor', this.value)" placeholder="MOV file">
                                     <button class="btn-delete" onclick="removeProg('${tabName}', ${idx})">✕</button>
@@ -292,7 +296,10 @@
         }
 
         function addProg(tab) {
-            currentProfile.estructuras[tab].programas.push({ id: "NOU", archivo: "NOU", wott: "XXX", conductor: "" });
+            // (2026-10-21) `dir` es OBLIGATORI a la practica: es la subcarpeta de
+            // projectes que fa servir utils.workFolder. Es crea buit i la guarda de
+            // `salvarTodo` avisa si es desa sense omplir.
+            currentProfile.estructuras[tab].programas.push({ id: "NOU", archivo: "NOU", dir: "", wott: "XXX", conductor: "" });
             drawConfig();
         }
 
@@ -325,7 +332,29 @@
 
             const extensionRoot = csInterface.getSystemPath(SystemPath.EXTENSION);
             const profilePath = extensionRoot + "/Profile.json";
-            
+
+            // (2026-10-21) GUARDA: cap programa sense CARPETA (dir). `dir` es la
+            // subcarpeta de projectes que fa servir utils.workFolder
+            // (destinoBase + dir + data + bloc): si falta, el projecte es crea a
+            // l'ARREL de la carpeta de projectes i es barreja amb els altres.
+            const senseDir = [];
+            const ests = currentProfile.estructuras || {};
+            Object.keys(ests).forEach(function (tab) {
+                const progs = (ests[tab] && ests[tab].programas) || [];
+                progs.forEach(function (p) {
+                    if (!p) return;
+                    if (String(p.dir == null ? '' : p.dir).trim() === '') {
+                        senseDir.push(tab + '  ->  ' + (p.id || '(sense nom)'));
+                    }
+                });
+            });
+            if (senseDir.length && !confirm(
+                'Aquests programes NO tenen CARPETA (dir):\n\n  ' + senseDir.join('\n  ') +
+                '\n\nSense carpeta, el projecte es crea a l\'ARREL de la carpeta de projectes.' +
+                '\n\nVols desar-ho igualment?')) {
+                return;
+            }
+
             // Escapem cometes simples per al bridge JSX
             const payload = JSON.stringify(currentProfile, null, 4).replace(/'/g, "\\'");
 

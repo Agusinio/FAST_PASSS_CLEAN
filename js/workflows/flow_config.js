@@ -24,7 +24,9 @@
 
             if (show) {
                 window.FASTPASS_UI.Utils.log("⚙️ Obrint Dashboard de Configuració...", "INFO");
-                iframe.src = 'setup.html';
+                // (2026-10-21 · #176) `?v=2` perque CEF no servisca una copia vella:
+                // acabem de corregir la ruta de `CSInterface.js` a `setup.html`.
+                iframe.src = 'setup.html?v=2';
                 overlay.classList.add('active');
             } else {
                 overlay.classList.remove('active');

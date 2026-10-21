@@ -708,9 +708,18 @@
             for (let k in cfg.estructuras) {
                 const est = cfg.estructuras[k];
                 est.programas.forEach(p => {
+                    // (2026-10-21) `dir` = subcarpeta de projectes (p.ex.
+                    // "01_MATINS_PROJECTES"). `utils.workFolder` fa
+                    // `destinoBase + dir + data + bloc`, aixi que si falta el
+                    // projecte cauria a l'ARREL. Es normalitza a '' (mai
+                    // `undefined` a la ruta) i s'avisa al log per diagnostigar.
+                    var dirProg = (p.dir == null ? '' : String(p.dir));
+                    if (!dirProg.trim()) {
+                        try { console.warn('[CONFIG] Programa sense CARPETA (dir): ' + k + ' / ' + p.id); } catch (eD) { }
+                    }
                     map[p.id] = {
                         archivo:      p.archivo,
-                        directorio:   p.dir,
+                        directorio:   dirProg,
                         wott:         p.wott,
                         archivo_wott: p.wott,
                         conductors:   { titular: p.conductor, substituts: [] },

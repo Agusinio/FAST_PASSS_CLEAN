@@ -216,6 +216,23 @@
             }
             ok('#F2/25 cap ruta UNC hardcoded a js/ ni jsx/ (' + FILES.length + ' fitxers)',
                 offenders.length === 0, offenders.join(', '));
+
+            // (2026-10-21) `dir` = subcarpeta de projectes (utils.workFolder).
+            // Mateix criteri que la guarda de `salvarTodo` a setup.html: cap
+            // programa sense CARPETA i el camp editable a la targeta.
+            var senseDir = [];
+            var ests = (pj && pj.estructuras) || {};
+            Object.keys(ests).forEach(function (t) {
+                var progs = (ests[t] && ests[t].programas) || [];
+                progs.forEach(function (p) {
+                    if (!p) return;
+                    if (String(p.dir == null ? '' : p.dir).trim() === '') senseDir.push(t + '/' + (p.id || '?'));
+                });
+            });
+            ok('#F2/26 Profile.json: tots els programes tenen CARPETA (dir)',
+                senseDir.length === 0, senseDir.join(', ') || 'ok');
+            ok('#F2/27 setup.html: camp CARPETA (dir) editable a la tarjeta de programes',
+                /CARPETA \(dir\)/.test(st) && /'dir', this\.value/.test(st) && /dir: ""/.test(st));
         } catch (e) {
             ok('#F2 la prova no ha llancat cap excepcio', false, e && (e.message + ' | ' + e.stack));
         }

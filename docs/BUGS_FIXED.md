@@ -1180,6 +1180,18 @@ Ordre cronologic pel numero d incident. 105 entrades.
 
 **NOTA**: El RESET no pot ser mai «best effort»: si queda una resta, el flux NOU es converteix en font de problemes. Millor aturar-se i avisar que crear sobre material vell.
 
+### #176 - resolt (2026-10-21)
+
+**SIMPTOMA**: En obrir CONFIG GRAL la finestra eixia BUIDA: cap camp omplert (ni AUTOR ni rutes), les pestanyes d'estructures sense cap targeta i cap desplegable de programa; desar tampoc feia res. No hi havia cap error visible perquè el panell de config no té consola.
+
+**CAUSA ARREL**: `setup.html:7` carregava `<script src="./lib/CSInterface.js">` però el fitxer viu a `js/lib/CSInterface.js` (és el mateix que carrega `index.html:224`). El `<script>` donava 404 → `CSInterface` no existia → la PRIMERA línia del bloc en línia (`const csInterface = new CSInterface();`) llançava `ReferenceError`, de manera que `init()` no s'executava mai: ni `evalScript(IO.readTxt)` ni `drawConfig()`.
+
+**SOLUCIO**: ruta corregida a `js/lib/CSInterface.js` (equivalent a la del panell).
+
+**VALIDACIO**: guarda nova `bin/smoke/fp_probe_setup_ui.ps1` (14 assercions) — comprova les rutes dels `<script src>` de `setup.html`/`index.html` al disc i, amb **DOM real** (Edge headless + stubs de `__adobe_cep__`/`FASTPASS_UI` i el `Profile.json` real): capçalera + 3 programes, 5 camps per fila, 6 columnes, sense desbordament, `dir` de TNs `02_COMARQUES_PROJECTES`, `dir` de MATINS `01_MATINS_PROJECTES`, `autor`/`destino_base` plens i cap excepció. Amb la ruta VELLA la mateixa prova dona `TN rows=0`, `MATINS rows=0` i camps buits (reproducció del símptoma).
+
+**NOTA**: un `src` trencat no dona cap error al log del panell; per això la prova mira primer les rutes dels scripts.
+
 ## 3. Bugs en curs / pendents
 
 
