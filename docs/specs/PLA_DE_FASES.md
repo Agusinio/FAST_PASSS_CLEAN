@@ -141,11 +141,17 @@ normalitzen: si `Profile.json` no es pot llegir (absència, JSON trencat, permis
 derivades existeixen igualment i el panell no es queda sense escaletes/grafismes/subtítols.
 
 **Etiquetes del desplegable PROGRAMA (2026-10-21):** l'`id` de cada programa és alhora la clau de
-`mapeoProgramas` i el text de l'opció (`4_Context.js:1056-1064`), així que s'ha pogut renombrar a
+`mapeoProgramas` i el text de l'opció (`4_Context.js:1056-1069`; el valor triat es torna a fer
+servir com a clau a `:391` i `:423`), així que s'ha pogut renombrar a
 «TN Comarques / TN Migdia / TN Vespre» sense tocar `archivo`, `wott` ni `dir` (que són els que fan
 noms de carpeta i crides). Els noms viuen a `Profile.json` (font real des de F2) i, com a fallback,
 als defaults de `11_Configuracio.js`. `Config.loadSelection` ara ignora un valor desat que ja no
 existeix (abans deixava el desplegable buit i el botó principal desactivat).
+
+**Forat detectat (2026-10-21, GESTIÓ DE PROGRAMES):** `setup.html` edita `id` / `archivo` / `wott` /
+`conductor` però **no `dir`**, i `addProg` crea el programa sense `dir` → `utils.workFolder` faria
+`destinoBase + '' + data` i el projecte cauria a l'ARREL de la carpeta de projectes. Cal afegir el
+camp `dir` a la targeta (o derivar-lo de `archivo` quan falti).
 
 ### F2.1 · TO DO (deute tècnic): retirar `escaletes` i `escaletes_domini`
 
@@ -159,20 +165,22 @@ d'emmagatzemar ni consultar mai més.
 
 | # | Procés | Fitxer:línia | Què en fa |
 |---|---|---|---|
-| 1 | Export a l'API | `js/core/11_Configuracio.js:581-582` | `get().rutas.escaletes` / `.escaletesDomini` |
+| 1 | Export a l'API | `js/core/11_Configuracio.js:587-588` | `get().rutas.escaletes` / `.escaletesDomini` |
 | 2 | Getters | `js/core/escaleta_config.js:50-60` | `ESCALETES_PATH` / `ESCALETES_PATH_DOMAIN` llegeixen la config a cada accés |
-| 3 | Llistat de la carpeta | `js/core/escaleta_io.js:51-74` (`ER._listEscaletas`) | prova la IP i després el domini; és l'ÚNIC punt que toca la ruta |
+| 3 | Llistat de la carpeta | `js/core/escaleta_io.js:52-74` (`ER._listEscaletas`) | prova la IP i després el domini; és l'ÚNIC punt que toca la ruta |
 | 4 | Tria del JSON | `js/core/escaleta_io.js:119` (`ER.findLatest`) i `:436` (`findLatestValid`) | llista → filtra per programa/data/bloc → valida |
-| 5 | Estimació d'ID | `js/core/escaleta_fetch.js:266-290` (`_estimateEscaletaIdFromHistory`) | reconstrueix els IDs dels dies anteriors (la ruta, a la línia 270) |
-| 6 | Consumidors de `findLatest` | `4_Context.js:468,713,764` · `flow_mainButton.js:249,305,368,539,739,1744,1924` · `flow_mp4.js:67,159` · `assembly_context.js:142` · `escaleta_fetch.js:375-380` | comproven que hi ha escaleta, munten el manifest i la llegeixen |
-| 7 | Finestra de config | `setup.html:164` (camp) i `:232` (mapa de claus) | edició de les dues rutes |
-| 8 | Derivació | `js/logic/20_Rutas_Logic.js:226` | `normalizeRutas` les deriva de `vertical` per a perfils vells |
+| 5 | Estimació d'ID | `js/core/escaleta_fetch.js:263-290` (`_estimateEscaletaIdFromHistory`) | reconstrueix els IDs dels dies anteriors (la ruta, a la línia 270) |
+| 6 | Consumidors | `flow_mainButton.js:375,429,749,1747,1926` i `flow_mp4.js:165` → `ensureLocalCopy` (que mira PRIMER la carpeta del projecte i només cau al NAS a `escaleta_io.js:336`) · `flow_mp4.js:73` → `findLatest` directe · `escaleta_fetch.js:376-380` → FOTO · `4_Context.js:473` → `getStatus` · `flow_mainButton.js:256` → `_listEscaletas` (usat a `4_Context.js:148` i `flow_mainButton.js:407`) | aquí es nota la ruta: sense foto prèvia, tot cau al NAS |
+| 7 | Finestra de config | `setup.html:163-164` (camps) i `:232` (mapa de claus) | edició de les dues rutes |
+| 8 | Derivació | `js/logic/20_Rutas_Logic.js:225-226` | `normalizeRutas` les deriva de `vertical` per a perfils vells |
 
 **Què cal fer (en aquest ordre):**
 1. `Crear` (Main) → cridar `EscaletaReader.fetchNewEscaleta` SEMPRE (no només al botó FOTO) i desar
    la còpia dins `workFolder(ctx)` (el paràmetre `folderDest` ja existeix: `main.js:959-977`); si
    l'API falla, **avortar** amb missatge clar (mai crear amb una escaleta vella).
-2. `ER.findLatest` / `findLatestValid` restringits a la carpeta del bloc (la foto), no a digition.
+2. `ensureLocalCopy` ja prefereix la còpia del projecte: només cal **llevar el pla B del NAS**
+   (`escaleta_io.js:335-340`) i restringir `findLatest` / `findLatestValid` a la carpeta del bloc.
+   `flow_mp4.js:73` crida `findLatest` sense `datePrefix` → passa a llegir la còpia local.
 3. Esborrar les dues claus de: `Profile.json`, defaults de `11_Configuracio.js`, `get().rutas`,
    getters d'`escaleta_config.js`, `normalizeRutas` i els dos camps de `setup.html`.
 4. `grep -ri "escaletes_domini|ESCALETES_PATH" js/ jsx/ setup.html Profile.json` → 0 resultats.
