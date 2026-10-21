@@ -46,6 +46,9 @@ $files = @(
     # (2026-10-16 · BUG #171) Motor de Clips (JS): `endCoherent` → retall coherent
     # (in/out ↔ end) perquè els rètols col·locats es puguen ESTIRAR amb el ratolí.
     (Join-Path $repo 'js\logic\6_Clips_Logic.js'),
+    # (2026-10-21 · BUG #174) PORTADA: finestra de captura (pre-roll + cua). Càlcul PUR
+    # que MAI mou el frame triat; el prova la part E de la prova 19-portada.
+    (Join-Path $repo 'js\logic\18_Portada_Window.js'),
     (Resolve-Harness 'fp_probe_f45.js'),
     # (2026-10-16 · BUG #167) Rètol de localització del directe → ítem IPD/directe.
     (Resolve-Harness 'fp_probe_ipd_chyron.js'),

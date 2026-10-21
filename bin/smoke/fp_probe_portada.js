@@ -31,6 +31,17 @@
  *     NOTA: `flow_render.js` (l'altre camí del #172, la portada) NO s'inclou al bundle
  *     perquè arrossega mig projecte; el seu costat es valida estàticament amb els
  *     àtoms EXACTES i el mecanisme compartit (`_capturePng`) en viu.
+ *
+ * (2026-10-21 · BUG #174) PART E — FINESTRA DE CAPTURA DE LA PORTADA:
+ *     El PNG de portada sortia fins a 2 s (52 frames a 25 fps) ABANS del frame triat
+ *     quan el frame era CAP AL FINAL del clip: `flow_render` movia el FRAME
+ *     (`mediaIn = mediaEnd − 2,08`) perquè la còpia temporal tinguera prou material.
+ *     Ara el càlcul viu a `js/logic/18_Portada_Window.js` (`PortadaWindow.plan`), és PUR
+ *     i MAI mou el frame: s'escurça la CUA de la finestra. La part E prova el cas
+ *     reportat (frame a 1,08 s del final → abans 1,00 s = 25 frames de desviació),
+ *     l'últim frame del clip, el frame fora del media, el pre-roll del primer frame i
+ *     dues guardes ESTÀTIQUES (el flux no pot tornar a moure el frame; el timecode de
+ *     QE no pot tornar a ser de 25 fps fixos).
  * ==========================================================================*/
 (function () {
     var orig = window.__runTests;
@@ -272,6 +283,69 @@
                     'out final=' + MODEL.out + ' · maxOut=' + MODEL.maxOut + ' · calls=' + callsOut().join(' | '));
                 ok('#172 _capturePng (Out ABSENT = 0): el frame també és el demanat (' + TC + ' s) via QE',
                     res2 && res2.via === 'QE' && snapTC() === TC, 'via=' + (res2 && res2.via) + ' tc=' + snapTC());
+            }
+
+            // ── E) FINESTRA DE CAPTURA: EL FRAME TRIAT NO ES MOU MAI (BUG #174) ──
+            // (2026-10-21) Report d'usuari: el PNG de la portada sortia ~25 frames ABANS del
+            // frame triat quan el clip era llarg i el frame era CAP AL FINAL. Causa: la guarda
+            // d'espai de `flow_render` movia el FRAME (`mediaIn = mediaEnd − 2,08`) quan el
+            // cabezal era a menys de PORTADA_DUR+PORTADA_GUARD del final del clip → error
+            // `2,08 − d` (d = distància al final): amb d = 1,08 s, 1,00 s = 25 frames a 25 fps.
+            // Ara s'escurça la FINESTRA (la cua de la còpia) i el frame es queda quiet.
+            var PW = UI.Logic && UI.Logic.PortadaWindow;
+            ok('#174 `PortadaWindow.plan` carregat (js/logic/18_Portada_Window.js al bundle)',
+                !!(PW && typeof PW.plan === 'function' && typeof PW.frameError === 'function'));
+            if (PW && typeof PW.plan === 'function') {
+                var planOf = function (mIn, mEnd) {
+                    return PW.plan({ mediaIn: mIn, mediaEnd: mEnd, dur: 2, guard: 0.08, frameSec: 0.04 });
+                };
+                // (1) EL CAS REPORTAT: clip llarg, frame a 1,08 s del final.
+                var p1 = planOf(120.00, 121.08), e1 = PW.frameError(p1, 120.00, 0.04);
+                ok('#174 frame a 1,08 s del final del clip: es captura EXACTAMENT el frame triat (abans: 1,00 s = 25 frames ABANS)',
+                    p1.mediaIn === 120.00 && e1.frames === 0 && p1.movedBy === 0,
+                    'mediaIn=' + p1.mediaIn + ' · error=' + e1.frames + ' frames');
+                ok('#174 frame a 1,08 s del final: s\'escurça la CUA (1,08 s) i es conserva el pre-roll de 2 frames',
+                    p1.limited === true && p1.reason === 'cua-escurcada' &&
+                    Math.abs(p1.tail - 1.08) < 1e-9 && Math.abs(p1.preRoll - 0.08) < 1e-9 &&
+                    Math.abs(p1.windowDur - 1.16) < 1e-9,
+                    'tail=' + p1.tail + ' · preRoll=' + p1.preRoll + ' · windowDur=' + p1.windowDur);
+                // (2) Frame lluny del final → finestra sencera (comportament del #160 intacte).
+                var p2 = planOf(120.00, 130.00);
+                ok('#174 frame lluny del final: finestra SENCERA de 2 s (cap canvi respecte al #160)',
+                    p2.limited === false && p2.reason === 'ok' && p2.mediaIn === 120.00 &&
+                    Math.abs(p2.windowDur - 2) < 1e-9,
+                    'windowDur=' + p2.windowDur + ' · limited=' + p2.limited);
+                // (3) Últim frame del clip: queda 1 frame de cua i el frame NO es mou.
+                var p3 = planOf(121.04, 121.08), e3 = PW.frameError(p3, 121.04, 0.04);
+                ok('#174 ÚLTIM frame del clip: es manté el frame i la cua baixa a 1 frame',
+                    e3.frames === 0 && Math.abs(p3.tail - 0.04) < 1e-9 &&
+                    Math.abs(p3.windowDur - 0.12) < 1e-9,
+                    'tail=' + p3.tail + ' · windowDur=' + p3.windowDur + ' · error=' + e3.frames);
+                // (4) Frame FORA del media (no hauria de passar): correcció MÍNIMA i marcada.
+                var p4 = planOf(121.08, 121.08), e4 = PW.frameError(p4, 121.08, 0.04);
+                ok('#174 frame FORA del media: només es corregeix 1 frame i queda marcat (`fora-del-media`)',
+                    p4.reason === 'fora-del-media' && e4.frames === -1 &&
+                    Math.abs(p4.movedBy + 0.04) < 1e-6,
+                    'reason=' + p4.reason + ' · movedBy=' + p4.movedBy + ' · error=' + e4.frames);
+                // (5) Final del clip desconegut → finestra sencera (no es mou res).
+                var p5 = planOf(120.00, NaN);
+                ok('#174 final del clip desconegut (NaN): finestra sencera i frame intacte',
+                    p5.limited === false && p5.mediaIn === 120.00 && Math.abs(p5.windowDur - 2) < 1e-9);
+                // (6) Frame 0 del media: no hi cap pre-roll, però el frame tampoc no es mou.
+                var p6 = planOf(0, 30);
+                ok('#174 frame 0 del media: el frame NO es mou i s\'avisa que no hi cap pre-roll',
+                    p6.mediaIn === 0 && p6.preRoll === 0 && p6.preRollLimited === true && !!p6.warn);
+                // (7) ESTÀTIC: el flux fa servir el planificador i NO pot retrocedir el frame.
+                var fw = noComments(SRCS['js/workflows/flow_render.js'] || '');
+                ok('#174 flow_render: la finestra ve de `PortadaWindow.plan` (cap `mediaIn = safeIn`)',
+                    /getPortadaWindow\(\)\.plan\(/.test(fw) && /PortadaWindow/.test(fw) &&
+                    !/mediaIn\s*=\s*safeIn/.test(fw) && !/mediaEnd\s*-\s*need/.test(fw),
+                    'plan=' + /getPortadaWindow\(\)\.plan\(/.test(fw) + ' · safeIn=' + /mediaIn\s*=\s*safeIn/.test(fw));
+                // (8) ESTÀTIC: el timecode de QE es construeix amb el fps REAL de la seqüència.
+                var jsx9 = noComments(SRCS['jsx/modules/9_Render.jsx'] || '');
+                ok('#174 9_Render.exportFrameQE: TC amb el timebase REAL (`seqFrameSec`), no 25 fps fixos',
+                    /seqFrameSec\(/.test(jsx9) && !/Math\.round\(sec\s*\*\s*25\)/.test(jsx9) &&
+                    /totalFrames % nominal/.test(jsx9));
             }
         } catch (e172) {
             ok('#172 la prova no ha llançat cap excepció', false, e172 && (e172.message + ' | ' + e172.stack));

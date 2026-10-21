@@ -21,6 +21,9 @@
 
     const log = (m, lvl) => getUtils().log(m, lvl || "DEBUG");
     const callJSX = (s, o) => getUtils().callJSX(s, o);
+    // (2026-10-21 · BUG #174) Càlcul PUR de la finestra de captura de la portada
+    // (`js/logic/18_Portada_Window.js`): decideix pre-roll i cua sense moure mai el frame.
+    const getPortadaWindow = () => (window.FASTPASS_UI.Logic || {}).PortadaWindow;
 
     // ── PORTADA (2026-09-18) ─────────────────────────────────────────────────
     // Durada (s) dels clips temporals que es fan servir a la zona neta.
@@ -29,6 +32,8 @@
     // comença ABANS del frame del cabezal, perquè la captura no caigui mai al PRIMER
     // frame del clip (el borde és ambigu: el redondeig de Premiere pot deixar la
     // captura fora del clip → NEGRE). 0.08 s = 2 frames a 25 fps.
+    // (2026-10-21 · BUG #174) És el MÀXIM: si el frame és al primer frame del media
+    // no hi cap, i la CUA s'escurça si el clip s'acaba. El FRAME NO ES MOU MAI.
     const PORTADA_GUARD = 0.08;
     // Tolerància d'un frame a 25 fps (verificacions de marge).
     const FRAME_TOL = 0.04;
@@ -708,19 +713,29 @@
                 // Frame EXACTE que es veu sota el cabezal = inPoint + desplaçament.
                 // ⚠️ Mai pot ser NaN: un NaN arribaria a Clips.inPoint → clip buit → NEGRE.
                 let mediaIn = srcInSec + (cti - srcStartSec);
-                // 🛡️ (2026-10-14) Si el cabezal és a menys de PORTADA_DUR del FINAL del media
-                // font, la còpia no tindria prou material (Premiere la clamparia → NEGRE).
-                // Es retrocedeix dins del clip font per garantir-hi contingut.
-                if (isFinite(srcEndSec)) {
-                    const mediaEnd = srcInSec + (srcEndSec - srcStartSec);
-                    const need = PORTADA_DUR + PORTADA_GUARD;
-                    if (mediaIn > mediaEnd - need) {
-                        const safeIn = Math.max(srcInSec, mediaEnd - need);
-                        log(`⚠️ [Portada] Cabezal a ${(mediaEnd - mediaIn).toFixed(2)}s del final del media (calen ${need.toFixed(2)}s) → capturo a media ${safeIn.toFixed(2)}s enlloc de ${mediaIn.toFixed(2)}s`, "WARN");
-                        mediaIn = safeIn;
-                    }
+                const mediaEnd = isFinite(srcEndSec) ? (srcInSec + (srcEndSec - srcStartSec)) : NaN;
+                // 🛡️ (2026-10-21 · BUG #174) EL FRAME TRIAT NO ES MOU MAI.
+                // Fins al 2026-10-20, si el cabezal era a menys de PORTADA_DUR +
+                // PORTADA_GUARD (2,08 s) del FINAL del clip es feia
+                // `mediaIn = mediaEnd − 2,08` perquè la còpia tinguera prou material: el PNG
+                // sortia `2,08 − d` segons ABANS del frame triat (d = distància al final del
+                // clip) → amb d = 1,08 s, 25 frames a 25 fps (el cas reportat); amb el frame
+                // allunyat del final, mai («en ocasions funciona bé»). Ara s'escurça la CUA
+                // de la finestra (la còpia) i el frame es queda on l'ha posat l'usuari.
+                // El càlcul és PUR: `js/logic/18_Portada_Window.js` (provat a 19-portada part E).
+                if (!getPortadaWindow() || typeof getPortadaWindow().plan !== 'function') {
+                    throw new Error("Falta l'àtom `PortadaWindow.plan` (js/logic/18_Portada_Window.js): no es pot garantir el frame de la portada.");
                 }
-                log(`🎯 [Portada] CTI=${cti.toFixed(2)}s → V1[${src.index}] "${src.name}" (${srcStartSec.toFixed(2)}→${srcEndSec.toFixed(2)}s) | frame del cabezal = media ${mediaIn.toFixed(2)}s`);
+                const winPlan = getPortadaWindow().plan({
+                    mediaIn: mediaIn,
+                    mediaEnd: mediaEnd,
+                    dur: PORTADA_DUR,
+                    guard: PORTADA_GUARD,
+                    frameSec: FRAME_TOL
+                });
+                mediaIn = winPlan.mediaIn;
+                if (winPlan.warn) log(`⚠️ [Portada] ${winPlan.warn}`, "WARN");
+                log(`🎯 [Portada] CTI=${cti.toFixed(2)}s → V1[${src.index}] "${src.name}" (${srcStartSec.toFixed(2)}→${srcEndSec.toFixed(2)}s) | frame del cabezal = media ${mediaIn.toFixed(2)}s | finestra ${winPlan.windowDur.toFixed(2)}s (pre ${winPlan.preRoll.toFixed(2)} + cua ${winPlan.tail.toFixed(2)})`);
 
                 // ── 1b. MOTION DE L'ORIGINAL (es llegeix ABANS de tocar res) ──────
                 // `Clips.insertClipFrom` fa targetTrack.insertClip(projectItem) → crea una
@@ -788,10 +803,12 @@
                 });
                 tempTC = Math.ceil(maxEnd) + CLEAN_MARGIN;
                 // 🛡️ (2026-10-14) Finestra de captura amb PRE-ROLL: el clip comença
-                // PORTADA_GUARD s ABANS de tempTC → el frame del cabezal (mediaIn) NO és
+                // `winPlan.preRoll` s ABANS de tempTC → el frame del cabezal (mediaIn) NO és
                 // mai el PRIMER frame del clip (el borde és ambigu i pot sortir NEGRE).
-                const tStart = tempTC - PORTADA_GUARD;
-                const tEnd   = tStart + PORTADA_DUR;
+                // (2026-10-21 · BUG #174) La CUA també ve del pla: si el clip s'acaba just
+                // després del frame, la finestra s'escurça (el FRAME NO es toca).
+                const tStart = tempTC - winPlan.preRoll;
+                const tEnd   = tStart + winPlan.windowDur;
 
                 // La còpia va a la MATEIXA V1 (zona neta) i la portada a V2, damunt seu.
                 const T_PORT = (config.tracks && config.tracks.video && config.tracks.video.fondos) || 2;
@@ -821,9 +838,11 @@
 
                 // inPoint ABANS de tancar la durada: Premiere ignora el setter d'inPoint
                 // en el MATEIX evalScript que la inserció → cal una crida pròpia.
-                // 🛡️ (2026-10-14) PRE-ROLL: l'inPoint va PORTADA_GUARD s ABANS del frame
-                // del cabezal, perquè aquest no caigui al primer frame del clip.
-                const copyIn = Math.max(0, mediaIn - PORTADA_GUARD);
+                // 🛡️ (2026-10-14) PRE-ROLL: l'inPoint va el pre-roll del pla (`winPlan.preRoll`,
+                // 2 frames) ABANS del frame del cabezal, perquè aquest no caigui al primer
+                // frame del clip. (2026-10-21 · BUG #174) El frame de referència és `mediaIn`,
+                // que ja NO s'ha mogut.
+                const copyIn = Math.max(0, mediaIn - winPlan.preRoll);
                 await callJSX(`Clips.inPoint(${T_V1}, ${idxCopy}, ${copyIn}, 'video')`);
                 const mv = await callJSX(`Clips.moveToRange(${T_V1}, ${idxCopy}, ${tStart}, ${tEnd}, 'video')`);
                 log(`📐 [Portada] Còpia a la zona neta (${tStart.toFixed(2)}→${tEnd.toFixed(2)}s · inPoint ${copyIn.toFixed(2)}s): ${mv}`);

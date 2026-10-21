@@ -48,6 +48,56 @@ function seqExportRange(seq) {
     return res;
 }
 
+/**
+ * seqFrameSec: Durada (s) d'un frame de la seqüència.
+ *
+ * (2026-10-21 · BUG #174) `exportFrameQE` convertia segons → timecode amb 25 fps
+ * FIXOS. Amb una seqüència que no és PAL (23,976 / 24 / 29,97 / 50 / 59,94) el camp
+ * FF del timecode queia en un frame DIFERENT de la seqüència i QE exportava un
+ * altre frame (desviació de desenes de frames en 50 fps / 29,97). Ara es llig el
+ * timebase REAL de la seqüència.
+ *
+ * Cascade (sense la constant fràgil 254016000000: es fa servir la classe `Time`,
+ * igual que `3_Project.jsx::_ticksToSeconds`):
+ *   1) `getSettings().videoTimebase`   → ticks per frame → `Time.ticks` → `.seconds`
+ *   2) `getSettings().videoFrameRate`  → `Time` (durada del frame) o fps numèric
+ *   3) 1/25 → comportament històric (PAL)
+ * El resultat es VALIDA sempre al rang real d'un frame (1/300 s … 1 s): si la
+ * propietat vinguera en altres unitats (p. ex. fps en compte de ticks), no es pot
+ * colar com si fóra una durada i es passa al següent esglaó de la cascada.
+ * @param {Sequence} seq
+ * @returns {number} segons per frame (> 0 i < 1)
+ */
+function seqFrameSec(seq) {
+    var FMIN = 1 / 300, FMAX = 1;   // 300 fps … 1 fps (rang real d'un frame)
+    var fsec = 0;
+    try {
+        var st = (seq && typeof seq.getSettings === 'function') ? seq.getSettings() : null;
+        if (st) {
+            var tb = st.videoTimebase;
+            if (tb && isFinite(tb) && tb > 0) {
+                try {
+                    var tt = new Time();
+                    tt.ticks = tb;
+                    var sTb = tt.seconds;
+                    if (typeof sTb === 'number' && isFinite(sTb) && sTb >= FMIN && sTb < FMAX) { fsec = sTb; }
+                } catch (eT) { }
+            }
+            if (!fsec) {
+                var fr = st.videoFrameRate;
+                var sFr = (fr && typeof fr.seconds === 'number') ? fr.seconds : NaN;
+                if (isFinite(sFr) && sFr >= FMIN && sFr < FMAX) { fsec = sFr; }
+                else if (typeof fr === 'number' && fr > 1 && fr <= 300) { fsec = 1 / fr; }
+            }
+        }
+    } catch (e) { $.writeln("[9_Render.seqFrameSec] EXC: " + e.message); }
+    if (!(fsec >= FMIN) || !isFinite(fsec) || fsec > FMAX) {
+        $.writeln("[9_Render.seqFrameSec] timebase no llegible → fallback 25 fps");
+        fsec = 1 / 25;
+    }
+    return fsec;
+}
+
 FASTPASS.Render = {
 
     /**
@@ -68,17 +118,26 @@ FASTPASS.Render = {
             var qeSeq = qe.project.getActiveSequence();
             if (!qeSeq) { $.writeln("[9_Render.exportFrameQE] ERR: qeSeq is null"); return "ERR_NO_QE_SEQ"; }
             $.writeln("[9_Render.exportFrameQE] qeSeq.name=" + qeSeq.name);
-            // Convertir segons a timecode HH:MM:SS:FF (25 fps) — QE espera string timecode
+            // Convertir segons a timecode HH:MM:SS:FF amb el TIMEBASE REAL de la seqüència.
+            // (2026-10-21 · BUG #174) ABANS eren 25 fps FIXOS: amb una seqüència de 23,976 /
+            // 24 / 29,97 / 50 / 59,94 el camp FF queia en un frame DIFERENT de la seqüència i
+            // QE exportava un altre frame. `sec / fsec` dóna l'ÍNDEX de frame i el camp FF es
+            // reparteix amb la base NOMINAL (24/25/30/50/60), que és com Premiere mostra el
+            // timecode no-drop. `fsec` ve de `seqFrameSec` (fallback 25 fps).
             var sec = (timeSec && timeSec !== "-1") ? Number(timeSec) : 0;
-            var totalFrames = Math.round(sec * 25);
-            var ff = totalFrames % 25;
-            var totalS = Math.floor(totalFrames / 25);
+            if (!isFinite(sec) || sec < 0) { sec = 0; }
+            var fsec = seqFrameSec(qeSeq);
+            var nominal = Math.round(1 / fsec);
+            if (!(nominal >= 1 && nominal <= 300)) { nominal = 25; }
+            var totalFrames = Math.round(sec / fsec);
+            var ff = totalFrames % nominal;
+            var totalS = Math.floor(totalFrames / nominal);
             var ss = totalS % 60;
             var totalM = Math.floor(totalS / 60);
             var mm = totalM % 60;
             var hh = Math.floor(totalM / 60);
             var tc = (hh < 10 ? '0' + hh : hh) + ':' + (mm < 10 ? '0' + mm : mm) + ':' + (ss < 10 ? '0' + ss : ss) + ':' + (ff < 10 ? '0' + ff : ff);
-            $.writeln("[9_Render.exportFrameQE] timecode=" + tc + " (sec=" + sec + ") path=" + f.fsName);
+            $.writeln("[9_Render.exportFrameQE] timecode=" + tc + " (sec=" + sec + " · fps=" + (1 / fsec).toFixed(3) + ") path=" + f.fsName);
             qeSeq.exportFramePNG(tc, f.fsName);
             $.writeln("[9_Render.exportFrameQE] exportFramePNG OK → " + f.fsName + ".png");
             return "OK_EXEC";

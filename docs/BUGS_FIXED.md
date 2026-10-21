@@ -1152,6 +1152,20 @@ Ordre cronologic pel numero d incident. 105 entrades.
 
 **NOTA**: Aquesta prova (part A) hauria caçat els DOS defectes el primer dia. Regla per al futur: si s'afig un mètode nou a un mòdul `jsx/`, cal exposar-lo també a `main.jsx`, o la crida fallarà EN SILENCI (`callJSX` retorna `'ERR:...'` i el flux cau al seu fallback com si el mètode no existira).
 
+### #174 - resolt (2026-10-21)
+
+**SIMPTOMA**: PORTADA — en ocasions el PNG exportat NO és el frame triat: amb un clip LLARG i el cabezal CAP AL FINAL del clip, el PNG conté un frame d'uns 25 frames ABANS del seleccionat (mida de l'usuari); amb el cabezal enmig del clip no passa mai.
+
+**CAUSA ARREL**: `js/workflows/flow_render.js::_runPortadaBody` tenia una guarda d'espai perquè la còpia temporal (zona neta) tinguera prou material: si `mediaIn > mediaEnd − (PORTADA_DUR + PORTADA_GUARD)` (= 2,08 s) feia `mediaIn = mediaEnd − 2,08`, o siga **MOVIA EL FRAME TRIAT**. L'error era exactament `2,08 − d` segons (d = distància del frame al FINAL del clip) i SEMPRE cap arrere: d = 1,08 s → 1,00 s = **25 frames a 25 fps** (el cas reportat), d = 0,10 s → 50 frames, d = 2,00 s → 2 frames («sembla que funciona»). Per això només passava amb frames al final d'un clip llarg i només de vegades: el log real del NAS (2026-10-19) ensenya la guarda disparant-se («Cabezal a 0.12s del final del media (calen 2.08s)»). Sumat: `Render.exportFrameQE` (`9_Render.jsx`) convertia segons → timecode amb 25 fps FIXOS, de manera que en una seqüència de 23,976/24/29,97/50/59,94 el camp FF del timecode podia caure en un ALTRE frame.
+
+**SOLUCIO**: (1) Mòdul NOU i PUR `js/logic/18_Portada_Window.js` (`PortadaWindow.plan`): decideix pre-roll (`PORTADA_GUARD`), cua i durada de la finestra SENSE moure el frame; la cua s'escurça al material que queda DINS del clip (mai per davall d'1 frame, perquè el frame quede dins de la còpia) i l'ÚNIC moviment permès és quan el frame cau FORA del media (final exclusiu → últim frame, ≤ 1 frame, marcat `fora-del-media`); `frameError()` mesura la desviació en frames. (2) `flow_render.js`: s'elimina la guarda que movia `mediaIn`; ara `tStart = tempTC − plan.preRoll`, `tEnd = tStart + plan.windowDur`, `copyIn = mediaIn − plan.preRoll`, i el log diu la finestra (`pre` + `cua`) i avisa quan s'escurça o quan no hi cap pre-roll. (3) `9_Render.jsx`: àtom nou `seqFrameSec(seq)` que llig el timebase REAL de la seqüència (`getSettings().videoTimebase` convertit amb la classe `Time`; fallback `videoFrameRate`; fallback 25 fps) i `exportFrameQE` construeix el timecode amb `sec / fsec` + base nominal (24/25/30/50/60). (4) `index.html`: `js/logic/18_Portada_Window.js?v=1` + `flow_render.js?v=33→34`. (5) GUARDA NOVA: part E de `bin/smoke/fp_probe_portada.js` (7 assercions: el cas reportat amb error de 0 frames, finestra sencera lluny del final, últim frame del clip, frame fora del media, final desconegut, pre-roll del primer frame + 2 guardes ESTÀTIQUES — el flux no pot tornar a moure el frame i el TC de QE no pot tornar a ser de 25 fps fixos) i el mòdul afegit al bundle de `bin/smoke/fp_smoke_build.ps1`.
+
+**FITXERS**: `js/logic/18_Portada_Window.js` (nou), `js/workflows/flow_render.js`, `jsx/modules/9_Render.jsx`, `index.html`, `bin/smoke/fp_smoke_build.ps1`, `bin/smoke/fp_probe_portada.js`, `docs/BUGS_FIXED.md`, `docs/CHANGELOG.md`
+
+**VALIDACIO**: `bin/smoke/fp_smoke_build.ps1` → **PASS 234 FAIL 0** (fase 19-portada amb la part E) · `bin/check_js_v8.ps1` → 59/59 OK · `bin/check_dead.ps1` → 0 orfes · pendent el test a Premiere (cal RECARREGAR el panell: `flow_render.js` té cache-bust nou).
+
+**NOTA**: Regla per al futur: cap càlcul de la portada pot canviar el frame triat per l'usuari. Si falta material, s'escurça la FINESTRA (o s'avisa), mai el frame: un PNG «bonic» d'un altre moment és pitjor que un PNG correcte amb menys cua.
+
 ## 3. Bugs en curs / pendents
 
 
