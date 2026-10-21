@@ -44,7 +44,7 @@
             },
             "programas": [
                 {
-                    "id": "TNCOMARQUES",
+                    "id": "TN Comarques",
                     "archivo": "TN_COMARQUES",
                     "wott": "TNC",
                     "dir": "02_COMARQUES_PROJECTES",
@@ -52,7 +52,7 @@
                     "escaletaId": "PRO1439"
                 },
                 {
-                    "id": "TNM",
+                    "id": "TN Migdia",
                     "archivo": "TN_MIGDIA",
                     "wott": "TNM",
                     "dir": "03_TN MIGDIA_PROJECTES",
@@ -60,7 +60,7 @@
                     "escaletaId": "PRO1440"
                 },
                 {
-                    "id": "TNV",
+                    "id": "TN Vespre",
                     "archivo": "TN_VESPRE",
                     "wott": "TNV",
                     "dir": "04_TN VESPRE_PROJECTES",

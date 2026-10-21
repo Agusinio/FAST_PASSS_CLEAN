@@ -262,13 +262,13 @@
                     <div class="card">
                         <h2>Gestió de Programes</h2>
                         <div class="program-row" style="background:transparent; border-bottom:1px solid #444; color:#666; font-size:9px">
-                            <span>ID (Selector)</span><span>NOM ARXIU</span><span>WOTT</span><span>CONDUCTOR</span><span></span>
+                            <span>ID / NOM (Selector)</span><span>NOM ARXIU</span><span>WOTT</span><span>CONDUCTOR</span><span></span>
                         </div>
                         <div id="prog-list-${tabName.replace(/ /g, '')}">
                             ${est.programas.map((p, idx) => `
                                 <div class="program-row">
-                                    <input type="text" value="${p.id}" onchange="updateProg('${tabName}', ${idx}, 'id', this.value)">
-                                    <input type="text" value="${p.archivo}" onchange="updateProg('${tabName}', ${idx}, 'archivo', this.value)">
+                                    <input type="text" value="${p.id}" onchange="updateProg('${tabName}', ${idx}, 'id', this.value)" title="Text del desplegable PROGRAMA (pot portar espais; ha de ser unic)">
+                                    <input type="text" value="${p.archivo}" onchange="updateProg('${tabName}', ${idx}, 'archivo', this.value)" title="NOM ARXIU: fa els noms de carpeta i de fitxer (TN_MIGDIA...)">
                                     <input type="text" value="${p.wott}" onchange="updateProg('${tabName}', ${idx}, 'wott', this.value)" title="Prefixo Wott">
                                     <input type="text" value="${p.conductor || ''}" onchange="updateProg('${tabName}', ${idx}, 'conductor', this.value)" placeholder="MOV file">
                                     <button class="btn-delete" onclick="removeProg('${tabName}', ${idx})">✕</button>

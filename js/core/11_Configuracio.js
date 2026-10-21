@@ -4,7 +4,10 @@
  * ============================================================================
  * Fusió de config.js + 11_Configuracio.js.
  * Tracks per defecte alineats amb Profile.json.
- * IDs de programa corregits (TNCOMARQUES, TNM, TNV).
+ * IDs de programa = NOM VISIBLE del desplegable (2026-10-21: "TN Comarques",
+ * "TN Migdia", "TN Vespre"). L'`id` es la clau de `mapeoProgramas` i el
+ * `textContent` de cada opcio; `archivo`/`wott`/`dir` son els que fan noms de
+ * carpeta i crides (NO tocar-los per canviar l'etiqueta).
  * init() usa Utils.callJSX (disponible abans de carregar Eines).
  * ============================================================================
  */
@@ -353,9 +356,12 @@
                     s_s2: 2
                 },
                 programas: [
-                    { id: "TNCOMARQUES", archivo: "TN_COMARQUES", wott: "TNC", dir: "02_COMARQUES_PROJECTES", conductor: "Conduct_Nuria Sole Perez.mov" },
-                    { id: "TNM",          archivo: "TN_MIGDIA",    wott: "TNM", dir: "03_TN MIGDIA_PROJECTES",  conductor: "Conduct_Xavi Coral Trullas.mov" },
-                    { id: "TNV",          archivo: "TN_VESPRE",    wott: "TNV", dir: "04_TN VESPRE_PROJECTES",   conductor: "Conduct_Toni Cruanyes.mov" }
+                    // (2026-10-21) `id` = text del desplegable PROGRAMA. Es lliure
+                    // (pot portar espais): nomes ha de ser UNIC dins de `mapeoProgramas`.
+                    // Els noms de carpeta surten de `dir` + `archivo` (utils.workFolder).
+                    { id: "TN Comarques", archivo: "TN_COMARQUES", wott: "TNC", dir: "02_COMARQUES_PROJECTES", conductor: "Conduct_Nuria Sole Perez.mov" },
+                    { id: "TN Migdia",    archivo: "TN_MIGDIA",    wott: "TNM", dir: "03_TN MIGDIA_PROJECTES",  conductor: "Conduct_Xavi Coral Trullas.mov" },
+                    { id: "TN Vespre",    archivo: "TN_VESPRE",    wott: "TNV", dir: "04_TN VESPRE_PROJECTES",   conductor: "Conduct_Toni Cruanyes.mov" }
                 ]
             },
             "Sumari Matins": {
@@ -736,7 +742,30 @@
             try {
                 var p = document.getElementById('programa');
                 var b = document.getElementById('bloc');
-                if (p) p.value = localStorage.getItem('fastpass_v1_programa') || "";
+                // (2026-10-21) L'`id` del programa es TAMBE el text del desplegable,
+                // aixi que es pot renombrar ("TNM" -> "TN Migdia"). Si el valor desat
+                // a localStorage ja no existeix, `p.value = <vell>` deixaria el select
+                // BUIT (selectedIndex -1) i el boto principal desactivat fins que
+                // l'usuari triara un programa. Nomes s'aplica si l'opcio existeix.
+                var _teOpcio = function (sel, val) {
+                    if (!sel || !val) return false;
+                    for (var i = 0; i < sel.options.length; i++) {
+                        if (sel.options[i].value === val) return true;
+                    }
+                    return false;
+                };
+                if (p) {
+                    var vp = localStorage.getItem('fastpass_v1_programa');
+                    if (vp == null) {
+                        p.value = "";                                   // sense valor desat
+                    } else if (_teOpcio(p, vp)) {
+                        p.value = vp;
+                    } else if (p.options.length > 0) {
+                        p.selectedIndex = 0;                            // desat invalid -> 1a opcio
+                    } else {
+                        p.value = "";
+                    }
+                }
                 if (b) b.value = localStorage.getItem('fastpass_v1_bloc') || "";
             } catch (e) { console.error("❌ Error carregant selecció:", e); }
         }

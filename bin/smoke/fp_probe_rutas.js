@@ -193,11 +193,13 @@
                 /\{autor\}/.test(st) && /resolvePathDetailed/.test(st) && /provaRuta/.test(st));
 
             var idx = await readRepo('index.html');
+            // (2026-10-21) Sense versio fixa: qualsevol cache-bust (`?v=NN`) val;
+            // el que importa es que el modul PUR es carregui ABANS de la config.
+            var _iRutas = idx.indexOf('20_Rutas_Logic.js');
+            var _iCfg = idx.indexOf('11_Configuracio.js');
             ok('#F2/24 index.html carrega `20_Rutas_Logic.js` ABANS de la config',
-                idx.indexOf('20_Rutas_Logic.js?v=1') >= 0 &&
-                idx.indexOf('20_Rutas_Logic.js?v=1') < idx.indexOf('11_Configuracio.js?v=38'),
-                'modul=' + (idx.indexOf('20_Rutas_Logic.js?v=1') >= 0) +
-                ' ordre=' + (idx.indexOf('20_Rutas_Logic.js?v=1') < idx.indexOf('11_Configuracio.js?v=38')));
+                _iRutas >= 0 && _iCfg >= 0 && _iRutas < _iCfg,
+                'rutas@' + _iRutas + ' cfg@' + _iCfg);
 
             // GUARDA: cap literal UNC dins de cadenes a js/ ni jsx/ (excepte els
             // defaults de 11_Configuracio.js). Mateix criteri que bin/check_rutas.ps1:
