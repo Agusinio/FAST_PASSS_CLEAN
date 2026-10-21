@@ -324,6 +324,76 @@ FASTPASS.Project = (function() {
         },
 
         /**
+         * pngItems: PORTADES (PNG) JA IMPORTADES al projecte.
+         *
+         * (2026-10-21 · lentitud de la portada) `Scan.portadas` escanejava el NAS
+         * sencer (1.028 fitxers: 871 .mov de 214 GB + 159 .png) per acabar fent
+         * servir UN PNG que ja és al bin PORTADES: 93 s de motor per a res.
+         * Aquest àtom llig els ÍTEMS DEL PROJECTE (nom + ruta + dates) i el
+         * panell aplica EXACTAMENT els mateixos filtres que sobre el llistat del NAS.
+         *
+         * (2026-10-21 · #177) El filtre és el literal `PORTADA` al nom (no
+         * `TEMA-TITOL`, que pot faltar): el PNG de portada del tema sempre el porta
+         * i viu al bin PORTADES.
+         *
+         * Ordre: bin indicat → arrel (per si la portada encara no s'ha mogut al bin).
+         * Les dates es llegeixen NOMÉS dels PNG de portada (pocs), mai de tot el projecte.
+         *
+         * @param {string} [binName] - bin preferent (ex: 'PORTADES')
+         * @returns {string} JSON [{name, mediaPath, created, modified, size}] o "ERR: …"
+         */
+        pngItems: function(binName) {
+            try {
+                var p = _focus();
+                if (!p || !p.rootItem) return "[]";
+                var out = [];
+                var seen = {};
+                var walk = function(node, depth) {
+                    if (!node || depth > 8) return;
+                    var n = 0;
+                    try { n = node.children ? node.children.numItems : 0; } catch (eN) { n = 0; }
+                    for (var i = 0; i < n; i++) {
+                        var it = node.children[i];
+                        if (!it) continue;
+                        var isBin = false;
+                        try { isBin = !!(it.children && typeof it.children.numItems === 'number'); } catch (eB) { isBin = false; }
+                        if (isBin) { walk(it, depth + 1); continue; }
+                        var nm = String(it.name || '');
+                        if (!/\.png$/i.test(nm)) continue;
+                        // (2026-10-21 · #177) Portada = PNG amb `PORTADA` al nom.
+                        // `TEMA-TITOL` es manté com a llegat (projectes vells).
+                        var upNm = nm.toUpperCase();
+                        if (upNm.indexOf('PORTADA') === -1 && upNm.indexOf('TEMA-TITOL') === -1) continue;
+                        var key = nm.toUpperCase();
+                        if (seen[key]) continue;
+                        seen[key] = 1;
+                        var mp = '';
+                        try { mp = it.getMediaPath(); } catch (eMp) { mp = ''; }
+                        var cr = 0, mo = 0, sz = 0;
+                        if (mp) {
+                            try {
+                                var f = new File(mp);
+                                if (f.exists) {
+                                    cr = f.created ? f.created.getTime() : 0;
+                                    mo = f.modified ? f.modified.getTime() : 0;
+                                    sz = f.length || 0;
+                                }
+                            } catch (eF) { }
+                        }
+                        out.push({ name: nm, mediaPath: mp, created: cr, modified: mo, size: sz });
+                    }
+                };
+                var bin = binName ? _item(p.rootItem.children, binName) : null;
+                if (bin) walk(bin, 0);
+                // Si el bin ja té les portades, NO es recorre la resta del projecte
+                // (en projectes grans, llegir el nom de cada ítem també costa).
+                if (out.length > 0) return JSON.stringify(out);
+                walk(p.rootItem, 0);
+                return JSON.stringify(out);
+            } catch (e) { return "ERR: " + e.message; }
+        },
+
+        /**
          * itemDuration: Retorna la durada en segons d'un element de projecte (footage).
          * @param {string} itemName - Nom de l'element (amb o sense extensió)
          * @returns {number} Durada en segons, o 0 si no es troba.

@@ -327,8 +327,403 @@
             }
         },
 
+        // ────────────────────────────────────────────────────────────────────
+        // wottsToday (2026-10-21) · DESBLOQUEIG FÍSIC DEL BOTÓ
+        // --------------------------------------------------------------------
+        // Els wotts es generen JUST en acabar l'emissió del bloc: si n'hi ha del
+        // bloc i del dia de treball → CREAR; si no → MASSA D'HORA. És un fet
+        // físic, no un horari, i substitueix el vell getStatus sobre el
+        // repositori central (5,2 s d'arrencada).
+        //
+        // PER QUÈ NO S'USA `created` DEL SCAN NORMAL:
+        //   · Els noms dels wotts NO porten data (Wott_TNV_v1_05_00.01_TEMA...mov).
+        //   · El mtime ESTÀ CONTAMINAT pel procés nocturn (ex: creat 16/10 19:17
+        //     UTC, modificat 17/10 00:32 UTC) → dataria el bloc al dia següent.
+        //   · cep.fs.stat no dóna creationTime en UNC en aquesta màquina (vegeu
+        //     Utils.readFolder) i IO.scanDirectory triga ~4 s amb 963 fitxers.
+        //   · Node sí: fs.stat().birthtime (≈1,5 ms/fitxer; 32 ms el readdir de
+        //     963 noms, mesurat el 2026-10-21).
+        // Cost per poll (15 s): readdir + stats NOMÉS dels noms no datats encara
+        // (caché `_wottDateCache` per nom) → ~35 ms en règim estable.
+        // ────────────────────────────────────────────────────────────────────
+        _wottDateCache: null,    // { NOM_EN_MAJUSCULES: 'YYYYMMDD' }
+        _wottProbeCache: null,   // { clau: { at, res } } · TTL 5 s
+        WOTT_PROBE_TTL_MS: 5000,
+        _mp4ProbeCache: null,    // { clau: { at, res } } · TTL 5 s (MP4 origen)
+        MP4_PROBE_TTL_MS: 5000,
+
+        /** _localDate: Date|ms → 'YYYYMMDD' amb components LOCALS. null si no és datable. */
+        _localDate: function (d) {
+            if (!d) return null;
+            var t = (d instanceof Date) ? d.getTime() : Number(d);
+            if (!t || isNaN(t) || t < 946684800000) return null;   // < 2000 → soroll
+            var dd = (d instanceof Date) ? d : new Date(t);
+            return '' + dd.getFullYear() +
+                ('0' + (dd.getMonth() + 1)).slice(-2) +
+                ('0' + dd.getDate()).slice(-2);
+        },
+
+        /**
+         * wottsToday: hi ha wotts del BLOC i del DIA de treball?
+         * @param {Object} ctx - { config, progData, bloque, dateDir }
+         * @returns {Promise<{ok:boolean, found:boolean, count:number, names:Array, via:string}>}
+         *          `ok:false` = no s'ha pogut llegir → NO s'ha de canviar d'estat.
+         */
+        wottsToday: async function (ctx) {
+            const out = { ok: false, found: false, count: 0, names: [], via: '' };
+            if (!ctx || !ctx.config || !ctx.config.rutas) return out;
+            const folder = ctx.config.rutas.chyrons;
+            const dateTarget = ctx.dateDir ? String(ctx.dateDir).replace(/_/g, '') : null;
+            const prog = (ctx.progData && ctx.progData.wott) ? String(ctx.progData.wott).toUpperCase() : '';
+            const bloc = ctx.bloque ? String(ctx.bloque).toUpperCase() : '';
+            if (!folder || !dateTarget || !prog || !bloc) return out;
+            const prefix = prog + '_' + bloc + '_';   // Wott_TNV_v1_... → 'TNV_V1_'
+
+            // Memòria curta: el poll de 15 s, el repintat manual i el semàfor
+            // comparteixen el mateix veredicte dins de la finestra.
+            const cacheKey = folder + '|' + prefix + '|' + dateTarget;
+            if (!this._wottProbeCache) this._wottProbeCache = {};
+            const hit = this._wottProbeCache[cacheKey];
+            if (hit && (Date.now() - hit.at) < (this.WOTT_PROBE_TTL_MS || 5000)) return hit.res;
+
+            // ── 1. NOMS (sense stats): Node → CEP → readFolder (JSX, últim recurs)
+            let names = null;
+            try {
+                const fs = window.FASTPASS_UI.Utils._nodeFs();
+                if (fs && fs.promises && fs.promises.readdir) {
+                    names = await fs.promises.readdir(folder);
+                    out.via = 'node';
+                } else if (fs && fs.readdirSync) {
+                    names = fs.readdirSync(folder);
+                    out.via = 'node';
+                }
+            } catch (eN) { names = null; }
+
+            if (!names && window.cep && window.cep.fs && window.cep.fs.readdir) {
+                try {
+                    const rd = window.cep.fs.readdir(folder);
+                    if (rd && rd.err === 0 && rd.data) {
+                        names = rd.data.map(function (n) { return (typeof n === 'string') ? n : (n && n.name); });
+                        out.via = 'cep';
+                    }
+                } catch (eC) { names = null; }
+            }
+
+            if (!names) {
+                // Últim recurs: scan amb JSX (car, ~4 s amb 963 fitxers). Si
+                // funciona, deixa TOT datat en caché i no es torna a pagar.
+                try {
+                    const all = await utils.readFolder(folder);
+                    if (all) {
+                        if (!this._wottDateCache) this._wottDateCache = {};
+                        for (let i = 0; i < all.length; i++) {
+                            const d0 = this._fileDateYYYYMMDD(all[i]);
+                            if (d0) this._wottDateCache[String(all[i].name).toUpperCase()] = d0;
+                        }
+                        names = all.map(function (f) { return f.name; });
+                        out.via = 'jsx';
+                    }
+                } catch (eJ) { names = null; }
+            }
+            if (!names) {
+                utils.log('❌ [SCAN:wottsToday] No s\'ha pogut llistar ' + folder + ' → es conserva l\'estat anterior', 'ERROR');
+                return out;   // ok:false
+            }
+
+            const cands = names.filter(function (n) {
+                const u = String(n || '').toUpperCase();
+                return u.indexOf(prefix) !== -1 && u.slice(-4) === '.MOV';
+            });
+            out.ok = true;                    // el llistat SÍ que ha funcionat
+            if (cands.length === 0) {
+                this._wottProbeCache[cacheKey] = { at: Date.now(), res: out };
+                return out;
+            }
+
+            // ── 2. DATACIÓ per birthtime (caché per NOM: cada fitxer, una vegada)
+            if (!this._wottDateCache) this._wottDateCache = {};
+            const dates = this._wottDateCache;
+            const pending = cands.filter(function (n) { return !dates[String(n).toUpperCase()]; });
+            if (pending.length > 0) await this._dateWotts(folder, pending);
+
+            const todays = cands.filter(function (n) { return dates[String(n).toUpperCase()] === dateTarget; });
+            out.found = todays.length > 0;
+            out.count = todays.length;
+            out.names = todays;
+            this._wottProbeCache[cacheKey] = { at: Date.now(), res: out };
+            utils.log('🗓️ [SCAN:wottsToday] ' + prefix + ' ' + dateTarget + ': ' + todays.length + '/' + cands.length +
+                ' wotts del dia (' + (out.via || '?') + ' · datats nous: ' + pending.length + ') → ' +
+                (out.found ? 'CREAR permès' : 'encara no'), 'DEBUG');
+            return out;
+        },
+
+        /**
+         * mp4Today: hi ha el MP4 ORIGEN del BLOC i del DIA de treball?
+         *
+         * (2026-10-21 · #177 · estats d'arrencada) El botó distingeix tres
+         * situacions abans de crear: MASSA D'HORA (ni MP4 ni wotts), ESPERA (MP4
+         * però encara sense wotts) i CREA (wotts). Este sondeig respon només a la
+         * primera pregunta i HO FA BARAT: noms per Node (`readdir`, ~30 ms) i
+         * `birthtime` NOMÉS dels candidats (els noms no sempre porten data).
+         *
+         * PER QUÈ NO `mediaAssets`: eixe àtom llig la carpeta amb
+         * `Utils.readFolder`; en UNC això és un escaneig ExtendScript amb
+         * `length/modified/created` de CADA fitxer (el mateix que va costar 93 s a
+         * la portada). Ací només cal saber SI hi ha un .MP4 del bloc.
+         *
+         * @param {Object} ctx - { config, progData, bloque, dateDir }
+         * @returns {Promise<{ok:boolean, found:boolean, name:string, via:string}>}
+         *          `ok:false` = no s'ha pogut llistar → no es pot afirmar res.
+         */
+        mp4Today: async function (ctx) {
+            const out = { ok: false, found: false, name: '', via: '' };
+            if (!ctx || !ctx.config || !ctx.config.rutas) return out;
+            const folder = ctx.config.rutas.verticalitzacio;
+            const dateTarget = ctx.dateDir ? String(ctx.dateDir).replace(/_/g, '') : null;
+            const prog = (ctx.progData && ctx.progData.archivo) ? String(ctx.progData.archivo).toUpperCase() : '';
+            const bloc = ctx.bloque ? String(ctx.bloque).toUpperCase() : '';
+            if (!folder || !dateTarget || !prog || !bloc) return out;
+            const prefix = prog + '_' + bloc + '_';
+
+            const cacheKey = folder + '|' + prefix + '|' + dateTarget;
+            if (!this._mp4ProbeCache) this._mp4ProbeCache = {};
+            const hit = this._mp4ProbeCache[cacheKey];
+            if (hit && (Date.now() - hit.at) < (this.MP4_PROBE_TTL_MS || 5000)) return hit.res;
+
+            // ── 1. NOMS (sense stats): Node → CEP → readFolder (JSX, últim recurs)
+            let names = null;
+            let createdByName = null;   // només el camí JSX ja porta `created`
+            try {
+                const fs = window.FASTPASS_UI.Utils._nodeFs();
+                if (fs && fs.promises && fs.promises.readdir) {
+                    names = await fs.promises.readdir(folder);
+                    out.via = 'node';
+                } else if (fs && fs.readdirSync) {
+                    names = fs.readdirSync(folder);
+                    out.via = 'node';
+                }
+            } catch (eN) { names = null; }
+
+            if (!names && window.cep && window.cep.fs && window.cep.fs.readdir) {
+                try {
+                    const rd = window.cep.fs.readdir(folder);
+                    if (rd && rd.err === 0 && rd.data) {
+                        names = rd.data.map(function (n) { return (typeof n === 'string') ? n : (n && n.name); });
+                        out.via = 'cep';
+                    }
+                } catch (eC) { names = null; }
+            }
+
+            if (!names) {
+                try {
+                    const all = await utils.readFolder(folder);
+                    if (all) {
+                        createdByName = {};
+                        for (let i = 0; i < all.length; i++) createdByName[all[i].name] = all[i].created || 0;
+                        names = all.map(function (f) { return f.name; });
+                        out.via = 'jsx';
+                    }
+                } catch (eJ) { names = null; }
+            }
+            if (!names) {
+                utils.log('❌ [SCAN:mp4Today] No s\'ha pogut llistar ' + folder + ' → estat del MP4 desconegut', 'ERROR');
+                return out;   // ok:false
+            }
+
+            const cands = names.filter(function (n) {
+                const u = String(n || '').toUpperCase();
+                return u.indexOf(prefix) !== -1 && u.slice(-4) === '.MP4';
+            });
+            out.ok = true;                    // el llistat SÍ que ha funcionat
+            if (cands.length === 0) {
+                this._mp4ProbeCache[cacheKey] = { at: Date.now(), res: out };
+                return out;
+            }
+
+            // ── 2. DATACIÓ: nom (YYYYMMDD) → created (JSX) → birthtime (caché)
+            const dates = {};
+            const pending = [];
+            for (let k = 0; k < cands.length; k++) {
+                const n = cands[k];
+                const d8 = this._extractDateFromFileName(n);
+                if (d8) { dates[String(n).toUpperCase()] = d8; continue; }
+                const cr = createdByName ? this._localDate(createdByName[n]) : null;
+                if (cr) { dates[String(n).toUpperCase()] = cr; continue; }
+                pending.push(n);
+            }
+            if (pending.length > 0) {
+                // Mateixa caché de dates que els wotts: clau = NOM SENCER (els .MP4 i
+                // els .MOV no col·lideixen) i cada fitxer es data una sola vegada.
+                await this._dateWotts(folder, pending);
+                const cache = this._wottDateCache || {};
+                for (let p = 0; p < pending.length; p++) {
+                    const d8p = cache[String(pending[p]).toUpperCase()];
+                    if (d8p) dates[String(pending[p]).toUpperCase()] = d8p;
+                }
+            }
+
+            const todays = cands.filter(function (n) { return dates[String(n).toUpperCase()] === dateTarget; });
+            out.found = todays.length > 0;
+            out.name = todays.length > 0 ? String(todays[0]) : '';
+            this._mp4ProbeCache[cacheKey] = { at: Date.now(), res: out };
+            utils.log('🎬 [SCAN:mp4Today] ' + prefix + ' ' + dateTarget + ': ' + todays.length + '/' + cands.length +
+                ' MP4 origen (' + (out.via || '?') + ') → ' + (out.found ? 'hi és' : 'encara no'), 'DEBUG');
+            return out;
+        },
+
+        /**
+         * _dateWotts: omple `_wottDateCache` (NOM → YYYYMMDD) pels noms indicats.
+         * Ordre: birthtime (Node) → creationTime (CEP) → File.created (JSX).
+         * @param {string} folder
+         * @param {Array<string>} names
+         */
+        _dateWotts: async function (folder, names) {
+            if (!this._wottDateCache) this._wottDateCache = {};
+            const dates = this._wottDateCache;
+            const base = String(folder).replace(/[\\/]+$/, '') + '\\';
+            const self = this;
+            const left = function (arr) {
+                return arr.filter(function (n) { return !dates[String(n).toUpperCase()]; });
+            };
+
+            // ── 1. NODE · birthtime (l'única data fiable: el mtime el mou el procés nocturn)
+            let fs = null;
+            try { fs = window.FASTPASS_UI.Utils._nodeFs(); } catch (eF) { fs = null; }
+            if (fs && fs.promises && fs.promises.stat) {
+                const CHUNK = 16;   // no esclafar l'SMB amb 150 stats alhora
+                for (let i = 0; i < names.length; i += CHUNK) {
+                    const slice = names.slice(i, i + CHUNK);
+                    const res = await Promise.all(slice.map(function (n) {
+                        return fs.promises.stat(base + n).then(function (st) {
+                            return { n: n, t: (st && st.birthtime) ? st.birthtime.getTime() : 0 };
+                        }, function () { return { n: n, t: 0 }; });
+                    }));
+                    for (let j = 0; j < res.length; j++) {
+                        const d8 = self._localDate(res[j].t);
+                        if (d8) dates[String(res[j].n).toUpperCase()] = d8;
+                    }
+                }
+                names = left(names);
+                if (names.length === 0) return;
+            }
+
+            // ── 2. CEP · creationTime (en UNC sol venir buit, però és gratis provar-ho)
+            if (window.cep && window.cep.fs && window.cep.fs.stat) {
+                for (let k = 0; k < names.length; k++) {
+                    try {
+                        const st = window.cep.fs.stat(base + names[k]);
+                        if (st && st.err === 0 && st.data) {
+                            const d8c = self._localDate(st.data.creationTime);
+                            if (d8c) dates[String(names[k]).toUpperCase()] = d8c;
+                        }
+                    } catch (eS) { }
+                }
+                names = left(names);
+                if (names.length === 0) return;
+            }
+
+            // ── 3. JSX · File.created (una lectura cara, però queda cachejada per sempre)
+            try {
+                const U = window.FASTPASS_UI.Utils;
+                if (U && typeof U._scanDirectoryMap === 'function') {
+                    const map = await U._scanDirectoryMap(folder);
+                    if (map) {
+                        for (let m = 0; m < names.length; m++) {
+                            const it = map[names[m]];
+                            const d8j = it ? self._fileDateYYYYMMDD({ name: names[m], created: it.created }) : null;
+                            if (d8j) dates[String(names[m]).toUpperCase()] = d8j;
+                        }
+                    }
+                }
+            } catch (eM) { }
+        },
+
+        /**
+         * portadasFromProject: PORTADES que JA SÓN AL PROJECTE (bin PORTADES).
+         *
+         * (2026-10-21 · lentitud de la portada) El flux de la portada només necessita
+         * UN PNG, i aquest PNG ja s'ha importat amb la ingesta del projecte. Abans es
+         * cridava `utils.readFolder(rutas.chyrons)`: a UNC això és `IO.scanDirectory`,
+         * que demana length/modified/created de CADA fitxer → amb 1.028 fitxers
+         * (871 .mov de 214 GB) el Promise.all de la portada s'endugé **93,52 s**
+         * (log del 21/10/2026 14:51:16) per trobar una portada que ja era al bin.
+         *
+         * FILTRE (2026-10-21 · #177): la portada del tema és un PNG amb el literal
+         * `PORTADA` al nom (p. ex. `Wott_TNC_v1_01i_..._PORTADA_...png`), i viu al
+         * bin PORTADES. Abans es filtrava per `TEMA-TITOL`, que NO sempre hi és, i
+         * el camí ràpid tornava null → 93 s d'escaneig del NAS per a res.
+         * Ordre de preferència: PORTADA + prefix PROG_BLOC → qualsevol PORTADA del
+         * bin (el bin és del projecte obert: no pot portar material d'un altre).
+         * Si el bin no en té cap (projecte nou, encara sense ingesta) retorna null i
+         * `portadas` fa el camí antic.
+         *
+         * @param {Object} ctx - { config, progData, bloque, dateDir }
+         * @returns {Promise<Array|null>} [{name, path}] (més recent primer) o null
+         */
+        portadasFromProject: async function (ctx) {
+            try {
+                var U = window.FASTPASS_UI && window.FASTPASS_UI.Utils;
+                if (!U || typeof U.callJSX !== 'function') return null;
+                var raw = await U.callJSX("FASTPASS.Project.pngItems('PORTADES')", { rawError: true });
+                if (!raw || String(raw).indexOf('ERR') === 0) return null;
+                var items = JSON.parse(raw);
+                if (!items || items.length === 0) return null;
+
+                var fProg = (ctx.progData && ctx.progData.wott) ? ctx.progData.wott.toUpperCase() : 'TNV';
+                var fBloc = ctx.bloque ? '_' + ctx.bloque + '_' : '_V1_';
+                var prefix = (fProg + fBloc).toUpperCase();
+
+                // 1) El PNG de portada: nom amb `PORTADA` i `.PNG` (el bin pot tindre
+                //    altres PNG del tema; només interessa el de portada).
+                var cand = items.filter(function (it) {
+                    var name = String(it.name || '').toUpperCase();
+                    return name.endsWith('.PNG') && name.indexOf('PORTADA') !== -1 && !!it.mediaPath;
+                });
+                if (cand.length === 0) return null;
+
+                // 2) Preferència pel programa+bloc; si cap el porta al nom, val
+                //    qualsevol portada del bin (és el bin del PROJECTE OBERT).
+                var pref = cand.filter(function (it) {
+                    return String(it.name || '').toUpperCase().indexOf(prefix) !== -1;
+                });
+                if (pref.length > 0) cand = pref;
+                else U.log('[SCAN:portades] Cap portada amb el prefix ' + prefix +
+                    ' al bin PORTADES: s\'usa la del bin (' + cand.length + ')', 'WARN');
+
+                // Mateix filtre per data de treball que el camí del NAS, però NOMÉS
+                // sobre les portades del bin (poques) → cap escaneig de carpeta.
+                var list = cand.map(function (it) {
+                    return { name: it.name, created: it.created || 0, mtime: it.modified || 0, path: it.mediaPath };
+                });
+                if (ctx.dateDir) {
+                    var resF = this.filterByWorkDate(list, ctx.dateDir);
+                    if (resF.keep.length > 0) {
+                        list = resF.keep;
+                    } else {
+                        // El bin és la FONT DE VERITAT del projecte obert: si cap data
+                        // coincideix (projecte reutilitzat, dates del NAS mogudes…) es
+                        // fa servir la portada MÉS RECENT del bin en compte de fallar.
+                        U.log('[SCAN:portades] El bin PORTADES té ' + list.length +
+                            " portada(es) però cap és de la data " + String(ctx.dateDir).replace(/_/g, '') +
+                            " → s'usa la MÉS RECENT del bin (no es toca el NAS)", 'WARN');
+                        list = list.slice().sort(function (a, b) { return (b.created || 0) - (a.created || 0); });
+                        if (list.length > 1) list = list.slice(0, 1);
+                    }
+                }
+                // Més recent primer: `_runPortadaBody` fa servir portadas[0].
+                list.sort(function (a, b) { return (b.created || 0) - (a.created || 0); });
+                U.log('[SCAN:portades] ' + list.length + " portada(es) del BIN PORTADES (cap escaneig del NAS): " +
+                    list.map(function (x) { return x.name; }).slice(0, 3).join(', '));
+                return list.map(function (x) { return { name: x.name, path: x.path, created: x.created, mtime: x.mtime }; });
+            } catch (e) { return null; }
+        },
+
         portadas: async function (ctx) {
             try {
+                // ── CAMÍ RÀPID (2026-10-21): la portada JA ÉS AL PROJECTE ──────
+                const fromProj = await this.portadasFromProject(ctx);
+                if (fromProj && fromProj.length > 0) return fromProj;
+
                 const pathNAS = ctx.config.rutas.chyrons;
                 const allFiles = await utils.readFolder(pathNAS);
                 if (!allFiles || allFiles.length === 0) return [];
@@ -339,7 +734,9 @@
     
                 let filtered = allFiles.filter(function (f) {
                     var name = f.name.toUpperCase();
-                    return name.indexOf(prefix) !== -1 && name.endsWith('.PNG') && name.indexOf('TEMA-TITOL') !== -1;
+                    // (2026-10-21 · #177) La portada és el PNG amb `PORTADA` al nom;
+                    // `TEMA-TITOL` pot faltar-hi (era el motiu del fals negatiu).
+                    return name.indexOf(prefix) !== -1 && name.endsWith('.PNG') && name.indexOf('PORTADA') !== -1;
                 });
     
                 // MECÀNICA D'INICI (2026-09-04): eliminada la guarda per mtime (22h);
@@ -455,7 +852,91 @@
                 utils.log('💥 [SCAN:srtFallback] ' + e.message, 'ERROR');
                 return null;
             }
+        },
+
+        /**
+         * srtSynthetic: SRT SINTETICS del dia de treball (F3.2).
+         * Viuen a `rutas.subtitulosSinteticos` (per defecte `<subtitulos>/SINTETICS`).
+         * Mateix criteri de data que `srtFallback`: si un fitxer no es pot datar
+         * (nom sense YYYYMMDD i sense creacio) ES DESCARTA — mai subtitols d'un
+         * altre dia dins del bloc.
+         *
+         * Nivells (s'atura al primer amb candidats):
+         *   N1: `{archivo}_{bloque}_` + data de treball
+         *   N2: `{archivo}_` (nomes programa) + data de treball
+         *   N3: qualsevol `.srt` de la data a la carpeta de sintetics
+         *
+         * @param {Object} ctx - { config, progData, bloque, dateDir }
+         * @returns {{name:string, path:string, level:number, reason:string, candidates:number}|null}
+         */
+        srtSynthetic: async function (ctx) {
+            try {
+                if (!ctx || !ctx.config || !ctx.config.rutas || !ctx.progData) return null;
+                var dir = String(ctx.config.rutas.subtitulosSinteticos || '');
+                if (!dir) {
+                    utils.log('[SCAN:srtSynthetic] Cap ruta de subtitols sintetics configurada', 'WARN');
+                    return null;
+                }
+                var allFiles = await utils.readFolder(dir);
+                if (!allFiles || allFiles.length === 0) {
+                    utils.log('[SCAN:srtSynthetic] Carpeta inaccessible o buida: ' + dir, 'WARN');
+                    return null;
+                }
+                var srts = allFiles.filter(function (f) { return /\.srt$/i.test(f.name || ''); });
+                if (srts.length === 0) {
+                    utils.log('[SCAN:srtSynthetic] Cap .SRT a ' + dir, 'WARN');
+                    return null;
+                }
+                var dateTarget = ctx.dateDir ? String(ctx.dateDir).replace(/_/g, '') : null;
+                if (!dateTarget) {
+                    utils.log('[SCAN:srtSynthetic] Sense data de treball (dateDir) → NO es carrega cap .SRT.', 'WARN');
+                    return null;
+                }
+                var self = this;
+                var delDia = srts.filter(function (f) { return self._fileDateYYYYMMDD(f) === dateTarget; });
+                if (delDia.length === 0) {
+                    utils.log('[SCAN:srtSynthetic] Cap .SRT de la data ' + dateTarget + ' a ' + dir +
+                        ' (' + srts.length + " d'altres dies descartats)", 'WARN');
+                    return null;
+                }
+                delDia.sort(function (a, b) {
+                    var da = self._fileDateYYYYMMDD(a) || '';
+                    var db = self._fileDateYYYYMMDD(b) || '';
+                    if (da !== db) return db.localeCompare(da);
+                    return (b.created || 0) - (a.created || 0);
+                });
+                var archivoUp = String(ctx.progData.archivo || '').toUpperCase();
+                var bloqueUp = String(ctx.bloque || '').toUpperCase();
+                var pBoth = archivoUp + '_' + bloqueUp + '_';
+                var pProg = archivoUp + '_';
+                var hasBoth = function (f) { return archivoUp && (f.name || '').toUpperCase().indexOf(pBoth) !== -1; };
+                var hasProg = function (f) { return archivoUp && (f.name || '').toUpperCase().indexOf(pProg) !== -1; };
+                var levels = [
+                    { level: 1, reason: 'prefix programa_bloc + data de treball', list: delDia.filter(hasBoth) },
+                    { level: 2, reason: 'prefix programa + data de treball', list: delDia.filter(hasProg) },
+                    { level: 3, reason: 'qualsevol sintetic de la data', list: delDia }
+                ];
+                for (var i = 0; i < levels.length; i++) {
+                    var L = levels[i];
+                    if (L.list.length === 0) continue;
+                    var pick = L.list[0];
+                    utils.log('[SCAN:srtSynthetic] N' + L.level + ' (' + L.reason + '): ' + L.list.length +
+                        ' candidat(s) · triat "' + pick.name + '" (' + (self._fileDateYYYYMMDD(pick) || 'sense data') + ')', 'INFO');
+                    return {
+                        name: pick.name,
+                        path: dir + pick.name,
+                        level: L.level,
+                        reason: L.reason,
+                        candidates: L.list.length
+                    };
+                }
+                return null;
+            } catch (e) {
+                utils.log('💥 [SCAN:srtSynthetic] ' + e.message, 'ERROR');
+                return null;
+            }
         }
+
     };
 
     window.Scan = FASTPASS_UI.Logic.Scan;

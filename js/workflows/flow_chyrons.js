@@ -2825,6 +2825,23 @@
                             log(`   ⚠️ [${label}] Sense pista disponible per a ${chy.name}`, "WARN");
                             continue;
                         }
+                        // (2026-10-21) ALINEAT A LA GRAELLA (mai +1 frame): `placeStart` ve
+                        // de max(inici del clip, MARCADOR) + 10 frames. Si el marcador no cau
+                        // a la graella, Premiere snapeja l'INSERT a un frame i el FINAL
+                        // (start + durada) al SEGÜENT → el wott quedava 1 frame més llarg que
+                        // el mèdia (les durades estimades tampoc hi cauen; `_resolveWottDur`
+                        // ja les alinea). S'alinea l'inici (al més prop) i el final (cap
+                        // AVALL: mai més enllà del pla de l'ítem).
+                        const gridNear = (v) => Math.round(Number(v) / REV_FRAME) * REV_FRAME;
+                        const gridDown = (v) => Math.floor(Number(v) / REV_FRAME + 1e-6) * REV_FRAME;
+                        if (isFinite(slot.start)) {
+                            const startAl = gridNear(slot.start);
+                            if (Math.abs(startAl - slot.start) > 1e-6) {
+                                const dAl = startAl - slot.start;
+                                slot.start = startAl;
+                                if (placeEnd !== null) placeEnd += dAl;   // conserva la durada del pla
+                            }
+                        }
                         if (slot.shrunk) {
                             log(`   ⚠️ [${label}] ${String(chy.name).substring(0, 30)}… escurçat a ${(slot.maxDur || 0).toFixed(2)}s per encabir-se dins del seu ítem @ ${slot.start.toFixed(2)}s`, "WARN");
                         }
@@ -2843,6 +2860,20 @@
                                 end2 = (end2 === null) ? maxE : Math.min(end2, maxE);
                             }
                             placeEnd = end2;
+                        }
+                        // (2026-10-21) El FINAL també a la graella (cap avall): `placeEnd`
+                        // pot vindre d'un MARCADOR o del final d'un clip que no hi cau, i
+                        // Premiere l'arrodonix cap amunt → 1 frame de més.
+                        if (placeEnd !== null && placeEnd > slot.start + 0.02) {
+                            placeEnd = gridDown(placeEnd);
+                        }
+                        // (2026-10-21 · #177) RECRETA D'1 FRAME: encara que el final caiga
+                        // EXACTE a la graella, el clip del wott eixia 1 frame més llarg del
+                        // compte (l'`outPoint` del source és inclusiu: amb `in + duració`
+                        // encara es mostra el frame de la duració). Es descompta 1 frame a
+                        // la DURADA de l'insert, mai per davall de 1 frame de clip.
+                        if (placeEnd !== null && (placeEnd - slot.start) > REV_FRAME + 0.001) {
+                            placeEnd = gridDown(placeEnd - REV_FRAME);
                         }
                         // (2026-10-08) `jsxName`: el JSX fa `decodeURIComponent` sobre el nom →
                         // un `%` literal l'ha de rebre com a `%25` o la crida falla en silenci.
@@ -3626,10 +3657,14 @@
                 // (mesurada per ffprobe i alineada a la rejilla de frames). Amb l'estimació del
                 // manifest (1,02 s) l'interval quedava 1 frame més llarg del que toca.
                 const entrantIn = p.clipStart + 0.40;
-                // (2026-10-07) L'OUT va 1 frame ABANS del final teòric: `petitDur` ve de `ceil`
-                // → el clip durava 1 frame MÉS que el mèdia i aquell darrer frame eixia buit.
-                // El congelat (més avall) comença aquí i absorbeix aquell frame.
-                const entrantOut = entrantIn + petitDur - REV_FRAME;
+                // (2026-10-07) L'OUT va 1 frame ABANS del final teòric: `petitDur` veia de
+                // `ceil` → el clip durava 1 frame MÉS que el mèdia i aquell darrer frame
+                // eixia buit. El congelat (més avall) comença aquí i absorbeix aquell frame.
+                // (2026-10-21) El frame NOMÉS es lleva si `snapDur` ha arrodonit CAP AMUNT:
+                // `_resolveWottDur` ja entrega la durada a la graella, i restar-lo sempre
+                // deixava la part viva 1 frame CURTA (el defecte oposat).
+                const ceil1f = (snapDur(durP) - durP > 1e-6) ? REV_FRAME : 0;
+                const entrantOut = entrantIn + petitDur - ceil1f;
                 plan.push({ kind: 'entrant', name: petit.name, start: entrantIn, end: entrantOut, label: '🟢 [Titol·Petit] ENTRANT' });
                 // (2026-10-01 · #128) CONGELAT entre l'ENTRANT i el SORTINT: un frame congelat del
                 // FINAL del titulillo, estirat fins on comença el revers. Sense això V5 quedava

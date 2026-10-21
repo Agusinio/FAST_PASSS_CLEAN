@@ -107,16 +107,45 @@
         _MARKER_TOL_MIN_SEC: 20,
         _lastSegLog: -1,
 
+        // ── F3 (2026-10-21) · SELECCIO, SINTETICS I REOMLIMENT ──────────────
+        // _selIndex: entrada PRINCIPAL de la TAULA QUE ES VEU (la primera de la
+        //   selecció). -1 = cap. Es conserva per compatibilitat (exportar, 🗑,
+        //   missatges) i ha de coincidir amb el primer índex de _selIndices.
+        _selIndex: -1,
+        // (F3.4, 2026-10-21) SELECCIO MULTIPLE de clips (Ctrl/Shift+clic al clip):
+        //   _selIndices → índexs seleccionats (ordenats) · _selAnchor → àncora del
+        //   Shift. Supr/Backspace esborra TOTS els clips de _selIndices.
+        //   El CURSOR només es mou clicant la REGLA (la resta del canvas no fa seek).
+        _selIndices: [],
+        _selAnchor: -1,
+        // Franja (px) dels extrems d'un clip que NO alterna la selecció: el
+        // "centre" del clip és el que selecciona/deselecciona (F3.4).
+        _CLIP_EDGE_PX: 4,
+        // _kind: quina taula es viu ara → color dels clips i pista per defecte a
+        // l'exportar. 'NORMAL' (SRT del dia) · 'SINT' (sintetics) · 'MOD' (fusio).
+        _kind: 'NORMAL',
+        // _views: instantanies de les taules que NO es veuen (kind → vista), per
+        // poder alternar NORMAL↔SINT sense rellegir res i sense barrejar-les.
+        _views: {},
+        // _timelineSubs: caché de clips de subtitol del timeline [{track,start,end}]
+        // (per saber si l'entrada seleccionada ja esta exportada). 0 = sense llegir.
+        _timelineSubs: null,
+        _timelineSubsAt: 0,
+
         init: function () {
             this._canvas = document.getElementById('srtCanvas');
             if (!this._canvas) return false;
             this._ctx = this._canvas.getContext('2d');
             var self = this;
 
+            // (F3.4, 2026-10-21) El CURSOR només es mou des de la REGLA: la resta del
+            // canvas (zona de treball + clips) ja NO fa seek; allí el clic
+            // selecciona/deselecciona clips (ho resol el mousedown).
             this._canvas.addEventListener('click', function (e) {
                 if (self._suppressClick) { self._suppressClick = false; return; }
+                if (!self._inRulerZone(e)) return;
                 var sec = self._canvasXToSec(e);
-                log("🖱 CLIC canvas → media=" + sec.toFixed(2) + "s");
+                log("🖱 CLIC canvas (regla) → media=" + sec.toFixed(2) + "s");
                 self.setPlayhead(sec);
             });
 
@@ -152,9 +181,14 @@
             });
 
             // Botó esquerre (disseny compacte):
-            //  - REGLA → SOLS el cabezal (playhead), mai drag.
-            //  - Zona de treball (WF de fons + clips superposats) → arrossegar els marcadors.
-            // Un click simple sobre un marcador (sense moviment) posiciona el playhead.
+            //  - REGLA → SOLS el cabezal (playhead), mai drag ni selecció.
+            //  - Zona de treball → marcadors (drag) i, si no n'hi ha cap davall el
+            //    cursor, SELECCIÓ de clips (F3.4):
+            //      · centre del clip  → selecciona/deselecciona (clic simple);
+            //      · Ctrl/Cmd+clic    → afig/leva de la selecció (multi);
+            //      · Shift+clic       → rang des de l'àncora;
+            //      · zona buida       → buida la selecció.
+            //    En cap cas mou el cabezal (eixe és només de la regla).
             this._canvas.addEventListener('mousedown', function (e) {
                 if (e.button !== 0) return;
                 var sec = self._canvasXToSec(e);
@@ -164,17 +198,27 @@
                     self._suppressClick = true; // el clic següent no ha de repetir el seek
                     return;
                 }
+                // Si el clic cau DINS del cos d'un clip, la tolerància per agafar un
+                // marcador és l'ESTRICTA (px): la tol ampliada (20 s) faria impossible
+                // seleccionar un clip que tinguera un marcador a prop.
+                var hit = self._clipHitAtEvent(e);
                 // Tol ampliada per capturar el marcador per ARROSSEGAR-lo (wideTol=true).
-                var idx = self._markerAtSec(sec, true);
-                if (idx < 0) {
-                    // Cap marcador a sota: posicionar el playhead immediatament.
-                    log("🖱 MOUSEDOWN canvas → media=" + sec.toFixed(2) + "s");
-                    self.setPlayhead(sec);
-                    self._suppressClick = true; // el clic següent no ha de repetir el seek
+                var idx = self._markerAtSec(sec, !hit);
+                if (idx >= 0) {
+                    self._dragIdx = idx;
+                    self._didDrag = false;
+                    e.preventDefault();
                     return;
                 }
-                self._dragIdx = idx;
-                self._didDrag = false;
+                // Cap marcador davall el cursor → selecció de clips (sense seek).
+                if (hit) {
+                    self._toggleSelectionAt(hit.index, e, hit.inCenter);
+                } else if (!(e.ctrlKey || e.metaKey || e.shiftKey)) {
+                    self._clearSelection();
+                    self.render();
+                    log("🖱 MOUSEDOWN zona buida → selecció buidada");
+                }
+                self._suppressClick = true; // el clic següent no ha de moure el cabezal
                 e.preventDefault();
             });
 
@@ -205,7 +249,28 @@
 
             this._scrollWrap = this._canvas.parentElement;
             this._initZoomBar();
+            this._initKeys();
             return true;
+        },
+
+        /**
+         * _initKeys (F3.1 · F3.4): Supr/Backspace esborren el/els subtitol(s)
+         * seleccionat(s) (selecció múltiple amb Ctrl/Shift+clic).
+         * Nomes actua amb l'editor VISIBLE (el contenidor te display:none quan no
+         * hi ha SRT) i MAI des de dins d'un camp de text.
+         */
+        _initKeys: function () {
+            var self = this;
+            document.addEventListener('keydown', function (e) {
+                var k = e.key || e.code || '';
+                if (k !== 'Delete' && k !== 'Backspace') return;
+                if (!self._canvas || !self._canvas.offsetParent) return;   // editor amagat
+                var el = document.activeElement;
+                var tag = el ? String(el.tagName || '').toUpperCase() : '';
+                if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || (el && el.isContentEditable)) return;
+                e.preventDefault();
+                self.deleteSelected();
+            });
         },
 
         // --- BARRA DE ZOOM (estil Premiere) ---
@@ -343,11 +408,19 @@
          * @param {Object} [opts] - { skipMarkerRestore: true } → NO restaura els marcadors
          *   persistits. El fa servir el RESET ♻️ (#138): un cop esborrats, els marcadors
          *   no han de tornar a aparèixer en recarregar el mateix .srt.
+         *   { kind: 'SINT' } (F3.2) → la taula es marca com a SINTETICA (color taronja,
+         *   exportació per defecte a S2) i la que es veia es guarda a `_views`.
          * @returns {boolean} true si s'ha carregat
          */
         loadSrt: async function (srtPath, opts) {
             var skipMarkerRestore = !!(opts && opts.skipMarkerRestore);
-            log("📝 SRT_EDIT: Carregant " + srtPath + (skipMarkerRestore ? " (sense restaurar marcadors)" : ""));
+            // (F3.2) kind: 'NORMAL' (per defecte) o 'SINT'. Les taules NO es
+            // barregen: la que es deixa de veure es guarda a _views.
+            var kind = (opts && opts.kind) ? String(opts.kind).toUpperCase() : 'NORMAL';
+            if (kind !== 'SINT' && kind !== 'NORMAL') kind = 'NORMAL';
+            if (this._kind !== kind && (this._entries || []).length > 0) this._stashCurrentView();
+            delete this._views[kind];   // es carrega de nou: la instantania vella ja no val
+            log("📝 SRT_EDIT: Carregant " + srtPath + (kind === 'SINT' ? " [SINT]" : "") + (skipMarkerRestore ? " (sense restaurar marcadors)" : ""));
             var escapedPath = srtPath.replace(/\\/g, '\\\\');
             // (2026-10-02) IO.readTxt llegeix amb ANSI i els .srt del projecte són UTF-8
             // → els accents arribaven malmesos ("Ã“" en lloc de "Ó"). Es repara aquí.
@@ -366,6 +439,10 @@
             // Empremta del contingut: els marcadors persistits només es poden restaurar
             // si el SRT és exactament el mateix (vegeu _restoreMarkers).
             this._srtFingerprint = this._fingerprintSrt();
+            // (F3) La taula carregada passa a ser la VIVA i la seua marca de color
+            this._kind = kind;
+            this._clearSelection();
+            this._timelineSubs = null;
             if (this._entries.length > 0) {
                 this._maxSec = this._entries[this._entries.length - 1].endSec + 10;
             }
@@ -425,7 +502,7 @@
             // Aplicar els marcadors restaurats a la taula de clips (warp).
             this._applyAllMarkers();
             this.render();
-            getUtils().status("SRT carregat: " + this._entries.length + " entrades", "exito");
+            getUtils().status((kind === "SINT" ? "SINT carregat" : "SRT carregat") + ": " + this._entries.length + " entrades", "exito");
             return true;
         },
 
@@ -1383,6 +1460,13 @@
             return { rulerHeight: this._rulerHeight, zoneTop: zoneTop, zoneH: zoneH, canvasH: canvasH };
         },
 
+        // Coordenada X del cursor en l'espai del canvas (compensa l'escalat CSS).
+        _eventX: function (e) {
+            var rect = this._canvas.getBoundingClientRect();
+            var scaleX = (rect.width > 0) ? (this._canvas.width / rect.width) : 1;
+            return (e.clientX - rect.left) * scaleX;
+        },
+
         // Coordenada Y del cursor en l'espai del canvas (compensa l'escalat CSS).
         _eventY: function (e) {
             var rect = this._canvas.getBoundingClientRect();
@@ -1394,6 +1478,498 @@
         // (zona de treball WF+clips) és zona de marcadors.
         _inRulerZone: function (e) {
             return this._eventY(e) < this._getLayout().rulerHeight;
+        },
+
+        // ════════════════════════════════════════════════════════════════════
+        // F3 · SELECCIO / ESBORRAT / SINTETICS / REOMLIMENT DE BUITS
+        // ════════════════════════════════════════════════════════════════════
+
+        /** _trackStyle: colors dels clips segons la taula que es veu. */
+        _trackStyle: function () {
+            if (this._kind === 'SINT') return { fill: 'rgba(212,120,32,0.45)', stroke: 'rgba(255,210,150,0.95)', sel: 'rgba(255,190,90,0.85)' };
+            if (this._kind === 'MOD') return { fill: 'rgba(32,160,120,0.45)', stroke: 'rgba(170,255,225,0.95)', sel: 'rgba(120,255,200,0.85)' };
+            return { fill: 'rgba(143,74,212,0.45)', stroke: 'rgba(210,175,255,0.9)', sel: 'rgba(235,215,255,0.9)' };
+        },
+
+        /** _clipAtSec: index de l'entrada que cau davall `sec` (o -1). */
+        _clipAtSec: function (sec) {
+            var list = this._entries || [];
+            for (var i = 0; i < list.length; i++) {
+                if (sec >= list[i].startSec && sec < list[i].endSec) return i;
+            }
+            return -1;
+        },
+
+        /**
+         * _clipHitAtPx: quin clip cau davall una X del canvas i si el punt és al
+         * CENTRE del clip (F3.4). Els extrems (franja de _CLIP_EDGE_PX px) no
+         * alternen la selecció: queden reservats per a futurs retalls IN/OUT.
+         * @returns {{index:number, inCenter:boolean}|null}
+         */
+        _clipHitAtPx: function (px) {
+            var list = this._entries || [];
+            for (var i = 0; i < list.length; i++) {
+                var x0 = this._secToX(list[i].startSec);
+                var x1 = this._secToX(list[i].endSec);
+                if (x1 - x0 < 2) x1 = x0 + 2;   // clips quasi nuls → àrea mínima
+                if (px < x0 || px > x1) continue;
+                var edge = Math.min(this._CLIP_EDGE_PX || 4, (x1 - x0) * 0.25);
+                return { index: i, inCenter: (px >= x0 + edge && px <= x1 - edge) };
+            }
+            return null;
+        },
+
+        /** _clipHitAtEvent: _clipHitAtPx amb les coordenades de l'esdeveniment. */
+        _clipHitAtEvent: function (e) {
+            return this._clipHitAtPx(this._eventX(e));
+        },
+
+        /** _selectedIndices: índexs VÀLIDS de la selecció (ordenats, sense duplicats). */
+        _selectedIndices: function () {
+            var out = [], src = this._selIndices || [];
+            var n = (this._entries || []).length;
+            for (var i = 0; i < src.length; i++) {
+                var k = Number(src[i]);
+                if (isFinite(k) && k >= 0 && k < n && out.indexOf(k) < 0) out.push(k);
+            }
+            out.sort(function (a, b) { return a - b; });
+            return out;
+        },
+
+        /** _isSelected: l'entrada `i` és a la selecció? (el fa servir _drawTrack) */
+        _isSelected: function (i) {
+            return (this._selIndices || []).indexOf(i) >= 0;
+        },
+
+        /**
+         * _setSelection: fixa la selecció (índexs vàlids i ordenats) i l'àncora
+         * del Shift, i torna a pintar. Manté `_selIndex` = primer índex (per al
+         * codi que encara el llig: exportar, 🗑, missatges…).
+         */
+        _setSelection: function (list, anchor) {
+            var valid = [];
+            var n = (this._entries || []).length;
+            for (var i = 0; i < (list || []).length; i++) {
+                var k = Number(list[i]);
+                if (isFinite(k) && k >= 0 && k < n && valid.indexOf(k) < 0) valid.push(k);
+            }
+            valid.sort(function (a, b) { return a - b; });
+            this._selIndices = valid;
+            var a = Number(anchor);
+            this._selAnchor = (isFinite(a) && a >= 0 && a < n) ? a : (valid.length ? valid[0] : -1);
+            this._selIndex = valid.length ? valid[0] : -1;
+            this.render();
+            return valid;
+        },
+
+        /** _clearSelection: cap clip seleccionat (NO pinta: ho fa qui crida). */
+        _clearSelection: function () {
+            this._selIndices = [];
+            this._selAnchor = -1;
+            this._selIndex = -1;
+        },
+
+        /** _logSelection: log + missatge d'estat de la selecció actual. */
+        _logSelection: function () {
+            var sel = this._selectedIndices();
+            var n = (this._entries || []).length;
+            if (!sel.length) {
+                getUtils().status("Cap subtitol seleccionat", "warn");
+                return;
+            }
+            if (sel.length === 1) {
+                var e = this._entries[sel[0]];
+                if (!e) return;
+                log("📝 SRT_EDIT: seleccionat #" + (sel[0] + 1) + "/" + n + " [" + this._secToTimeStr(e.startSec) + " → " + this._secToTimeStr(e.endSec) + "] " +
+                    (e.texts || []).join(' ').substring(0, 60));
+                getUtils().status("Subtitol " + (sel[0] + 1) + "/" + n + " seleccionat · Supr esborra", "exito");
+            } else {
+                log("📝 SRT_EDIT: " + sel.length + " subtitols seleccionats (#" + sel.map(function (k) { return k + 1; }).join(', #') + ") · Supr esborra");
+                getUtils().status(sel.length + " subtítols seleccionats · Supr esborra", "exito");
+            }
+        },
+
+        /**
+         * _toggleSelectionAt (F3.4): clic sobre el clip `i` de la zona de treball.
+         *   - Shift+clic    → RANG des de l'àncora fins a `i` (Ctrl+Shift → uneix).
+         *   - Ctrl/Cmd+clic → afig/leva `i` de la selecció (multi-selecció).
+         *   - Clic simple   → només `i`; si ja era l'ÚNIC seleccionat → deselecciona.
+         *   - `inCenter=false` (franja dels extrems) → selecciona sense alternar.
+         */
+        _toggleSelectionAt: function (i, ev, inCenter) {
+            var e = ev || {};
+            var ctrl = !!(e.ctrlKey || e.metaKey);
+            var shift = !!e.shiftKey;
+            var cur = this._selectedIndices();
+            var n = (this._entries || []).length;
+            if (i < 0 || i >= n) return cur;
+
+            var anchor = (this._selAnchor >= 0 && this._selAnchor < n)
+                ? this._selAnchor : (cur.length ? cur[0] : i);
+
+            if (shift) {
+                var a = Math.min(anchor, i), b = Math.max(anchor, i);
+                var range = [];
+                for (var k = a; k <= b; k++) range.push(k);
+                if (ctrl) {
+                    for (var c = 0; c < cur.length; c++) if (range.indexOf(cur[c]) < 0) range.push(cur[c]);
+                }
+                this._setSelection(range, anchor);
+            } else if (ctrl) {
+                var multi = cur.slice();
+                var at = multi.indexOf(i);
+                if (at >= 0) multi.splice(at, 1); else multi.push(i);
+                this._setSelection(multi, i);
+            } else if (cur.length === 1 && cur[0] === i) {
+                // Clic simple damunt l'ÚNIC clip seleccionat → el deselecciona.
+                this._clearSelection();
+                this.render();
+                log("📝 SRT_EDIT: #" + (i + 1) + " deseleccionat (clic al centre)");
+                getUtils().status("Subtitol " + (i + 1) + " deseleccionat · Supr esborra", "warn");
+                return [];
+            } else if (!inCenter && cur.indexOf(i) >= 0) {
+                // Extrem d'un clip ja seleccionat: no alterna (no es deselecciona sense voler).
+                this._setSelection(cur, i);
+            } else {
+                this._setSelection([i], i);
+            }
+            this._logSelection();
+            return this._selectedIndices();
+        },
+
+        /** _selectAtSec: selecciona el clip davall `sec` (compatibilitat F3.1). */
+        _selectAtSec: function (sec) {
+            var i = this._clipAtSec(sec);
+            if (i < 0) {
+                this._clearSelection();
+                this.render();
+                return -1;
+            }
+            if (this._selIndices.length === 1 && this._selIndices[0] === i) return i;
+            this._setSelection([i], i);
+            this._logSelection();
+            return i;
+        },
+
+        /** _secToTimeStr: HH:MM:SS.mmm (nomes per als missatges). */
+        _secToTimeStr: function (sec) {
+            var s = Math.max(0, Number(sec) || 0);
+            var h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), ss = Math.floor(s % 60);
+            var ms = Math.round((s - Math.floor(s)) * 1000);
+            var p = function (v, n) { var t = String(v); while (t.length < n) t = '0' + t; return t; };
+            return p(h, 2) + ':' + p(m, 2) + ':' + p(ss, 2) + '.' + p(ms, 3);
+        },
+
+        /** _snapshotView: instantania COMPLETA de la taula viva (per poder tornar-hi). */
+        _snapshotView: function () {
+            var P = window.FASTPASS_UI.Logic.SrtParser;
+            return {
+                kind: this._kind,
+                path: this._srtPath,
+                name: this._srtName,
+                fingerprint: this._srtFingerprint,
+                entries: P.cloneEntries(this._entries),
+                loadedEntries: P.cloneEntries(this._loadedEntries),
+                originalEntries: P.cloneEntries(this._originalEntries),
+                markers: (this._markers || []).slice(),
+                originalMarkers: (this._originalMarkers || []).slice(),
+                maxSec: this._maxSec,
+                editWinStart: this._editWinStart,
+                editWinEnd: this._editWinEnd,
+                isDirty: this._isDirty
+            };
+        },
+
+        /** _stashCurrentView: guarda la taula viva a _views[<kind>]. */
+        _stashCurrentView: function () {
+            if (!this._entries || this._entries.length === 0) return;
+            this._views[this._kind] = this._snapshotView();
+            log("📝 SRT_EDIT: taula " + this._kind + " guardada (" + this._entries.length + " entrades, " + this._srtName + ")");
+        },
+
+        /** _applyView: restaura una instantania damunt de la taula viva. */
+        _applyView: function (v) {
+            var P = window.FASTPASS_UI.Logic.SrtParser;
+            this._srtPath = v.path || '';
+            this._srtName = v.name || '';
+            this._srtFingerprint = v.fingerprint || '';
+            this._entries = P.cloneEntries(v.entries);
+            this._loadedEntries = P.cloneEntries(v.loadedEntries);
+            this._originalEntries = P.cloneEntries(v.originalEntries);
+            this._markers = (v.markers || []).slice();
+            this._originalMarkers = (v.originalMarkers || []).slice();
+            this._maxSec = v.maxSec || (this._entries.length ? this._entries[this._entries.length - 1].endSec + 10 : 120);
+            this._editWinStart = (v.editWinStart != null) ? v.editWinStart : null;
+            this._editWinEnd = (v.editWinEnd != null) ? v.editWinEnd : null;
+            this._isDirty = !!v.isDirty;
+            this._kind = String(v.kind || 'NORMAL').toUpperCase();
+            this._clearSelection();
+            this._timelineSubs = null;
+        },
+
+        /** switchView: alterna NORMAL↔SINT (o MOD) sense rellegir cap fitxer. */
+        switchView: function (kind) {
+            var k = String(kind || '').toUpperCase();
+            var v = this._views[k];
+            if (!v) return false;
+            this._stashCurrentView();
+            this._applyView(v);
+            delete this._views[k];   // ara es viva: la instantania ja no cal
+            this.render();
+            log("📝 SRT_EDIT: vista " + k + " restaurada (" + this._entries.length + " entrades, " + this._srtName + ")");
+            return true;
+        },
+
+        /** hasView: hi ha una taula guardada d'aquest tipus? */
+        hasView: function (kind) {
+            return !!this._views[String(kind || '').toUpperCase()];
+        },
+
+        /**
+         * _refreshTimelineSubs: llig els clips de subtitol del timeline
+         * [{t: pista, s: inici, e: final}] amb memoria curta de 4 s.
+         */
+        _refreshTimelineSubs: async function (force) {
+            var now = Date.now();
+            if (!force && this._timelineSubs && (now - this._timelineSubsAt) < 4000) return this._timelineSubs;
+            var jsx = "(function(){try{var s=app.project.activeSequence;if(!s)return'ERR_NO_SEQ';"
+                + "var out=[];if(s.subtitleTracks){var n=s.subtitleTracks.numTracks||s.subtitleTracks.numItems||0;"
+                + "for(var t=0;t<n;t++){var tr=s.subtitleTracks[t];if(!tr||!tr.clips)continue;"
+                + "for(var i=0;i<tr.clips.numItems;i++){var c=tr.clips[i];"
+                + "out.push({t:t,s:c.start.seconds,e:c.end.seconds});}}}"
+                + "return JSON.stringify(out)}catch(e){return'ERR:'+e.message}})()";
+            var raw = await callJSX(jsx);
+            var list = [];
+            if (raw && String(raw).charAt(0) === '[') {
+                try { list = JSON.parse(raw); } catch (eP) { list = []; }
+            } else {
+                log("⚠️ SRT_EDIT: no s'han pogut llegir els subtitols del timeline: " + raw);
+            }
+            this._timelineSubs = list;
+            this._timelineSubsAt = now;
+            return list;
+        },
+
+        /** _findTimelineSubAt: clip de subtitol del timeline que cau a `tlSec`. */
+        _findTimelineSubAt: async function (tlSec) {
+            var list = await this._refreshTimelineSubs(false);
+            var tl = Number(tlSec) || 0;
+            var best = null, bestD = Infinity;
+            for (var i = 0; i < list.length; i++) {
+                var s = list[i];
+                if (tl >= s.s - 0.08 && tl < s.e - 0.02) return s;
+                var d = Math.abs(s.s - tl);
+                if (d < bestD) { bestD = d; best = s; }
+            }
+            return (best && bestD <= 0.2) ? best : null;
+        },
+
+        /**
+         * _removeTimelineSubAt: esborra NOMES el clip de subtitol que cau a
+         * `tlSec` (mai altres pistes ni altres clips). Deixa el forat (sense
+         * ripple): els subtitols no s'han de desplaçar.
+         */
+        _removeTimelineSubAt: async function (tlSec) {
+            var tc = (Number(tlSec) || 0).toFixed(3);
+            var jsx = "(function(){try{var s=app.project.activeSequence;if(!s)return'ERR_NO_SEQ';"
+                + "if(!s.subtitleTracks)return'ERR_NO_SUB_TRACKS';var tc=" + tc + ";"
+                + "var n=s.subtitleTracks.numTracks||s.subtitleTracks.numItems||0;var best=null,bt=-1,bi=-1,bd=1e9;"
+                + "for(var t=0;t<n;t++){var tr=s.subtitleTracks[t];if(!tr||!tr.clips)continue;"
+                + "for(var i=0;i<tr.clips.numItems;i++){var c=tr.clips[i];var st=c.start.seconds,en=c.end.seconds;"
+                + "var inside=(tc>=st-0.08&&tc<en-0.02);var d=inside?0:Math.abs(st-tc);"
+                + "if((inside||d<=0.2)&&d<bd){bd=d;best=c;bt=t;bi=i;}}}"
+                + "if(!best)return'ERR_NOT_FOUND_AT_'+tc;"
+                + "try{best.remove()}catch(e1){best.remove(false,false)}return'OK_S'+(bt+1)+'_I'+bi}"
+                + "catch(e){return'ERR:'+e.message}})()";
+            return await callJSX(jsx);
+        },
+
+        /**
+         * _detectExportTrack: en quina pista de subtitols ha aterrat el SRT
+         * (1-based). Es mira quin clip comença al TC indicat; si la pista no
+         * existia i se n'ha creat una de zero, `createCaptionTrack` pot haver
+         * fet la S1 encara que es demanara la S2 → el log ha de dir la REAL.
+         */
+        _detectExportTrack: async function (tlSec, fallbackIdx) {
+            try {
+                var list = await this._refreshTimelineSubs(true);
+                var tl = Number(tlSec) || 0;
+                var bestT = -1;
+                for (var i = 0; i < list.length; i++) {
+                    if (Math.abs(list[i].s - tl) <= 0.25 && list[i].t > bestT) bestT = list[i].t;
+                }
+                if (bestT >= 0) return bestT + 1;
+            } catch (eT) { }
+            return (Number(fallbackIdx) || 0) + 1;
+        },
+
+        /**
+         * deleteSelected (F3.1 · F3.4): esborra els subtítols SELECCIONATS
+         * (un o molts, amb Ctrl/Shift+clic) o, si no n'hi ha cap, el que cau
+         * davall el cabezal.
+         *   - Taula: les entrades ixen de _entries → no s'exportaran. El .srt del
+         *     NAS no es toca mai (i _loadedEntries es conserva → ♻️ ho restaura).
+         *   - Timeline: si algun subtitol ja esta inserit, es pregunta UNA SOLA
+         *     VEGADA i (opcional) s'esborra NOMES eixe clip de la seua pista de
+         *     subtitols (sense ripple).
+         * @param {Object} [opts] { alsoTimeline: true|false } (salta la confirmacio)
+         */
+        deleteSelected: async function (opts) {
+            var o = opts || {};
+            var P = window.FASTPASS_UI.Logic.SrtParser;
+            if (!this._entries || this._entries.length === 0) {
+                getUtils().status("No hi ha entrades per esborrar", "warn");
+                return false;
+            }
+            // (F3.4, 2026-10-21) MULTI: esborra TOTS els clips seleccionats
+            // (Ctrl/Shift+clic). Sense selecció → l'entrada davall el cabezal
+            // (comportament F3.1, per si es crida 🗑 sense haver clicat cap clip).
+            var idxs = this._selectedIndices();
+            if (!idxs.length) {
+                var single = (this._selIndex >= 0 && this._selIndex < this._entries.length)
+                    ? this._selIndex : P.findTargetByTime(this._entries, this._playheadSec);
+                if (single < 0) {
+                    getUtils().status("Cap subtitol seleccionat (clic al clip) ni davall el cabezal", "warn");
+                    return false;
+                }
+                idxs = [single];
+            }
+            // 1) Quins clips ja són al timeline? (una consulta per entrada)
+            var tlOf = {}, subOf = {}, withSub = [];
+            for (var q = 0; q < idxs.length; q++) {
+                var eq = this._entries[idxs[q]];
+                if (!eq) continue;
+                var tlq = this._tlAtMedia(eq.startSec);
+                tlOf[idxs[q]] = tlq;
+                var subq = null;
+                try { subq = await this._findTimelineSubAt(tlq); } catch (eF) { log("⚠️ SRT_EDIT: consulta del timeline: " + eF.message); }
+                subOf[idxs[q]] = subq;
+                if (subq) withSub.push(idxs[q]);
+            }
+
+            // 2) UNA sola confirmació per a tot el bloc (no una per clip).
+            var alsoTimeline = false;
+            if (withSub.length) {
+                if (o.alsoTimeline === true) alsoTimeline = true;
+                else if (o.alsoTimeline === false) alsoTimeline = false;
+                else if (typeof window.confirm === 'function') {
+                    var pistes = [];
+                    for (var w = 0; w < withSub.length; w++) {
+                        var sw = subOf[withSub[w]];
+                        if (sw && pistes.indexOf(Number(sw.t) + 1) < 0) pistes.push(Number(sw.t) + 1);
+                    }
+                    alsoTimeline = window.confirm(
+                        (withSub.length === 1
+                            ? "Aquest subtitol ja esta al timeline"
+                            : withSub.length + " d'aquests " + idxs.length + " subtitols ja estan al timeline") +
+                        " (pista S" + pistes.join('/S') + ").\n\n" +
+                        "Accepta = esborrar-los DEL TIMELINE tambe.\n" +
+                        "Cancel·la = esborrar-los nomes de la taula (no s'exportaran)."
+                    );
+                } else alsoTimeline = true;
+            }
+
+            // 3) Timeline (si s'ha acceptat): clip a clip; la llista es refresca
+            //    a cada borrat perquè els índexs dels clips de subtítol canvien.
+            if (alsoTimeline) {
+                for (var r = 0; r < withSub.length; r++) {
+                    var tlR = tlOf[withSub[r]];
+                    var res = await this._removeTimelineSubAt(tlR);
+                    log("📝 SRT_EDIT: esborrat del timeline a tl " + tlR.toFixed(3) + "s → " + res);
+                }
+                this._timelineSubs = null;
+            }
+            // 4) Taula: de DALT a BAIX (índexs descendents) perquè l'índex no es
+            //    desplace mentre s'esborra. _entries i _originalEntries van 1:1:
+            //    si no s'esborra també de l'original, qualsevol drag de marcador
+            //    reconstruiria la taula desde ella i els subtítols tornarien.
+            var removed = [];
+            var desc = idxs.slice().sort(function (a, b) { return b - a; });
+            for (var d = 0; d < desc.length; d++) {
+                var kd = desc[d];
+                var ek = this._entries[kd];
+                if (!ek) continue;
+                removed.push({
+                    n: kd + 1,
+                    t0: this._secToTimeStr(ek.startSec),
+                    t1: this._secToTimeStr(ek.endSec),
+                    txt: String((ek.texts || []).join(' ')).substring(0, 50)
+                });
+                this._entries = P.removeEntryAt(this._entries, kd);
+                this._originalEntries = P.removeEntryAt(this._originalEntries, kd);
+            }
+            removed.sort(function (a, b) { return a.n - b.n; });   // missatge en ordre de taula
+            this._clearSelection();
+            this._isDirty = true;
+            this.render();
+
+            var detall = removed.map(function (x) {
+                return "#" + x.n + " [" + x.t0 + " → " + x.t1 + "] " + x.txt;
+            }).join(' | ');
+            log("📝 SRT_EDIT: " + removed.length + " entrada(es) esborrada(es) " +
+                (alsoTimeline ? "+ timeline" : "(nomes taula)") + " · queden " + this._entries.length + " · " + detall);
+            getUtils().status((removed.length === 1 ? "Esborrat 1 subtitol" : "Esborrats " + removed.length + " subtitols") +
+                (alsoTimeline ? " (taula + timeline)" : " (taula)") + " · queden " + this._entries.length, "exito");
+            return true;
+        },
+
+        /**
+         * mergeSyntheticGaps (F3.3 · opcio B): reomple els BUITS del SRT normal
+         * amb les entrades SINTETIQUES que hi cauen, amb tolerancia
+         * (`general.srtSyntheticGapTolSec`, defecte 0,2 s).
+         *   - MAI toca les entrades existents (start/end/text queden igual).
+         *   - El resultat viu en una vista MOD (el NORMAL es conserva intacte).
+         *   - Sense SINT carregat (Ctrl+clic a CARREGAR) o sense buits → avisa.
+         * @returns {Promise<boolean>} true si s'ha afegit alguna entrada
+         */
+        mergeSyntheticGaps: async function () {
+            var P = window.FASTPASS_UI.Logic.SrtParser;
+            var baseView = this._views['NORMAL'] || null;
+            var base = baseView ? baseView.entries : (this._kind === 'NORMAL' ? this._entries : null);
+            var sint = (this._kind === 'SINT') ? this._entries : (this._views['SINT'] ? this._views['SINT'].entries : null);
+            if (!base || base.length === 0) {
+                getUtils().status("Cal el SRT NORMAL carregat per reomplir buits", "warn");
+                return false;
+            }
+            if (!sint || sint.length === 0) {
+                getUtils().status("Cal carregar els SINT abans (Ctrl+clic a CARREGAR)", "warn");
+                return false;
+            }
+            var cfg = (window.FASTPASS_UI.Config && window.FASTPASS_UI.Config.get) ? window.FASTPASS_UI.Config.get() : null;
+            var tol = (cfg && cfg.srtSyntheticGapTolSec != null) ? Number(cfg.srtSyntheticGapTolSec) : 0.2;
+            var res = P.mergeSyntheticGaps(base, sint, { tolSec: tol });
+            if (!res.added.length) {
+                getUtils().status("SINT: cap buit a reomplir (" + res.rejected.length + " entrades descartades)", "warn");
+                log("📝 SRT_EDIT: fusio SINT sense canvis · buits=" + res.gaps.length + " · descartades=" + res.rejected.length +
+                    " · tol=" + res.tolSec + "s");
+                return false;
+            }
+            // Guardar la taula viva abans de canviar de vista
+            this._stashCurrentView();
+            if (baseView) {
+                this._srtPath = baseView.path || this._srtPath;
+                this._srtName = baseView.name || this._srtName;
+                this._srtFingerprint = baseView.fingerprint || this._srtFingerprint;
+            }
+            this._entries = P.cloneEntries(res.entries);
+            this._originalEntries = P.cloneEntries(res.entries);
+            // Base del RESET ♻️: la taula NORMAL (la fusio no sobreescriu el fitxer)
+            this._loadedEntries = P.cloneEntries(base);
+            var mk = baseView ? (baseView.markers || []) : (this._markers || []);
+            this._markers = mk.slice();
+            this._originalMarkers = mk.slice();   // warp identitat: res es mou per si sol
+            this._kind = 'MOD';
+            this._clearSelection();
+            this._isDirty = true;
+            this._maxSec = (res.entries.length ? res.entries[res.entries.length - 1].endSec + 10 : this._maxSec);
+            this.render();
+            var detall = res.added.slice(0, 6).map(function (a) {
+                return this._secToTimeStr(a.startSec) + '→' + this._secToTimeStr(a.endSec) + ' «' + (a.texts || []).join(' ').substring(0, 40) + '»';
+            }, this).join(' | ');
+            log("📝 SRT_EDIT: fusio SINT → " + res.added.length + " entrades afegides (tol " + res.tolSec + "s) · " +
+                res.rejected.length + " descartades · " + (res.entries.length - base.length) + " noves de " + res.entries.length + " · " + detall);
+            getUtils().status("Reomplert: " + res.added.length + " entrades SINT en " + res.gaps.length + " buits (MOD)", "exito");
+            return true;
         },
 
         render: function () {
@@ -1513,17 +2089,35 @@
         _drawTrack: function (ctx, y, h) {
             var bh = h - 3;               // alçada del bloc del clip (marge vertical)
             var by = y + 1;
+            var st = this._trackStyle();
+            // (F3.4) Selecció MÚLTIPLE: tots els clips de _selIndices es ressalten
+            // (si algú deixa només _selIndex posat, també es pinta).
+            var sel = this._selectedIndices();
+            if (!sel.length && this._selIndex >= 0) sel = [this._selIndex];
             for (var i = 0; i < this._entries.length; i++) {
                 var e = this._entries[i];
                 var x = this._secToX(e.startSec);
                 var w = (e.endSec - e.startSec) * this._pixelsPerSec;
                 if (w < 2) w = 2;
-                ctx.fillStyle = 'rgba(143,74,212,0.45)';   // lila translúcid
+                var isSel = (sel.length > 0) && (sel.indexOf(i) >= 0);
+                ctx.fillStyle = st.fill;                  // lila / taronja (SINT) / verd (MOD)
                 ctx.fillRect(x, by, w, bh);
+                if (isSel) {
+                    // F3.1: el clip SELECCIONAT es veu de seguida (vel + marc blanc)
+                    ctx.fillStyle = st.sel;
+                    ctx.fillRect(x, by, w, bh);
+                }
                 if (w >= 4) {
-                    ctx.strokeStyle = 'rgba(210,175,255,0.9)';
-                    ctx.lineWidth = 1;
-                    ctx.strokeRect(x + 0.5, by, w - 1, bh);
+                    ctx.strokeStyle = isSel ? '#ffffff' : st.stroke;
+                    ctx.lineWidth = isSel ? 2 : 1;
+                    ctx.strokeRect(x + (isSel ? 1 : 0.5), by + (isSel ? 1 : 0), w - (isSel ? 2 : 1), bh - (isSel ? 2 : 0));
+                }
+                // Número d'entrada (i text si cap): ajuda a saber què s'esborra
+                if (w >= 26 && bh >= 18) {
+                    ctx.fillStyle = isSel ? '#101010' : 'rgba(240,235,255,0.92)';
+                    ctx.font = '8px monospace';
+                    var etiqueta = (i + 1) + (e.texts && e.texts.length ? ' ' + String(e.texts[0]).substring(0, 22) : '');
+                    ctx.fillText(etiqueta, x + 3, by + bh - 4);
                 }
             }
         },
@@ -1653,10 +2247,7 @@
         },
 
         _canvasXToSec: function (e) {
-            var rect = this._canvas.getBoundingClientRect();
-            var scaleX = this._canvas.width / rect.width;
-            var canvasX = (e.clientX - rect.left) * scaleX;
-            return this._xToSec(canvasX);
+            return this._xToSec(this._eventX(e));
         },
 
         _markerAtSec: function (sec, wideTol) {
@@ -2158,7 +2749,7 @@
             // (#132) IN fixat → l'eix es cenyeix al tram de la peça (marge esquerre) i
             // deixarà de dependre de la llargada del clip carregat.
             this._setEditWindow();
-            this._isDirty = true; this.render();
+            this._clearSelection(); this._isDirty = true; this.render();
             this._persistMarkers();
             getUtils().status("IN: " + this._entries.length + " entrades", "exito");
         },
@@ -2183,7 +2774,7 @@
             this._originalMarkers = this._markers.slice();
             // (#132) OUT fixat → finestra d'edició = [inici de la peça − marge, OUT + marge dret].
             this._setEditWindow();
-            this._isDirty = true; this.render();
+            this._clearSelection(); this._isDirty = true; this.render();
             this._persistMarkers();
             getUtils().status("OUT: " + this._entries.length + " entrades", "exito");
         },
@@ -2212,13 +2803,20 @@
             }
 
             this._originalEntries = this._entries.map(function (e) { return { index: e.index, timeStr: e.timeStr, texts: e.texts.slice(), startSec: e.startSec, endSec: e.endSec }; });
-            this._isDirty = true; this.render();
+            this._clearSelection(); this._isDirty = true; this.render();
             this._persistMarkers();
             getUtils().status("AJUSTAT: " + this._entries.length + " entrades", "exito");
         },
 
-        exportToPremiere: async function () {
+        exportToPremiere: async function (opts) {
             if (this._entries.length === 0) { getUtils().status("No hi ha entrades per exportar", "warn"); return; }
+            // (F3.2) Pista de destí: `opts.track` (0 = s1, 1 = s2). Per defecte els
+            // SINTETICS van a S2 per poder tenir-los AL COSTAT del SRT normal sense
+            // barrejar-los; NORMAL i MOD van a S1.
+            var o = opts || {};
+            var trackIdx = (o.track != null) ? parseInt(o.track, 10) : ((this._kind === 'SINT') ? 1 : 0);
+            if (!isFinite(trackIdx) || trackIdx < 0) trackIdx = 0;
+            log("📝 SRT_EDIT: exportant taula " + (this._kind || 'NORMAL') + " → pista S" + (trackIdx + 1));
             this._hideEditor();
             var projectFolder = await callJSX("Context.folder()");
             if (!projectFolder || projectFolder.indexOf('ERR') === 0) projectFolder = "C:\\temp";
@@ -2257,16 +2855,17 @@
             if (writeResult !== "OK") {
                 try { window.cep.fs.writeFile(modPath, srtContent); } catch(e) { getUtils().status("Error escrivint _MOD.srt", "error"); return; }
             }
-            // 1) Eliminar els clips de subtítols dels caption tracks antics PRIMER (allibera
-            //    les referències per poder esborrar els items del projecte sense conflictes).
+            // 1) Eliminar els clips de subtítols NOMES de la PISTA DE DESTÍ (F3.2:
+            //    exportar els SINT a S2 no pot esborrar el SRT normal de S1, ni al
+            //    revés). Abans es netejaven TOTES les pistes de subtítols.
             try {
                 var cleanJsx = "(function(){try{var s=app.project.activeSequence;if(!s)return'ERR_NO_SEQ';"
-                    + "var removed=0;if(s.subtitleTracks){var n=s.subtitleTracks.numTracks||s.subtitleTracks.numItems;"
-                    + "for(var t=0;t<n;t++){var tr=s.subtitleTracks[t];"
+                    + "var removed=0,tt=" + trackIdx + ";if(s.subtitleTracks){var n=s.subtitleTracks.numTracks||s.subtitleTracks.numItems||0;"
+                    + "if(tt<n){var tr=s.subtitleTracks[tt];"
                     + "for(var i=tr.clips.numItems-1;i>=0;i--){try{tr.clips[i].remove();removed++}catch(e2){}}}}"
                     + "return'OK_removed_'+removed}catch(e){return'ERR:'+e.message}})()";
                 var cleanResult = await callJSX(cleanJsx);
-                log("📝 SRT_EDIT: Nets subtítols antics: " + cleanResult);
+                log("📝 SRT_EDIT: nets subtítols antics de S" + (trackIdx + 1) + ": " + cleanResult);
             } catch(e) {
                 log("⚠️ SRT_EDIT: Error netejant subtítols antics: " + e.message);
             }
@@ -2283,17 +2882,21 @@
             if (!findResult || findResult === 'null') { getUtils().status("No es troba _MOD.srt al projecte", "error"); return; }
 
             var encModName = encodeURIComponent(modName);
-            // 1) Intentar col·locar el SRT a una pista de subtítols EXISTENT (conserva l'estil)
-            var captionResult = await callJSX("FASTPASS.Clips.placeSrtOnExistingSubtitleTrack('" + encModName + "', 0)");
-            log("📝 SRT_EDIT: placeSrtOnExistingSubtitleTrack → " + captionResult);
-            // 2) Fallback: crear una pista nova (sense estil) si no n'hi havia cap
-            if (captionResult !== "OK") {
+            // 1) Col·locar el SRT a la pista de destí SI EXISTEIX (conserva l'estil)
+            var captionResult = await callJSX("FASTPASS.Clips.placeSrtOnExistingSubtitleTrack('" + encModName + "', 0, " + trackIdx + ")");
+            log("📝 SRT_EDIT: placeSrtOnExistingSubtitleTrack(S" + (trackIdx + 1) + ") → " + captionResult);
+            // 2) Fallback: la pista no existix → crear-ne una de nova (createCaptionTrack
+            //    ja hi col·loca el SRT: no cal tornar-lo a sobreescriure)
+            if (captionResult !== "OK" && String(captionResult).indexOf("OK_S") !== 0) {
                 captionResult = await callJSX("(function(){var s=app.project.activeSequence;if(!s)return'ERR_NO_SEQ';var i=FASTPASS.Project.find(decodeURIComponent('" + encModName + "'));if(!i)return'ERR_ITEM_NOT_FOUND';if(typeof s.createCaptionTrack!=='function')return'ERR_NO_CAPTION_API';return s.createCaptionTrack(i,0)?'OK':'ERR_FAILED'})()");
-                log("📝 SRT_EDIT: createCaptionTrack (fallback) → " + captionResult);
+                log("📝 SRT_EDIT: createCaptionTrack (pista nova) → " + captionResult);
             }
-            if (captionResult === "OK") {
-                getUtils().status("Exportat: " + this._entries.length + " entrades", "exito");
-                log("✅ SRT_EDIT: Export OK " + modName);
+            this._timelineSubs = null;
+            if (captionResult === "OK" || String(captionResult).indexOf("OK_S") === 0) {
+                var tlFirst = this._tlAtMedia(this._entries[0].startSec);
+                var onTrack = await this._detectExportTrack(tlFirst, trackIdx);
+                getUtils().status("Exportat: " + this._entries.length + " entrades → S" + onTrack, "exito");
+                log("✅ SRT_EDIT: Export OK " + modName + " (taula " + this._kind + " → S" + onTrack + ")");
             } else { getUtils().status("Error col·locant subtítols: " + captionResult, "error"); }
         },
 
@@ -2318,6 +2921,8 @@
             this._originalMarkers = [];
             this._dragIdx = -1;
             this._isDirty = false;
+            this._clearSelection();
+            this._timelineSubs = null;
             // Esborrar també els clips de subtítols (pistes caption) de la seqüència
             await this._clearSubtitleTracks();
             this.render();
@@ -2382,6 +2987,7 @@
         reset: function () {
             this.stop();
             this._entries = []; this._loadedEntries = []; this._originalEntries = []; this._playheadSec = 0; this._isDirty = false; this._srtPath = ""; this._srtName = ""; this._srtFingerprint = "";
+            this._clearSelection(); this._kind = 'NORMAL'; this._views = {}; this._timelineSubs = null; this._timelineSubsAt = 0;
             this._waveformPeaks = null; this._waveformPPS = 480; this._wfCacheKey = ""; this._wfPixelHeights = null; this._isPlaying = false;
             this._waveformSegments = []; this._waveformMediaTag = ""; this._pollCount = 0;
             this._wfMediaStart = 0; this._wfMediaEnd = 0;

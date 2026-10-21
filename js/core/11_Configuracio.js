@@ -304,7 +304,7 @@
     };
 
     let _activeConfig = {
-        general: { autor: "AGUS", guarda: 22, debug: false, handles: 20, tcOffset: 0, clipInOffset: 10, zonaInOffset: 10, srtEmergencyTailSec: 120, snapWindowDeducedSec: 2.5, snapWindowFaroSec: 2.5, clipOutMarginSec: 0, clipExtraTailSec: 60, srtEditMarginLeftSec: 0.4 },
+        general: { autor: "AGUS", guarda: 22, debug: false, handles: 20, tcOffset: 0, clipInOffset: 10, zonaInOffset: 10, srtEmergencyTailSec: 120, snapWindowDeducedSec: 2.5, snapWindowFaroSec: 2.5, clipOutMarginSec: 0, clipExtraTailSec: 60, srtEditMarginLeftSec: 0.4, srtSyntheticGapTolSec: 0.2 },
         // Hora d'inici d'emissió de cada programa (font ÚNICA per a tota l'extensió:
         // guardes de temps, peticions a l'API d'escaletes i OFFSET del MP4).
         programStartHours: { TNV: 21.0, TNM: 14.5, TNC: 13.8333, MAT: 7.9167 },
@@ -648,6 +648,11 @@
                 //   Defecte 0,4 s (= el pad d'IN de 10 frames) → el borde esquerre del canvas
                 //   queda a l'IN del clip; amb 0 el primer clip queda EXACTAMENT al borde.
                 srtEditMarginLeftSec: (cfg.general.srtEditMarginLeftSec != null) ? cfg.general.srtEditMarginLeftSec : 0.4,
+                // - srtSyntheticGapTolSec (F3.3, 2026-10-21): tolerancia (segons) per
+                //   decidir si una entrada SINTETICA cau dins d'un BUIT del SRT normal.
+                //   Amb 0,2 s una entrada que toque un subtitol existent no s'hi afegeix
+                //   (evita solapaments i duplicats al timeline).
+                srtSyntheticGapTolSec: (cfg.general.srtSyntheticGapTolSec != null) ? cfg.general.srtSyntheticGapTolSec : 0.2,
                 snapWindowDeducedSec: (cfg.general.snapWindowDeducedSec != null) ? cfg.general.snapWindowDeducedSec : 2.5,
                 snapWindowFaroSec: (cfg.general.snapWindowFaroSec != null) ? cfg.general.snapWindowFaroSec : 2.5,
                 // 🎯 TITOLET (2026-10-06): paràmetres de detecció del grafisme cremat.

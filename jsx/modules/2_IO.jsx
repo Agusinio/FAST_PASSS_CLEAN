@@ -51,6 +51,37 @@ FASTPASS.IO = (function () {
         },
 
         /**
+         * fileInfo: Estat d'UN fitxer sense llegir-ne el contingut (2026-10-21).
+         *
+         * `waitPng` (flow_render) llegia el PNG SENCER amb `cep.fs.readFile` per
+         * comprovar el chunk IEND. En aquest equip `cep.fs.readFile` falla amb
+         * rutes UNC de ~1 MB (i `cep.fs.stat` no retorna `.size`), així que la
+         * captura QE es donava per perduda tot i estar escrita: el flux llançava
+         * «El PNG no s'ha escrit» i creia que l'error era de l'exportació.
+         * Aquest àtom dóna exists/size/modified de forma fiable (i obre el fitxer
+         * només si `length` ve 0, com fa `scanDirectory`).
+         *
+         * @param {string} path - Ruta del fitxer
+         * @returns {string} JSON {exists, size, modified, created} o "ERR: …"
+         */
+        fileInfo: function(path) {
+            try {
+                var f = new File(path);
+                if (!f.exists) return JSON.stringify({ exists: false, size: 0, modified: 0, created: 0 });
+                var sz = f.length || 0;
+                if (!sz) {
+                    try { if (f.open('r')) { sz = f.eof; f.close(); } } catch (eO) { }
+                }
+                return JSON.stringify({
+                    exists: true,
+                    size: sz || 0,
+                    modified: (f.modified ? f.modified.getTime() : 0),
+                    created: (f.created ? f.created.getTime() : 0)
+                });
+            } catch (e) { return "ERR: " + e.message; }
+        },
+
+        /**
          * importFiles: Importa fitxers (JSON array de rutes) a un Bin específic.
          */
         importFiles: function (jsonPaths, binName) {

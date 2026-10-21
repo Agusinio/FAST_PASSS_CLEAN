@@ -32,6 +32,9 @@ $files = @(
     (Resolve-Harness 'fp_smoke_boot.js'),
     (Resolve-Harness 'fp_smoke_ac.js'),
     (Join-Path $repo 'js\core\escaleta_timecode.js'),
+    # (2026-10-21) LLISTAT D'ESCALETES: l'arrencada en fred es menjava 5,2 s en
+    # aquest llistat (motor ExtendScript). El prova la prova 22-arrancada.
+    (Join-Path $repo 'js\core\escaleta_io.js'),
     (Join-Path $repo 'js\core\analysis_center.js'),
     (Join-Path $repo 'js\core\session_manifest.js'),
     (Join-Path $repo 'js\core\assembly_context.js'),
@@ -46,6 +49,10 @@ $files = @(
     # (2026-10-16 · BUG #171) Motor de Clips (JS): `endCoherent` → retall coherent
     # (in/out ↔ end) perquè els rètols col·locats es puguen ESTIRAR amb el ratolí.
     (Join-Path $repo 'js\logic\6_Clips_Logic.js'),
+    # (2026-10-21) DURADES DE WOTT: `_resolveWottDur`/`_frameSnapDur` alineen les
+    # durades a la graella de frames (abans, les estimades per mida feien que
+    # Premiere allargara el clip 1 frame). El prova la prova 23-wotts.
+    (Join-Path $repo 'js\logic\3_Project_Logic.js'),
     # (2026-10-21 · BUG #174) PORTADA: finestra de captura (pre-roll + cua). Càlcul PUR
     # que MAI mou el frame triat; el prova la part E de la prova 19-portada.
     (Join-Path $repo 'js\logic\18_Portada_Window.js'),
@@ -55,6 +62,14 @@ $files = @(
     # (2026-10-21 - F2) Resolutor de rutes PUR (tokens, fusio del Profile.json,
     # rutes derivades). El prova la prova 21-rutas.
     (Join-Path $repo 'js\logic\20_Rutas_Logic.js'),
+    # (2026-10-21 · F3) SUBTITOLS: parser PUR dels buits i de la fusio amb els
+    # sintetics (findGaps / mergeSyntheticGaps / removeEntryAt). El prova la
+    # prova 24-srt (fp_probe_srt.js).
+    (Join-Path $repo 'js\logic\10_Srt_Logic.js'),
+    # (2026-10-21) WOTTS DEL DIA: el desbloqueig del CREAR passa a ser un fet
+    # físic (wotts del bloc d'avui, datats per birthtime amb Node). El prova la
+    # prova 23-wotts.
+    (Join-Path $repo 'js\logic\Scanner.js'),
     (Resolve-Harness 'fp_probe_f45.js'),
     # (2026-10-16 · BUG #167) Rètol de localització del directe → ítem IPD/directe.
     (Resolve-Harness 'fp_probe_ipd_chyron.js'),
@@ -71,6 +86,17 @@ $files = @(
     # (2026-10-21 - F2) Rutes i variables d'usuari: resolutor pur, fusio del
     # perfil i guardes (cap literal UNC fora dels defaults).
     (Resolve-Harness 'fp_probe_rutas.js'),
+    # (2026-10-21) ARRENCADA: llistat d'escaletes natiu (Node -> CEP -> JSX),
+    # memoria curta, deduplicacio, respatllers, separadors de `load` i fallback
+    # de findLatestValid sense rellegir el JSON.
+    (Resolve-Harness 'fp_probe_arrancada.js'),
+    # (2026-10-21) WOTTS DEL DIA: desbloqueig del CREAR per birthtime (Node) en
+    # lloc de getStatus sobre el repositori central + guardes del poll de 15 s.
+    (Resolve-Harness 'fp_probe_wotts.js'),
+    # (2026-10-21 · F3) SUBTITOLS: seleccio/esborrat (Supr + 🗑), sintetics
+    # (Ctrl+clic a CARREGAR → S2) i reompliment de buits (🐛 parser pur + guardes
+    # de l'editor, del flux, de la UI i de la config).
+    (Resolve-Harness 'fp_probe_srt.js'),
     (Resolve-Harness 'fp_smoke_runner.js')
 )
 

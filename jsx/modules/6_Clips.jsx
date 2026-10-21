@@ -1037,11 +1037,14 @@ FASTPASS.Clips = {
     /**
      * placeSrtOnExistingSubtitleTrack: Col·loca un .srt a una pista de subtítols
      * JA EXISTENT (conserva el seu estil). Si no n'hi ha cap, retorna error.
+     * (F3.2, 2026-10-21) `trackIdx` = 0 → S1, 1 → S2… Els subtítols SINTETICS
+     * s'exporten a S2 per poder-los tenir al costat del SRT normal sense barrejar.
      * @param {string} itemName - Nom del .srt al projecte (URI-encoded)
      * @param {number} startSec - Segon d'inici al timeline (normalment 0)
-     * @returns {string} "OK" o "ERR:..."
+     * @param {number} [trackIdx=0] - Pista de subtítols (0-based)
+     * @returns {string} "OK" (S1) · "OK_S<n>" (n>1) o "ERR:..."
      */
-    placeSrtOnExistingSubtitleTrack: function(itemName, startSec) {
+    placeSrtOnExistingSubtitleTrack: function(itemName, startSec, trackIdx) {
         try {
             var seq = app.project.activeSequence;
             if (!seq) return "ERR_NO_SEQ";
@@ -1055,12 +1058,14 @@ FASTPASS.Clips = {
             var tracks = seq.subtitleTracks;
             if (!tracks) return "ERR_NO_SUBTITLE_TRACKS";
             var n = tracks.numTracks || tracks.numItems || 0;
-            if (n <= 0) return "ERR_NO_SUBTITLE_TRACKS";
-            var track = tracks[0];
+            var idx = parseInt(trackIdx || 0, 10);
+            if (!isFinite(idx) || idx < 0) idx = 0;
+            if (n <= idx) return "ERR_NO_SUBTITLE_TRACK_" + (idx + 1);
+            var track = tracks[idx];
             var tStart = new Time();
             tStart.seconds = parseFloat(startSec || 0);
             track.overwriteClip(item, tStart);
-            return "OK";
+            return (idx === 0) ? "OK" : ("OK_S" + (idx + 1));
         } catch(e) { return "ERR: " + e.message; }
     },
 

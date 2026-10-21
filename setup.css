@@ -1,0 +1,275 @@
+/*
+===============================================================================
+DASHBOARD CONFIG (setup.html) — v1.1.0 (2026-10-21)
+===============================================================================
+El dashboard es veia DIFERENT de la finestra principal: lletra base de 13px
+(la principal en fa 11), targetes amb 15px de padding, 20px entre blocs, botons
+de 10px 25px... espai perdut a cabassos. Ací tot baixa a la MÈTRICA de
+`style.css`: base 11px, paddings 8/6/4, ELS MATEIXOS colors (#151515 fons,
+#222 secció, #333 vora, #007acc accent) i botons plans d'11px.
+
+NOTA: no s'enllaça `style.css` directament perquè defineix `body`/`button`/
+`#main-content` per al panell principal i trencaria este layout (és un iframe).
+
+v1.1.0: `setup.html` ja no duu cap atribut `style=` (tot a classes: `.grow-1`,
+`.grow-2`, `.btn-prova`, `.btn-add`) i els glifos passen als segurs (`↑` en lloc
+de ⬆︎, `×` en lloc de ✕) perquè la font del sistema no sempre els porta.
+===============================================================================
+*/
+
+:root {
+    --bg-color: #151515;
+    --bg-card: #222;
+    --bg-input: #0e0e0e;
+    --text-color: #e0e0e0;
+    --text-dim: #777;
+    --accent-color: #007acc;
+    --border-color: #333;
+    --hover-color: #3a3a3a;
+    --success: #00c853;
+    --danger: #d9534f;
+
+    /* Mètrica ÚNICA: la de la vista principal (11px) */
+    --fs: 11px;
+    --fs-sm: 10px;
+    --fs-label: 9px;
+}
+
+input, button, select { box-sizing: border-box; }
+
+html, body { height: 100%; }
+
+body {
+    font-family: 'Inter', 'Segoe UI', sans-serif;
+    margin: 0; padding: 8px;
+    background-color: var(--bg-color);
+    color: var(--text-color);
+    font-size: var(--fs);
+    line-height: 1.35;
+    display: flex; flex-direction: column;
+    height: 100vh; box-sizing: border-box;
+    overflow: hidden;
+}
+
+/* ── CAPÇALERA ────────────────────────────────────────────────────────────── */
+header {
+    display: flex; justify-content: space-between; align-items: center;
+    gap: 8px; margin-bottom: 6px; padding-bottom: 4px;
+    border-bottom: 1px solid var(--border-color);
+}
+h1 {
+    margin: 0; font-size: 12px; font-weight: 700; letter-spacing: .5px;
+    text-transform: uppercase; color: var(--accent-color);
+}
+h1 span {
+    margin-left: 6px; font-size: var(--fs-label); font-weight: 400;
+    letter-spacing: .5px; color: var(--text-dim);
+}
+
+/* ── PESTANYES ───────────────────────────────────────────────────────────── */
+.tabs { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 6px; }
+.tab-btn {
+    padding: 3px 9px; background: var(--bg-card); border: 1px solid var(--border-color);
+    color: #8a8a8a; font-family: inherit; font-size: var(--fs); font-weight: 600;
+    border-radius: 4px; cursor: pointer;
+    transition: background .15s, color .15s, border-color .15s;
+}
+.tab-btn:hover:not(.active) { background: var(--hover-color); color: #ccc; }
+.tab-btn.active { background: var(--accent-color); border-color: var(--accent-color); color: #fff; }
+#btn-general { margin-left: auto; }
+
+.tab-content { display: none; flex: 1 1 auto; min-height: 0; overflow-y: auto; padding-right: 2px; }
+.tab-content.active { display: block; }
+
+/* ── TARGETES (com les .section-container del panell) ─────────────────────── */
+.card {
+    background: var(--bg-card); border: 1px solid var(--border-color);
+    border-radius: 6px; padding: 8px; margin-bottom: 6px;
+}
+.card:last-child { margin-bottom: 0; }
+.card h2 {
+    margin: 0 0 6px; padding-bottom: 3px; border-bottom: 1px solid var(--border-color);
+    font-size: var(--fs-sm); font-weight: 700; letter-spacing: .4px;
+    text-transform: uppercase; color: #8a8a8a;
+}
+
+/* ── FORMULARIS ──────────────────────────────────────────────────────────── */
+.input-group { margin-bottom: 4px; }
+.input-group:last-child { margin-bottom: 0; }
+label {
+    display: block; margin-bottom: 2px; font-size: var(--fs-label);
+    font-weight: 700; letter-spacing: .3px; text-transform: uppercase;
+    color: var(--text-dim);
+}
+.row { display: flex; gap: 6px; }
+.row > * { min-width: 0; }
+.grow-2 { flex: 2 1 0; }
+.grow-1 { flex: 1 1 0; }
+
+input[type="text"], input[type="number"] {
+    width: 100%; padding: 2px 5px;
+    background-color: var(--bg-input); border: 1px solid var(--border-color);
+    color: var(--text-color); border-radius: 4px; outline: none;
+    font-family: inherit; font-size: var(--fs); line-height: 1.25;
+    transition: border-color .15s;
+}
+input[type="text"]:focus, input[type="number"]:focus { border-color: var(--accent-color); }
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+
+.path-box { display: flex; align-items: stretch; gap: 4px; }
+.path-box > input { flex: 1 1 auto; min-width: 0; }
+.btn-browse {
+    flex: 0 0 auto; width: 24px; padding: 0;
+    display: flex; align-items: center; justify-content: center;
+    background: var(--bg-input); border: 1px solid var(--border-color);
+    color: #9a9a9a; border-radius: 4px; font-size: 12px; line-height: 1;
+    cursor: pointer;
+}
+.btn-browse:hover { color: #fff; border-color: var(--accent-color); }
+.btn-prova { width: auto; padding: 0 10px; font-size: var(--fs-sm); font-weight: 700; }
+
+/* ── INTERRUPTOR DEBUG ───────────────────────────────────────────────────── */
+.debug-row { display: flex; align-items: center; gap: 6px; }
+.debug-label {
+    font-size: var(--fs-label); font-weight: 700; letter-spacing: .4px;
+    text-transform: uppercase; color: var(--text-dim);
+}
+.switch { position: relative; display: inline-block; width: 34px; height: 18px; flex: 0 0 auto; }
+.switch input { opacity: 0; width: 0; height: 0; }
+.slider {
+    position: absolute; inset: 0; cursor: pointer; background: #444;
+    border-radius: 18px; transition: .2s;
+}
+.slider:before {
+    position: absolute; content: ""; height: 12px; width: 12px; left: 3px; top: 3px;
+    background: #fff; border-radius: 50%; transition: .2s;
+}
+input:checked + .slider { background: var(--success); }
+input:checked + .slider:before { transform: translateX(16px); }
+
+/* ── MAPA DE PISTES ──────────────────────────────────────────────────────── */
+.track-map { display: grid; grid-template-columns: repeat(auto-fit, minmax(50px, 1fr)); gap: 4px; }
+.track-item { min-width: 0; }
+.track-item label { margin-bottom: 1px; text-align: center; font-size: 8px; letter-spacing: .3px; }
+.track-item input { width: 100%; min-width: 0; padding: 1px 2px; text-align: center; }
+
+/* ── LLISTA DE PROGRAMES ─────────────────────────────────────────────────── */
+/* 6 columnes en `fr` (la finestra del panell és estreta): ID/NOM · NOM ARXIU ·
+   CARPETA (dir) · WOTT · CONDUCTOR · esborrar. */
+.program-row {
+    display: grid; grid-template-columns: 1.05fr 1.05fr 1.5fr .5fr 1.1fr 18px;
+    gap: 4px; align-items: center;
+    padding: 2px 4px; margin-bottom: 2px;
+    background: #00000040; border-radius: 4px;
+}
+.program-row input { width: 100%; min-width: 0; padding: 1px 4px; font-size: var(--fs-sm); }
+.program-head {
+    background: transparent; border-bottom: 1px solid var(--border-color);
+    border-radius: 0; padding: 0 4px 2px; margin-bottom: 2px;
+}
+.program-head span {
+    font-size: 8px; font-weight: 700; letter-spacing: .3px; text-transform: uppercase;
+    color: var(--text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.btn-delete {
+    width: 18px; height: 18px; padding: 0; flex: 0 0 auto;
+    display: flex; align-items: center; justify-content: center;
+    background: none; border: none; border-radius: 4px;
+    color: var(--danger); font-size: 10px; line-height: 1; cursor: pointer;
+    overflow: hidden;
+}
+.btn-delete:hover { background: #3a2020; color: #ff8a8a; }
+
+/* ── PEU I BOTONS ────────────────────────────────────────────────────────── */
+footer {
+    display: flex; justify-content: space-between; align-items: center; gap: 6px;
+    margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--border-color);
+}
+button.primary, button.secondary {
+    display: inline-flex; align-items: center; justify-content: center;
+    padding: 4px 12px; border: 1px solid transparent; border-radius: 4px;
+    font-family: inherit; font-size: var(--fs-sm); font-weight: 700; letter-spacing: .3px;
+    cursor: pointer; transition: background .15s, color .15s, border-color .15s;
+}
+button.primary { background: var(--accent-color); color: #fff; }
+button.primary:hover { background: #0a8fd6; }
+button.secondary { background: var(--hover-color); color: #ddd; }
+button.secondary:hover { background: #4a4a4a; color: #fff; }
+.btn-add { width: 100%; margin-top: 6px; }
+
+/* ── TEXT D'AJUDA / RESULTATS ────────────────────────────────────────────── */
+code {
+    background: #000; border: 1px solid #2a2a2a; border-radius: 3px;
+    padding: 0 3px; font-size: var(--fs-sm); color: #8cc;
+}
+.hint { font-size: var(--fs-sm); line-height: 1.35; color: var(--text-dim); margin-bottom: 4px; }
+#rutes-status, #tpl-resultat { margin-top: 3px; min-height: 13px; font-size: var(--fs-sm); color: var(--text-dim); }
+
+/* ── BARRES DE DESPLAÇAMENT (fines, com el panell) ───────────────────────── */
+.tab-content::-webkit-scrollbar,
+.fp-picker-list::-webkit-scrollbar,
+.fp-picker-quick::-webkit-scrollbar { width: 6px; height: 6px; }
+.tab-content::-webkit-scrollbar-track,
+.fp-picker-list::-webkit-scrollbar-track,
+.fp-picker-quick::-webkit-scrollbar-track { background: transparent; }
+.tab-content::-webkit-scrollbar-thumb,
+.fp-picker-list::-webkit-scrollbar-thumb,
+.fp-picker-quick::-webkit-scrollbar-thumb { background: #333; border-radius: 10px; }
+
+/* ── SELECTOR DE CARPETES (2026-10-21) ────────────────────────────────────
+   El diàleg del sistema que obri `cep.fs.showOpenDialog` no porta els accessos
+   ràpids de l'Explorador ni deixa enganxar una ruta UNC. Este selector és HTML
+   i viu damunt del dashboard: accessos ràpids, camp per ENGANXAR la ruta i
+   navegació per carpetes. */
+.fp-picker-backdrop {
+    display: none; position: fixed; inset: 0; background: rgba(0, 0, 0, .65);
+    z-index: 999; align-items: center; justify-content: center;
+}
+.fp-picker-backdrop.open { display: flex; }
+.fp-picker {
+    width: min(720px, 94vw); height: min(520px, 88vh); padding: 8px;
+    background: var(--bg-card); border: 1px solid var(--accent-color);
+    border-radius: 6px; display: flex; flex-direction: column;
+    box-shadow: 0 12px 40px #000a;
+}
+.fp-picker-head {
+    display: flex; justify-content: space-between; align-items: center;
+    gap: 6px; padding-bottom: 4px; margin-bottom: 6px;
+    border-bottom: 1px solid var(--border-color);
+}
+.fp-picker-head strong { font-size: var(--fs); font-weight: 700; letter-spacing: .3px; color: var(--accent-color); }
+.fp-picker-bar { display: flex; gap: 4px; margin-bottom: 6px; }
+.fp-picker-bar input { flex: 1; font-size: var(--fs); }
+.fp-picker-bar button { width: auto; padding: 0 8px; font-size: var(--fs-sm); }
+.fp-picker-body { flex: 1; display: flex; gap: 6px; min-height: 0; }
+.fp-picker-quick {
+    width: 170px; flex-shrink: 0; overflow-y: auto;
+    border-right: 1px solid var(--border-color); padding-right: 6px;
+}
+.fp-picker-quick div {
+    padding: 3px 5px; border-radius: 4px; font-size: var(--fs-sm); color: #aaa;
+    cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.fp-picker-quick div:hover { background: var(--hover-color); color: #fff; }
+.fp-picker-list { flex: 1; min-width: 0; overflow-y: auto; font-size: var(--fs); }
+.fp-picker-item {
+    padding: 3px 6px; border-radius: 4px; color: #ccc; cursor: pointer;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.fp-picker-item:hover { background: var(--hover-color); }
+.fp-picker-item.sel { background: var(--accent-color); color: #fff; }
+.fp-picker-item.file { color: #7ad7c4; }
+.fp-picker-empty { padding: 6px; font-size: var(--fs-sm); color: var(--text-dim); }
+.fp-picker-foot {
+    display: flex; justify-content: space-between; align-items: center; gap: 6px;
+    margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--border-color);
+}
+#fp-picker-status {
+    min-width: 0; font-size: var(--fs-label); color: var(--text-dim);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.fp-picker-actions { display: flex; flex-shrink: 0; gap: 4px; }
+.fp-picker-actions button { padding: 4px 8px; font-size: var(--fs-sm); }
+
+

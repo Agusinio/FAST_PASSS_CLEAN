@@ -5,126 +5,13 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Dashboard Config - FAST >>> PASS</title>
     <script src="js/lib/CSInterface.js"></script>
-    <style>
-        :root {
-            --bg-color: #1a1a1a;
-            --bg-card: #252525;
-            --bg-input: #0e0e0e;
-            --text-color: #e0e0e0;
-            --accent-color: #00a8ff;
-            --border-color: #333;
-            --hover-color: #444;
-            --success: #00c853;
-            --danger: #ff5252;
-        }
-
-        body {
-            font-family: 'Inter', 'Segoe UI', sans-serif;
-            margin: 0; padding: 20px;
-            background-color: var(--bg-color);
-            color: var(--text-color);
-            font-size: 13px;
-            display: flex; flex-direction: column; height: 98vh;
-            overflow: hidden;
-        }
-
-        header {
-            display: flex; justify-content: space-between; align-items: center;
-            margin-bottom: 20px; padding-bottom: 10px; border-bottom: 1px solid var(--border-color);
-        }
-
-        h1 { margin: 0; font-size: 18px; color: var(--accent-color); font-weight: 300; }
-
-        /* TABS */
-        .tabs { display: flex; gap: 5px; margin-bottom: 20px; }
-        .tab-btn {
-            padding: 8px 15px; background: var(--bg-card); border: 1px solid var(--border-color);
-            color: #888; cursor: pointer; border-radius: 4px; transition: all 0.2s;
-        }
-        .tab-btn.active { background: var(--accent-color); color: white; border-color: var(--accent-color); }
-        .tab-btn:hover:not(.active) { background: var(--hover-color); }
-
-        .tab-content { display: none; flex-grow: 1; overflow-y: auto; padding-right: 10px; }
-        .tab-content.active { display: block; }
-
-        /* CARDS */
-        .card { background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 6px; padding: 15px; margin-bottom: 15px; }
-        .card h2 { margin-top: 0; font-size: 14px; border-bottom: 1px solid var(--border-color); padding-bottom: 8px; margin-bottom: 15px; color: #aaa; }
-
-        /* FORMS */
-        .input-group { margin-bottom: 12px; }
-        label { display: block; margin-bottom: 4px; font-weight: 600; font-size: 11px; text-transform: uppercase; color: #777; }
-        
-        .row { display: flex; gap: 10px; }
-        
-        input[type="text"], input[type="number"] {
-            width: 100%; padding: 8px;
-            background-color: var(--bg-input);
-            border: 1px solid var(--border-color);
-            color: var(--text-color);
-            border-radius: 4px; box-sizing: border-box; outline: none; transition: border-color 0.2s;
-        }
-        input:focus { border-color: var(--accent-color); }
-
-        .path-box { display: flex; gap: 5px; }
-        .btn-browse {
-            width: 32px; background: var(--bg-input); border: 1px solid var(--border-color);
-            color: #aaa; cursor: pointer; border-radius: 4px; font-size: 14px; display: flex; align-items: center; justify-content: center;
-        }
-        .btn-browse:hover { color: white; border-color: var(--accent-color); }
-
-        /* DEBUG TOGGLE */
-        .debug-row { display: flex; align-items: center; justify-content: space-between; }
-        .switch { position: relative; display: inline-block; width: 44px; height: 22px; }
-        .switch input { opacity: 0; width: 0; height: 0; }
-        .slider {
-            position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0;
-            background-color: #444; transition: .4s; border-radius: 34px;
-        }
-        .slider:before {
-            position: absolute; content: ""; height: 16px; width: 16px; left: 3px; bottom: 3px;
-            background-color: white; transition: .4s; border-radius: 50%;
-        }
-        input:checked + .slider { background-color: var(--success); }
-        input:checked + .slider:before { transform: translateX(22px); }
-
-        /* TRACK MAP */
-        .track-map { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
-        .track-item { text-align: center; }
-        .track-item label { text-align: center; font-size: 9px; }
-
-        /* PROGRAM LIST */
-        /* (2026-10-21) 6 columnes: ID/NOM · NOM ARXIU · CARPETA (dir) · WOTT · CONDUCTOR · esborrar.
-           En `fr` (no px) perque la finestra del panell es estreta: amb px la columna
-           nova empenyia la fila fora de la targeta. */
-        .program-row { 
-            display: grid; grid-template-columns: 1fr 1fr 1.3fr 0.55fr 1.2fr 24px; 
-            gap: 6px; margin-bottom: 5px; align-items: center; background: #00000044; padding: 5px; border-radius: 4px;
-        }
-        .program-row input { font-size: 11px; padding: 4px; min-width: 0; width: 100%; box-sizing: border-box; }
-        .btn-delete { color: var(--danger); cursor: pointer; font-size: 14px; border:none; background:none; }
-
-        footer {
-            margin-top: 20px;
-            display: flex; justify-content: space-between; align-items: center;
-            padding-top: 15px; border-top: 1px solid var(--border-color);
-        }
-
-        button.primary { background: var(--accent-color); color: white; border: none; padding: 10px 25px; border-radius: 4px; cursor: pointer; font-weight: 600; }
-        button.secondary { background: transparent; color: #888; border: 1px solid var(--border-color); padding: 10px 20px; border-radius: 4px; cursor: pointer; }
-        button:hover { filter: brightness(1.1); }
-
-        ::-webkit-scrollbar { width: 6px; }
-        ::-webkit-scrollbar-track { background: transparent; }
-        ::-webkit-scrollbar-thumb { background: #333; border-radius: 10px; }
-
-    </style>
+    <link rel="stylesheet" href="setup.css?v=2">
 </head>
 <body>
     <header>
         <h1>DASHBOARD <span>CONFIG v2.8</span></h1>
         <div class="debug-row">
-            <span style="margin-right: 10px; font-size: 11px; color:#666">DEBUG MODE</span>
+            <span class="debug-label">DEBUG MODE</span>
             <label class="switch">
                 <input type="checkbox" id="check-debug">
                 <span class="slider"></span>
@@ -137,7 +24,7 @@
         <button class="tab-btn" onclick="showTab('Sumari Matins', event)">Sumari</button>
         <button class="tab-btn" onclick="showTab('Fotomató', event)">Fotomató</button>
         <button class="tab-btn" onclick="showTab('User Defined', event)">User Dev</button>
-        <button class="tab-btn" id="btn-general" onclick="showTab('General', event)" style="margin-left: auto; border-color:#00a8ff22">Config Gral</button>
+        <button class="tab-btn" id="btn-general" onclick="showTab('General', event)">Config Gral</button>
     </div>
 
     <!-- TAB: GENERAL -->
@@ -145,11 +32,11 @@
         <div class="card">
             <h2>Dades d'Editor</h2>
             <div class="row">
-                <div class="input-group" style="flex:2">
+                <div class="input-group grow-2">
                     <label>Nom de l'Editor (Nick)</label>
                     <input type="text" id="val-autor">
                 </div>
-                <div class="input-group" style="flex:1">
+                <div class="input-group grow-1">
                     <label>Finestra Guarda (h)</label>
                     <input type="number" id="val-guarda" value="22">
                 </div>
@@ -168,7 +55,7 @@
             <div class="input-group"><label>Grafismes (MAPA del dia)</label><div class="path-box"><input type="text" id="path-grafismos"><button class="btn-browse" title="Prova aquesta ruta" onclick="provaRuta('path-grafismos')">🧪</button><button class="btn-browse" onclick="browseFolder('path-grafismos')">📁</button></div></div>
             <div class="input-group"><label>Subtítols 15 min (SRT emergència)</label><div class="path-box"><input type="text" id="path-subtitulos"><button class="btn-browse" title="Prova aquesta ruta" onclick="provaRuta('path-subtitulos')">🧪</button><button class="btn-browse" onclick="browseFolder('path-subtitulos')">📁</button></div></div>
             <div class="input-group"><label>Subtítols sintètics</label><div class="path-box"><input type="text" id="path-subtitulosSinteticos"><button class="btn-browse" title="Prova aquesta ruta" onclick="provaRuta('path-subtitulosSinteticos')">🧪</button><button class="btn-browse" onclick="browseFolder('path-subtitulosSinteticos')">📁</button></div></div>
-            <div id="rutes-status" style="font-size:11px; color:#777; margin-top:6px; min-height:15px"></div>
+            <div id="rutes-status"></div>
         </div>
 
         <div class="card">
@@ -180,16 +67,16 @@
 
         <div class="card">
             <h2>Variables de Ruta (plantilles)</h2>
-            <div style="font-size:11px; color:#777; line-height:1.8; margin-bottom:8px">
+            <div class="hint">
                 Es poden usar a qualsevol ruta:
                 <code>{autor}</code> <code>{prog}</code> <code>{archivo}</code> <code>{wott}</code>
                 <code>{bloque}</code> <code>{fecha}</code> (YYYY_MM_DD) <code>{tema}</code> <code>{base}</code>
             </div>
             <div class="path-box">
                 <input type="text" id="tpl-prova" value="{base}\{archivo}\{fecha}">
-                <button class="btn-browse" style="width:auto; padding:0 12px; font-weight:600" title="Resol la plantilla amb un context d'exemple" onclick="provaPlantilla()">PROVA</button>
+                <button class="btn-browse btn-prova" title="Resol la plantilla amb un context d'exemple" onclick="provaPlantilla()">PROVA</button>
             </div>
-            <div id="tpl-resultat" style="font-size:11px; color:#777; margin-top:8px; min-height:15px"></div>
+            <div id="tpl-resultat"></div>
         </div>
     </div>
 
@@ -204,13 +91,85 @@
         <button class="primary" onclick="salvarTodo()">GUARDAR CONFIG [Profile.json]</button>
     </footer>
 
+    <!-- (2026-10-21) SELECTOR DE CARPETES/FITXERS: accessos ràpids + ruta enganxable.
+         Substitueix `cep.fs.showOpenDialog` (el diàleg del sistema no porta els
+         accessos ràpids de l'Explorador); el diàleg natiu queda al botó SISTEMA… -->
+    <div id="fp-picker" class="fp-picker-backdrop">
+        <div class="fp-picker">
+            <div class="fp-picker-head">
+                <strong id="fp-picker-title">Tria carpeta</strong>
+                <button class="btn-browse" title="Tancar (Esc)" onclick="pickerClose()">×</button>
+            </div>
+            <div class="fp-picker-bar">
+                <button class="btn-browse" title="Carpeta pare" onclick="pickerUp()">↑</button>
+                <input type="text" id="fp-picker-path" placeholder="Enganxa una ruta (\\servidor\share o C:\carpeta) i prem Enter"
+                       onkeydown="if (event.key === 'Enter') { event.preventDefault(); pickerGo(this.value); }">
+                <button class="secondary" onclick="pickerGo(document.getElementById('fp-picker-path').value)">ANAR</button>
+            </div>
+            <div class="fp-picker-body">
+                <div class="fp-picker-quick" id="fp-picker-quick"></div>
+                <div class="fp-picker-list" id="fp-picker-list"></div>
+            </div>
+            <div class="fp-picker-foot">
+                <span id="fp-picker-status">—</span>
+                <span class="fp-picker-actions">
+                    <button class="secondary" onclick="pickerNative()" title="Diàleg de fitxers del sistema">SISTEMA…</button>
+                    <button class="primary" id="fp-picker-use" onclick="pickerUse()">USAR AQUESTA CARPETA</button>
+                </span>
+            </div>
+        </div>
+    </div>
+
     <script>
         const csInterface = new CSInterface();
         let currentProfile = {};
 
+        /**
+         * getProfilePath: ruta FÍSICA del Profile.json (arrel de l'extensió).
+         */
+        function getProfilePath() {
+            return String(csInterface.getSystemPath(SystemPath.EXTENSION)) + "/Profile.json";
+        }
+
+        /** stripBom: lleva la marca BOM que CEP pot deixar al començament. */
+        function stripBom(s) {
+            s = String(s == null ? '' : s);
+            return (s.charCodeAt(0) === 0xFEFF) ? s.substring(1) : s;
+        }
+
+        /**
+         * readProfileText: llig Profile.json en UTF-8 de debò.
+         *
+         * (2026-10-21) ABANS es llegia amb `IO.readTxt` (pont JSX): eixe mètode llig
+         * en ANSI i trenca els accents, a més de dependre de l'evalScript. Ara es fa
+         * amb `cep.fs.readFile` (el MATEIX mecanisme que `11_Configuracio.js`); el
+         * pont queda com a xarxa de seguretat.
+         * @returns {string|null} text o null si no s'ha pogut llegir
+         */
+        function readProfileText(path) {
+            try {
+                if (window.cep && window.cep.fs && window.cep.fs.readFile) {
+                    const r = window.cep.fs.readFile(path);
+                    if (r && r.err === 0 && r.data != null) return stripBom(r.data);
+                }
+            } catch (eFs) { }
+            return null;
+        }
+
         async function init() {
-            const extensionRoot = csInterface.getSystemPath(SystemPath.EXTENSION);
-            const profilePath = extensionRoot + "/Profile.json";
+            const profilePath = getProfilePath();
+
+            // 1) Via directa (UTF-8, sense pont). 2) Si no hi ha cep.fs: IO.readTxt.
+            const txt = readProfileText(profilePath);
+            if (txt != null) {
+                try {
+                    currentProfile = JSON.parse(txt);
+                    drawConfig();
+                } catch (eJson) {
+                    alert("Profile.json no és JSON vàlid:\n" + (eJson && eJson.message));
+                }
+                return;
+            }
             
             csInterface.evalScript(`IO.readTxt('${profilePath.replace(/\\/g, '\\\\')}')`, function(res) {
                 if(res && res !== "ERR") {
@@ -264,7 +223,7 @@
                     </div>
                     <div class="card">
                         <h2>Gestió de Programes</h2>
-                        <div class="program-row" style="background:transparent; border-bottom:1px solid #444; color:#666; font-size:9px">
+                        <div class="program-row program-head">
                             <span>ID / NOM (Selector)</span><span>NOM ARXIU</span><span>CARPETA (dir)</span><span>WOTT</span><span>CONDUCTOR</span><span></span>
                         </div>
                         <div id="prog-list-${tabName.replace(/ /g, '')}">
@@ -275,11 +234,11 @@
                                     <input type="text" value="${p.dir || ''}" onchange="updateProg('${tabName}', ${idx}, 'dir', this.value)" title="CARPETA (dir): subcarpeta de projectes dins de PROJECTES (p.ex. 01_MATINS_PROJECTES). Es la que fa la ruta del projecte -> si falta, el projecte cau a l'ARREL">
                                     <input type="text" value="${p.wott}" onchange="updateProg('${tabName}', ${idx}, 'wott', this.value)" title="Prefixo Wott">
                                     <input type="text" value="${p.conductor || ''}" onchange="updateProg('${tabName}', ${idx}, 'conductor', this.value)" placeholder="MOV file">
-                                    <button class="btn-delete" onclick="removeProg('${tabName}', ${idx})">✕</button>
+                                    <button class="btn-delete" title="Esborrar programa" onclick="removeProg('${tabName}', ${idx})">×</button>
                                 </div>
                             `).join('')}
                         </div>
-                        <button class="secondary" style="width:100%; margin-top:10px; font-size:11px" onclick="addProg('${tabName}')">+ AFEGIR PROGRAMA</button>
+                        <button class="secondary btn-add" onclick="addProg('${tabName}')">+ AFEGIR PROGRAMA</button>
                     </div>
                 `;
                 container.innerHTML = html;
@@ -330,8 +289,7 @@
                 currentProfile.rutas[el.id.replace(/^path-/, '')] = el.value;
             });
 
-            const extensionRoot = csInterface.getSystemPath(SystemPath.EXTENSION);
-            const profilePath = extensionRoot + "/Profile.json";
+            const profilePath = getProfilePath();
 
             // (2026-10-21) GUARDA: cap programa sense CARPETA (dir). `dir` es la
             // subcarpeta de projectes que fa servir utils.workFolder
@@ -355,8 +313,47 @@
                 return;
             }
 
+            // ── ESCRIPTURA (2026-10-21) ──────────────────────────────────────────
+            // BUG: el perfil s'enviava a `IO.writeTxt` DINS d'un literal de JSX
+            // (`evalScript`). Eixe literal NO pot portar salts de línia i el JSON
+            // s'hi enviava amb `JSON.stringify(obj, null, 4)` → el motor responia
+            // «EvalScript error» i la config no es desava mai.
+            // Ara s'escriu DIRECTAMENT des del panell amb `cep.fs.writeFile` (el
+            // mateix mecanisme amb què `11_Configuracio.js` el LLEGIX), sense cap
+            // pont; el payload del fallback va en UNA SOLA LÍNIA (vore davall).
+            const json = JSON.stringify(currentProfile, null, 4);
+            let writeErr = '';
+            try {
+                if (window.cep && window.cep.fs && window.cep.fs.writeFile) {
+                    let r = window.cep.fs.writeFile(profilePath, json, 'UTF-8');
+                    // CEP vells no accepten el 3r argument (encoding): reintent sense.
+                    if (!r || r.err !== 0) r = window.cep.fs.writeFile(profilePath, json);
+                    if (!r || r.err !== 0) writeErr = 'cep.fs err=' + (r ? r.err : '?');
+                } else {
+                    writeErr = 'cep.fs no disponible';
+                }
+            } catch (eW) { writeErr = (eW && eW.message) || 'excepció en escriure'; }
+
+            if (!writeErr) {
+                // Verificació real: es rellegeix i es parseja. Una escriptura
+                // truncada deixaria el panell sense config en el pròxim arrencada.
+                const chk = readProfileText(profilePath);
+                let chkOk = false;
+                try { chkOk = !!(chk && JSON.parse(chk)); } catch (eChk) { chkOk = false; }
+                if (chkOk) {
+                    alert("Configuració desada a Profile.json");
+                    csInterface.dispatchEvent(new CSXSEvent('FASTPASS_CONFIG_UPDATED', 'APPLICATION'));
+                    window.parent.FASTPASS_UI.Workflows.Config.toggleSetup(false);
+                    return;
+                }
+                writeErr = 'escriptura NO verificada (el fitxer rellegit no és JSON)';
+            }
+
+            // ── FALLBACK (només si `cep.fs` falla) ───────────────────────────────
+            // `payload` ha d'anar en UNA línia: el literal d'ExtendScript no pot
+            // tindre salts de línia (era la causa de l'«EvalScript error»).
             // Escapem cometes simples per al bridge JSX
-            const payload = JSON.stringify(currentProfile, null, 4).replace(/'/g, "\\'");
+            const payload = JSON.stringify(currentProfile).replace(/'/g, "\\'");
 
             csInterface.evalScript(`IO.writeTxt('${profilePath.replace(/\\/g, '\\\\')}', '${payload}')`, function(res) {
                 if(res && res.indexOf("OK") !== -1) {
@@ -364,7 +361,8 @@
                     csInterface.dispatchEvent(new CSXSEvent('FASTPASS_CONFIG_UPDATED', 'APPLICATION'));
                     window.parent.FASTPASS_UI.Workflows.Config.toggleSetup(false);
                 } else {
-                    alert("Error gravant configuración: " + res);
+                    alert("❌ No s'ha pogut desar Profile.json\n" +
+                        "Motiu: " + writeErr + "\nPont JSX: " + res);
                 }
             });
         }
@@ -453,14 +451,321 @@
         };
 
 
-        window.browseFolder = function(id) { 
-            var r = window.cep.fs.showOpenDialog(false, true, "Tria Carpeta", null); 
-            if(r.data.length) document.getElementById(id).value = r.data[0]; 
+        // ── SELECTOR DE CARPETES/XITXERS (2026-10-21 · revisat #177) ─────────
+        // El botó 📁 obri DIRECTAMENT el diàleg del SISTEMA (`cep.fs.showOpenDialog`):
+        // és el MATEIX que obria el botó SISTEMA…, porta els accessos ràpids de
+        // l'Explorador (Accés ràpid, Documents, Baixades, discos…) i deixa enganxar
+        // una ruta UNC. Ja NO s'obri el selector HTML: queda només com a XARXA DE
+        // SEGURETAT si `cep.fs.showOpenDialog` no existix o llança.
+        //
+        // LÍMIT CONEGUT: el MODE DE VISTA (llista/detalls vs icones grans) el decidix
+        // Windows i recorda l'últim de cada carpeta; l'API de CEP no el pot forçar.
+        // Posar-lo en "Detalls" una vegada dins la carpeta és suficient.
+        var _fpPicker = { id: null, mode: 'folder', ext: [], dir: '', sel: '', token: 0, quick: null };
+
+        function cepFs() { return (window.cep && window.cep.fs) ? window.cep.fs : null; }
+
+        /** isDirPath: existix i és carpeta (`readdir` és la prova barata). */
+        function isDirPath(p) {
+            var fs = cepFs();
+            if (!fs || !p) return false;
+            try { var r = fs.readdir(String(p)); return !!(r && r.err === 0); } catch (e) { return false; }
+        }
+        /** listPaths: noms de dins d'una carpeta (null si no es pot llegir). */
+        function listPaths(p) {
+            var fs = cepFs();
+            if (!fs || !p) return null;
+            try { var r = fs.readdir(String(p)); return (r && r.err === 0 && r.data) ? r.data : null; } catch (e) { return null; }
+        }
+        function pathJoin(a, b) {
+            var s = String(a || '').replace(/[\\/]+$/, '');
+            return s ? (s + '\\' + String(b || '')) : String(b || '');
+        }
+        function pathParent(p) {
+            var s = String(p || '').replace(/[\\/]+$/, '');
+            if (!s) return '';
+            if (/^[a-zA-Z]:$/.test(s)) return s + '\\';                  // arrel d'un disc
+            if (/^\\\\[^\\]+\\[^\\]+$/.test(s)) return s;                 // arrel d'un share UNC
+            var i = Math.max(s.lastIndexOf('\\'), s.lastIndexOf('/'));
+            if (i < 0) return '';
+            if (i === 2 && /^[a-zA-Z]:/.test(s)) return s.substring(0, 2) + '\\';
+            return s.substring(0, i);
+        }
+        function setPickerStatus(txt, color) {
+            var el = document.getElementById('fp-picker-status');
+            if (!el) return;
+            el.textContent = txt || '—';
+            el.style.color = color || '#777';
+        }
+        function pickerEmpty(txt) {
+            var el = document.createElement('div');
+            el.className = 'fp-picker-empty';
+            el.textContent = txt;
+            return el;
+        }
+        /** quickDirs: accessos ràpids (es calculen una volta; cache a _fpPicker.quick). */
+        function quickDirs() {
+            if (_fpPicker.quick) return _fpPicker.quick;
+            var out = [], seen = {};
+            function add(label, p) {
+                if (!p) return;
+                var key = String(p).toLowerCase().replace(/[\\/]+$/, '');
+                if (!key || seen[key]) return;
+                seen[key] = 1;
+                out.push({ label: label, path: p });
+            }
+            var docs = '';
+            try { docs = csInterface.getSystemPath(SystemPath.MY_DOCUMENTS) || ''; } catch (eDocs) { docs = ''; }
+            if (docs) {
+                add('📄 Documents', docs);
+                var home = pathParent(docs);
+                if (home) {
+                    add('🏠 ' + home, home);
+                    ['Desktop|🖥 Escriptori', 'Downloads|⬇ Baixades', 'Pictures|🖼 Imatges', 'Videos|🎬 Vídeos', 'OneDrive|☁ OneDrive']
+                        .forEach(function (pair) {
+                            var bits = pair.split('|');
+                            var p = pathJoin(home, bits[0]);
+                            if (isDirPath(p)) add(bits[1], p);
+                        });
+                }
+            }
+            // Discos: `readdir` sobre l'arrel és la prova barata (les lletres que no
+            // existixen tornen err immediat).
+            'CDEFGHIJKLMNOPQRSTUVWXYZ'.split('').forEach(function (ch) {
+                var root = ch + ':\\';
+                if (isDirPath(root)) add('💽 ' + root, root);
+            });
+            // Les rutes que ja estan al perfil: el cas més habitual és reutilitzar-les.
+            document.querySelectorAll('input[id^="path-"]').forEach(function (el) {
+                var v = String(el.value || '').trim();
+                if (v) add('🔗 ' + el.id.replace(/^path-/, ''), v);
+            });
+            _fpPicker.quick = out;
+            return out;
+        }
+        function pickerRenderQuick() {
+            var box = document.getElementById('fp-picker-quick');
+            if (!box) return;
+            box.innerHTML = '';
+            var dirs = quickDirs();
+            if (!dirs.length) { box.appendChild(pickerEmpty('(sense accessos)')); return; }
+            dirs.forEach(function (d) {
+                var el = document.createElement('div');
+                el.textContent = d.label;
+                el.title = d.path;
+                el.onclick = function () { pickerGo(d.path); };
+                box.appendChild(el);
+            });
+        }
+        function pickerMatch(nm) {
+            if (!_fpPicker.ext || !_fpPicker.ext.length) return true;
+            var low = String(nm).toLowerCase();
+            return _fpPicker.ext.some(function (x) {
+                return low.length > x.length && low.slice(-(x.length + 1)) === '.' + x;
+            });
+        }
+
+        /** pickerList: llig la carpeta a TROSSOS (40 entrades per volta) i la pinta. */
+        function pickerList() {
+            var box = document.getElementById('fp-picker-list');
+            if (!box) return;
+            var dir = _fpPicker.dir;
+            box.innerHTML = '';
+            if (!dir) { box.appendChild(pickerEmpty('Escriu o enganxa una ruta.')); return; }
+            var names = listPaths(dir);
+            if (!names) {
+                box.appendChild(pickerEmpty('❌ No puc llegir: ' + dir));
+                setPickerStatus('No existix o no tens permisos', '#ff5252');
+                return;
+            }
+            var token = ++_fpPicker.token;       // invalida escanejats anteriors
+            box.appendChild(pickerEmpty('Llegint… ' + names.length + ' entrades'));
+            var dirs = [], files = [], i = 0;
+            function step() {
+                if (token !== _fpPicker.token) return;
+                var end = Math.min(i + 40, names.length);
+                for (; i < end; i++) {
+                    var nm = String(names[i] || '');
+                    if (!nm) continue;
+                    var full = pathJoin(dir, nm);
+                    if (isDirPath(full)) dirs.push(nm);
+                    else if (_fpPicker.mode === 'file' && pickerMatch(nm)) files.push(nm);
+                }
+                setPickerStatus('Llegint… ' + i + '/' + names.length);
+                if (i < names.length) { setTimeout(step, 0); return; }
+                pickerPaintList(dirs, files);
+            }
+            step();
+        }
+        function pickerPaintList(dirs, files) {
+            var box = document.getElementById('fp-picker-list');
+            if (!box) return;
+            box.innerHTML = '';
+            var cmp = function (a, b) { return a.localeCompare(b, 'ca', { sensitivity: 'base' }); };
+            dirs.sort(cmp);
+            files.sort(cmp);
+            dirs.forEach(function (nm) {
+                var full = pathJoin(_fpPicker.dir, nm);
+                var el = document.createElement('div');
+                el.className = 'fp-picker-item';
+                el.textContent = '📁 ' + nm;
+                el.title = full;
+                el.onclick = function () { pickerSelect(full, el); };
+                el.ondblclick = function () { pickerGo(full); };
+                box.appendChild(el);
+            });
+            files.forEach(function (nm) {
+                var full = pathJoin(_fpPicker.dir, nm);
+                var el = document.createElement('div');
+                el.className = 'fp-picker-item file';
+                el.textContent = '📄 ' + nm;
+                el.title = full;
+                el.onclick = function () { pickerSelect(full, el); };
+                el.ondblclick = function () { pickerSelect(full, el); pickerUse(); };
+                box.appendChild(el);
+            });
+            if (!dirs.length && !files.length) box.appendChild(pickerEmpty('(cap carpeta)'));
+            setPickerStatus(_fpPicker.dir, '#777');
+            pickerMarkSel();
+        }
+        function pickerMarkSel() {
+            var box = document.getElementById('fp-picker-list');
+            if (!box) return;
+            Array.prototype.forEach.call(box.querySelectorAll('.fp-picker-item'), function (el) {
+                el.classList.toggle('sel', el.title === _fpPicker.sel);
+            });
+        }
+        function pickerSelect(full, el) {
+            _fpPicker.sel = full;
+            if (el && el.parentNode) {
+                Array.prototype.forEach.call(el.parentNode.children, function (x) { x.classList.remove('sel'); });
+                el.classList.add('sel');
+            }
+            setPickerStatus(full, '#00c853');
+        }
+        function pickerGo(p) {
+            var raw = String(p == null ? '' : p).trim().replace(/^"(.*)"$/, '$1');
+            if (!raw) { setPickerStatus('Escriu una ruta', '#ffb300'); return; }
+            if (!isDirPath(raw)) { setPickerStatus('❌ No existix: ' + raw, '#ff5252'); return; }
+            _fpPicker.dir = raw;
+            _fpPicker.sel = raw;
+            var inp = document.getElementById('fp-picker-path');
+            if (inp) inp.value = raw;
+            pickerRenderQuick();
+            pickerList();
+        }
+        function pickerUp() {
+            var p = pathParent(_fpPicker.dir);
+            if (p && p !== _fpPicker.dir) pickerGo(p);
+        }
+
+        function pickerOpen(id, opts) {
+            opts = opts || {};
+            _fpPicker.id = id;
+            _fpPicker.mode = opts.mode || 'folder';
+            _fpPicker.ext = (opts.ext || []).map(function (x) { return String(x).toLowerCase().replace(/^\./, ''); });
+            _fpPicker.sel = '';
+            _fpPicker.quick = null;
+            _fpPicker.token++;
+            var target = document.getElementById(id);
+            var start = target ? String(target.value || '').trim() : '';
+            var use = document.getElementById('fp-picker-use');
+            if (use) use.textContent = (_fpPicker.mode === 'file') ? 'USAR AQUEST FITXER' : 'USAR AQUESTA CARPETA';
+            var ttl = document.getElementById('fp-picker-title');
+            if (ttl) ttl.textContent = (_fpPicker.mode === 'file') ? 'Tria un fitxer' : 'Tria una carpeta';
+            var box = document.getElementById('fp-picker');
+            if (box) box.classList.add('open');
+            var inp = document.getElementById('fp-picker-path');
+            if (inp) inp.value = start;
+            // Si la ruta actual és un FITXER (p. ex. la plantilla .prproj) es comença
+            // per la seua carpeta; si no, per la pròpia ruta; si no, per Documents.
+            var boot = start;
+            if (boot && !isDirPath(boot)) boot = pathParent(boot);
+            if (!boot || !isDirPath(boot)) {
+                try { boot = csInterface.getSystemPath(SystemPath.MY_DOCUMENTS) || ''; } catch (eB) { boot = ''; }
+            }
+            if (boot && isDirPath(boot)) pickerGo(boot);
+            else { pickerRenderQuick(); pickerList(); }
+            if (inp) { inp.focus(); inp.select(); }
+        }
+        function pickerClose() {
+            var box = document.getElementById('fp-picker');
+            if (box) box.classList.remove('open');
+            _fpPicker.token++;
+        }
+        function pickerUse() {
+            var val = _fpPicker.sel || _fpPicker.dir;
+            if (!val) return;
+            var target = document.getElementById(_fpPicker.id);
+            if (target) target.value = val;
+            pickerClose();
+        }
+        function pickerNative() {
+            var r = null;
+            try {
+                r = (_fpPicker.mode === 'file')
+                    ? window.cep.fs.showOpenDialog(false, false, 'Tria Arxiu', null, _fpPicker.ext)
+                    : window.cep.fs.showOpenDialog(false, true, 'Tria Carpeta', null);
+            } catch (eNat) { r = null; }
+            if (r && r.data && r.data.length) {
+                var t = document.getElementById(_fpPicker.id);
+                if (t) t.value = r.data[0];
+                pickerClose();
+            }
+        }
+        document.addEventListener('keydown', function (e) {
+            var box = document.getElementById('fp-picker');
+            if (!box || !box.classList.contains('open')) return;
+            if (e.key === 'Escape') { e.preventDefault(); pickerClose(); }
+        });
+
+        /**
+         * pickNative: obri el diàleg de fitxers del SISTEMA i posa el resultat al
+         * camp `id`.
+         *
+         * @param {string} id   - id de l'input destí
+         * @param {string} mode - 'folder' | 'file'
+         * @returns {boolean} true si el diàleg s'HA OBERT (cancel·lar també compta:
+         *   aleshores NO s'ha de caure al selector HTML).
+         */
+        function pickNative(id, mode) {
+            var el = document.getElementById(id);
+            if (!el) return true;
+            var fsApi = cepFs();
+            if (!fsApi || typeof fsApi.showOpenDialog !== 'function') return false;
+            var cur = String(el.value || '').trim();
+            // La ruta inicial ha de ser una CARPETA: si el camp ja és un fitxer
+            // (la plantilla .prproj) es comença per la seua carpeta.
+            var initial = '';
+            if (cur) initial = (mode === 'file' && !isDirPath(cur)) ? pathParent(cur) : cur;
+            var r = null;
+            try {
+                r = (mode === 'file')
+                    ? fsApi.showOpenDialog(false, false, 'Tria Arxiu', initial || null, ['prproj'])
+                    : fsApi.showOpenDialog(false, true, 'Tria Carpeta', initial || null);
+            } catch (eNat) { return false; }
+            if (!r) return false;
+            if (r.err === 0 && r.data && r.data.length) {
+                el.value = r.data[0];
+                try { console.log('[setup] diàleg natiu → ' + el.value); } catch (eL) { }
+            }
+            return true;
+        }
+
+        window.browseFolder = function (id) {
+            if (!pickNative(id, 'folder')) pickerOpen(id, { mode: 'folder' });
         };
-        window.browseFile = function(id) { 
-            var r = window.cep.fs.showOpenDialog(false, false, "Tria Arxiu", null, ["prproj"]); 
-            if(r.data.length) document.getElementById(id).value = r.data[0]; 
+        window.browseFile = function (id) {
+            if (!pickNative(id, 'file')) pickerOpen(id, { mode: 'file', ext: ['prproj'] });
         };
+
+        // Tooltip dels botons 📁: obrin el diàleg del SISTEMA (una sola passada).
+        Array.prototype.forEach.call(document.querySelectorAll('.btn-browse'), function (b) {
+            var oc = String(b.getAttribute('onclick') || '');
+            if (oc.indexOf('browseFolder(') === 0 || oc.indexOf('browseFile(') === 0) {
+                b.title = "Obrir el diàleg del sistema (accessos ràpids de l'Explorador)";
+            }
+        });
 
         init();
     </script>

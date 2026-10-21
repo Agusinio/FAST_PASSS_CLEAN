@@ -195,6 +195,106 @@
             ok('#172 index.html: cache-bust del #172 (flow_render ' + vR + ', main ' + vM + ', style ' + vS + ')',
                 vR >= 33 && vM >= 82 && vS >= 61);
 
+            // ── C2) LENTITUD DE LA PORTADA (2026-10-21) ─────────────────────────
+            // El log del 21/10/2026 14:51:16 va deixar 93,52 s al Promise.all de
+            // lectures perquè `Scan.portadas` escanejava el NAS sencer (1.028 fitxers)
+            // per una portada que JA és al bin PORTADES. I la captura QE es donava per
+            // perduda perquè `waitPng` llegia el PNG amb `cep.fs.readFile` (falla a UNC)
+            // i el fallback `seq.exportFrame` no existeix a Premiere.
+            var scn = noComments(SRCS['js/logic/Scanner.js'] || '');
+            var prj = noComments(SRCS['jsx/modules/3_Project.jsx'] || '');
+            var io2 = noComments(SRCS['jsx/modules/2_IO.jsx'] || '');
+            var iPort = scn.indexOf('portadas: async function');
+            var iFast = scn.indexOf('portadasFromProject(ctx)', iPort);
+            var iNas = scn.indexOf('readFolder(pathNAS)', iFast > -1 ? iFast : iPort);
+            ok('#175 Scanner: `portadas` consulta el BIN PORTADES ABANS d\'escanejar el NAS',
+                /portadasFromProject: async function/.test(scn) &&
+                /FASTPASS\.Project\.pngItems\('PORTADES'\)/.test(scn) &&
+                iFast !== -1 && iNas !== -1 && iFast < iNas,
+                'iPort=' + iPort + ' bin=' + iFast + ' nas=' + iNas);
+            ok('#175 Project.pngItems: llig els PNG de PORTADA del projecte (nom + mediaPath + dates)',
+                /pngItems: function\(binName\)/.test(prj) && /getMediaPath\(\)/.test(prj) &&
+                /PORTADA/.test(prj) && /f\.created/.test(prj));
+            ok('#175 IO.fileInfo: exists/size/modified sense llegir el fitxer sencer',
+                /fileInfo: function\(path\)/.test(io2) && /f\.exists/.test(io2) && /f\.eof/.test(io2));
+            ok('#175 flow_render: `waitPng` es basa en `IO.fileInfo` i ja NO crida `Render.frame`',
+                /typeof IO\.fileInfo/.test(fr) && /IO\.fileInfo\(\$\{JSON\.stringify\(target\)\}\)/.test(fr) &&
+                !/Render\.frame\(/.test(fr) && /QE-retry/.test(fr),
+                'render.frame=' + /Render\.frame\(/.test(fr) + ' retry=' + /QE-retry/.test(fr));
+            ok('#175 flow_render: cada lectura del Promise.all té el SEU cronòmetre',
+                /tP0/.test(fr) && /tV0/.test(fr) && /tA0/.test(fr) && /Scan\.portades:/.test(fr));
+            ok('#175 index.html: cache-bust del #175 (flow_render ' + vR + ', Scanner ' + verOf('js/logic/Scanner.js') + ')',
+                vR >= 35 && verOf('js/logic/Scanner.js') >= 15);
+            var pl = noComments(SRCS['js/logic/3_Project_Logic.js'] || '');
+            ok('#175 ingesta: la data de la portada del BIN no es perduda (st.created || p.created)',
+                /created: st\.created \|\| p\.created/.test(pl));
+
+            // ── C3) MOTOR REAL: `portadas` amb el BIN PORTADES (2026-10-21) ─────
+            // El 21/10 el Promise.all de la portada va fer 93,52 s perquè escanejava
+            // el NAS (1.028 fitxers) tot i que el PNG ja era al projecte. Es prova el
+            // motor real amb un pont SIMULAT: ha de tornar la portada del dia des del
+            // bin i NO ha de tocar `readFolder` (NAS). Si el bin és buit, fallback.
+            var SCAN = UI.Logic.Scan;
+            var savedCall = UI.Utils.callJSX, savedRead = UI.Utils.readFolder, savedLog = UI.Utils.log;
+            try {
+                UI.Utils.log = function () { };
+                var dNow = new Date();
+                var dateDir = dNow.getFullYear() + '_' + ('0' + (dNow.getMonth() + 1)).slice(-2) + '_' + ('0' + dNow.getDate()).slice(-2);
+                var reads = 0;
+                UI.Utils.readFolder = async function () { reads++; return []; };
+                UI.Utils.callJSX = async function (s) {
+                    return /FASTPASS\.Project\.pngItems\('PORTADES'\)/.test(s) ? JSON.stringify([
+                        { name: 'TNC_V1_PORTADA_AVUI.png', mediaPath: '\\\\nas\\avui.png', created: Date.now(), modified: Date.now() },
+                        { name: 'TNC_V1_PORTADA_AHIR.png', mediaPath: '\\\\nas\\ahir.png', created: Date.now() - 86400000, modified: Date.now() - 86400000 }
+                        ,
+                        { name: 'TNC_V1_Tema-Titol_sense_res.png', mediaPath: 'Z:/nas/sense.png', created: Date.now(), modified: Date.now() },
+                        { name: 'TNC_V2_PORTADA_ALTRE_BLOC.png', mediaPath: 'Z:/nas/altre.png', created: Date.now(), modified: Date.now() }
+                    ]) : '[]';
+                };
+                var ctxBin = { progData: { wott: 'TNC' }, bloque: 'V1', dateDir: dateDir, config: { rutas: { chyrons: '\\\\nas\\chyrons\\' } } };
+                var resBin = await SCAN.portadas(ctxBin);
+                ok('#175/1 motor: `portadas` resol la portada del BIN (1 del dia) SENSE llegir el NAS',
+                    resBin.length === 1 && /AVUI/.test(resBin[0].name) && reads === 0,
+                    'n=' + resBin.length + ' nas=' + reads + ' nom=' + (resBin[0] && resBin[0].name));
+                ok('#175/2 motor: el path retornat és el `mediaPath` de l\'ítem del projecte',
+                    resBin.length === 1 && resBin[0].path === '\\\\nas\\avui.png',
+                    resBin[0] && resBin[0].path);
+
+                // Sense res al bin → s'ha de mantenir el camí antic (NAS), sense trencar-se.
+                UI.Utils.callJSX = async function () { return '[]'; };
+                reads = 0;
+                await SCAN.portadas(ctxBin);
+                ok('#175/3 motor: si el bin és buit es manté el camí del NAS (fallback intacte)',
+                    reads >= 1, 'nas=' + reads);
+
+                // El bin pot tindre la portada SENSE el prefix PROG_BLOC al nom: val
+                // igualment (el bin és del PROJECTE OBERT); el que no pot és no portar
+                // `PORTADA` (mirar `TEMA-TITOL` era el fals negatiu del 21/10).
+                UI.Utils.callJSX = async function (s) {
+                    return /FASTPASS\.Project\.pngItems\('PORTADES'\)/.test(s) ? JSON.stringify([
+                        { name: 'PORTADA_sense_prefix.png', mediaPath: 'Z:/nas/sp.png', created: Date.now(), modified: Date.now() }
+                    ]) : '[]';
+                };
+                reads = 0;
+                var resNoPref = await SCAN.portadas(ctxBin);
+                ok('#175/4 motor: sense prefix PROG_BLOC, la portada del bin es troba igualment (0 lectures NAS)',
+                    resNoPref.length === 1 && /PORTADA_sense_prefix/.test(resNoPref[0].name) && reads === 0,
+                    'n=' + resNoPref.length + ' nas=' + reads);
+
+                // Cap dels dos camins pot tornar a filtrar per `TEMA-TITOL`.
+                var scSrc = noComments(SRCS['js/logic/Scanner.js'] || '');
+                ok('#175/5 Scanner: BIN i NAS filtren pel literal PORTADA (ja no per TEMA-TITOL)',
+                    scSrc.indexOf("indexOf('PORTADA')") > 0 &&
+                    (scSrc.match(/indexOf\('PORTADA'\)/g) || []).length >= 2 &&
+                    scSrc.indexOf('TEMA-TITOL') === -1,
+                    'portada=' + (scSrc.match(/indexOf\('PORTADA'\)/g) || []).length +
+                    ' temaTitol=' + scSrc.indexOf('TEMA-TITOL'));
+            } finally {
+                UI.Utils.callJSX = savedCall;
+                UI.Utils.readFolder = savedRead;
+                UI.Utils.log = savedLog;
+            }
+
             // ── D) MOTOR REAL (`Chyrons._capturePng`) amb un MODEL de seqüència ──
             var CHY = UI.Workflows.Chyrons;
             ok('#172 motor: `Chyrons._capturePng` carregat (flow_chyrons real al bundle)',

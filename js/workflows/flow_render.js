@@ -115,29 +115,65 @@
      * `waitFile` nomes mirava l'EXISTENCIA i QE escriu el fitxer de mica en mica: es podia
      * llegir/publicar un PNG a mitges (o un de VELL del mateix nom). Criteris:
      *   1) existeix i te mida > 0,
-     *   2) la mida es manté ESTABLE entre dues lectures seguides,
-     *   3) te el chunk final IEND (0x49 0x45 0x4E 0x44) = fitxer complet.
-     * @param {string} pathNoExt - Ruta (amb o sense `.png`; es proven les dues)
-     * @param {number} [tries=30] - Intents (~70-120 ms cada un)
+     *   2) la mida es manté ESTABLE entre dues lectures seguides.
+     * (2026-10-21) La mida ve de `IO.fileInfo` (ExtendScript). L'antic criteri 3 (chunk
+     * IEND) exigia llegir el PNG SENCER amb `cep.fs.readFile`, que en aquest equip falla
+     * amb rutes UNC d'~1 MB → el `iend` era sempre fals i la captura es donava per perduda
+     * tot i estar escrita. Si `IO.fileInfo` no existeix (panell sense recarregar) es manté
+     * el mètode antic amb `cep.fs.readFile` + IEND.
+     * @param {string} pathNoExt - Ruta (amb o sense `.png`)
+     * @param {number} [tries=30] - Intents (~150/90 ms cada un)
      * @returns {Promise<{ok:boolean,size:number,iend:boolean,file:string,tries:number}>}
      */
     async function waitPng(pathNoExt, tries) {
         const utils = getUtils();
         const norm = String(pathNoExt).replace(/\//g, "\\");
-        const candidats = [/\.png$/i.test(norm) ? norm : (norm + ".png"), norm.replace(/\.png$/i, "")];
+        const target = /\.png$/i.test(norm) ? norm : (norm + ".png");
+        const alias = target.replace(/\.png$/i, "");
         const maxTries = tries || 30;
-        let size = -1, stable = 0, iend = false, file = candidats[0];
+
+        // (2026-10-21) FONT DE VERITAT: `IO.fileInfo` (ExtendScript).
+        // Abans es llegia el PNG SENCER amb `cep.fs.readFile` per mirar el chunk IEND.
+        // En aquest equip això falla amb PNG de ~1 MB a UNC (i `cep.fs.stat` no dóna
+        // `.size`) → `waitPng` deia que la captura NO s'havia escrit quan el PNG ja hi
+        // era: portada del 21/10/2026, escrita per QE a les 14:51:19 (990 KB, IEND OK),
+        // donada per perduda, i el fallback `seq.exportFrame` (inexistent) va convertir
+        // un èxit en un error visible.
+        let viaJsx = true;
+        try {
+            const probe = await utils.callJSX('typeof IO.fileInfo', { rawError: true });
+            viaJsx = (String(probe).indexOf('function') !== -1);
+        } catch (eP) { viaJsx = false; }
+        if (!viaJsx) {
+            log('⚠️ [Portada] `IO.fileInfo` no disponible (recarrega el panell) · el PNG es verifica amb cep.fs.readFile', 'WARN');
+        }
+
+        let size = -1, stable = 0, iend = false, file = target;
         for (let i = 0; i < maxTries; i++) {
-            for (let c = 0; c < candidats.length; c++) {
-                const buf = readFileBytes(candidats[c]);
-                if (!buf || buf.length === 0) continue;
-                file = candidats[c];
-                const n = buf.length;
-                iend = (n >= 12 && buf[n - 8] === 0x49 && buf[n - 7] === 0x45 && buf[n - 6] === 0x4E && buf[n - 5] === 0x44);
-                if (n === size) { stable++; } else { stable = 0; size = n; }
-                if (iend && stable >= 1) return { ok: true, size: n, iend: true, file: file, tries: i + 1 };
+            let n = -1, exists = false;
+            if (viaJsx) {
+                const raw = await utils.callJSX(`IO.fileInfo(${JSON.stringify(target)})`, { rawError: true });
+                try {
+                    const info = JSON.parse(raw);
+                    exists = !!info.exists;
+                    n = Number(info.size) || 0;
+                } catch (eJ) { exists = false; n = -1; }
+            } else {
+                const buf = readFileBytes(target) || readFileBytes(alias);
+                exists = !!(buf && buf.length);
+                n = exists ? buf.length : -1;
+                iend = !!(exists && n >= 12 && buf[n - 8] === 0x49 && buf[n - 7] === 0x45 && buf[n - 6] === 0x4E && buf[n - 5] === 0x44);
             }
-            await utils.delay(i === 0 ? 120 : 70);
+            if (exists && n > 0) {
+                file = target;
+                if (n === size) { stable++; } else { stable = 0; size = n; }
+                // QE escriu el PNG d'un sol cop: dues lectures amb la MATEIXA mida
+                // (> 0) volen dir que el fitxer ja està tancat i complet.
+                if (stable >= 1) return { ok: true, size: n, iend: (iend || viaJsx), file: file, tries: i + 1 };
+            } else {
+                stable = 0; size = -1;
+            }
+            await utils.delay(i === 0 ? 150 : 90);
         }
         return { ok: false, size: (size < 0 ? 0 : size), iend: iend, file: file, tries: maxTries };
     }
@@ -765,24 +801,36 @@
                 // filtri els PNG per la data del projecte actual (no només mtime).
                 const stateDateDir = state.dateDir || utils.getFormattedDate().replace(/["\s]/g, "").trim();
                 const ctx = { config, progData: state.progData, bloque: state.bloque, dateDir: stateDateDir };
-                // (2026-10-16 · BUG #172) LECTURES INDEPENDENTS EN PARAL·LEL: el filtre de portades
-                // al NAS, la foto de les pistes de vídeo (per maxEnd) i la foto de l'àudio no
-                // depenen entre elles i abans anaven EN SERIE (2-3 viatges al NAS, de 0,5-2 s
-                // cada un, dins d'un flux que l'usuari troba lent). Ara surten alhora.
+                // (2026-10-16 · BUG #172) LECTURES INDEPENDENTS EN PARAL·LEL: la portada
+                // (BIN PORTADES o, si el projecte no en té, el NAS), la foto de les pistes de
+                // vídeo (per maxEnd) i la foto de l'àudio no depenen entre elles i abans anaven
+                // EN SERIE (2-3 viatges al NAS, de 0,5-2 s cada un, dins d'un flux que l'usuari troba lent). Ara surten alhora.
                 const tLect = Date.now();
-                const lect = await Promise.all([
-                    getScanner().portadas(ctx),
-                    callJSX(`Clips.debugTracks('video')`),
-                    this._snapAudio()
-                ]);
+                // (2026-10-21) Cada lectura amb el SEU cronòmetre: el total de 93,52 s
+                // del 21/10 no deia si el cost era del NAS o de les pistes. Així, al log,
+                // es veu exactament quina de les tres cal optimitzar.
+                const tP0 = Date.now(), tV0 = Date.now(), tA0 = Date.now();
+                const pPort = getScanner().portadas(ctx).then(function (r) {
+                    log(`[Portada] ⏱ Scan.portades: ${((Date.now() - tP0) / 1000).toFixed(2)}s (${(r || []).length} candidata/es)`);
+                    return r;
+                });
+                const pVid = callJSX(`Clips.debugTracks('video')`).then(function (r) {
+                    log(`[Portada] ⏱ debugTracks(video): ${((Date.now() - tV0) / 1000).toFixed(2)}s`);
+                    return r;
+                });
+                const pAud = this._snapAudio().then(function (r) {
+                    log(`[Portada] ⏱ foto d'àudio: ${((Date.now() - tA0) / 1000).toFixed(2)}s`);
+                    return r;
+                });
+                const lect = await Promise.all([pPort, pVid, pAud]);
                 const portadas = lect[0];
                 const vRaw = lect[1];
                 audioBefore = lect[2];
-                log(`[Portada] Lectures en paral·lel (portades NAS + pistes de vídeo + foto d'àudio): ${((Date.now() - tLect) / 1000).toFixed(2)}s`);
+                log(`[Portada] Lectures en paral·lel (portada + pistes de vídeo + foto d'àudio): ${((Date.now() - tLect) / 1000).toFixed(2)}s`);
                 const portada = (portadas && portadas.length > 0) ? portadas[0] : null;
                 
                 if (!portada) {
-                    throw new Error("No s'ha trobat cap PNG de portada que coincideixi amb el Programa i el Bloc.");
+                    throw new Error("No s'ha trobat cap PNG de portada (nom amb PORTADA) que coincideixi amb el Programa i el Bloc.");
                 }
                 const sz = pngSize(portada.path);
                 log(`🖼️ [Portada] Portada del tema: ${portada.name}${sz ? ' (' + sz.w + 'x' + sz.h + ' px)' : ''}`);
@@ -1121,16 +1169,21 @@
                     if (!delOk) throw new Error("Hi ha un PNG anterior a " + destExt + " i no s'ha pogut esborrar → publicar-lo donaria una portada VELLA.");
                 }
                 let snapRes = await callJSX(`Render.snapshot('${utils.escape(destNoExt)}', ${tcCap})`, { rawError: true });
-                // 🛡️ `waitPng` = mida > 0 + mida ESTABLE + chunk final IEND (fitxer sencer).
+                // 🛡️ `waitPng` = existeix + mida > 0 + mida ESTABLE entre dues lectures
+                // (`IO.fileInfo`; el chunk IEND només s'usa al mètode antic amb cep.fs.readFile).
                 let pngRes = await waitPng(destNoExt, 30);
                 let pngOk = pngRes.ok;   // (BUG #172) `waitPng` ja n'ha verificat la integritat
                 let via = 'QE';
                 if (!pngOk) {
-                    log("[Portada] QE (Render.snapshot) no ha escrit el PNG · es prova l'API estàndard (Render.frame)...", "WARN");
-                    snapRes = await callJSX(`Render.frame('${utils.escape(destExt)}', ${tcCap})`, { rawError: true });
+                    // (2026-10-21) El fallback anterior era `Render.frame` →
+                    // `seq.exportFrame`, que ja NO existeix a Premiere
+                    // («seq.exportFrame is not a function») i convertia un PNG escrit
+                    // en un error. Ara: reintent del MATEIX mecanisme que funciona (QE).
+                    log("[Portada] QE (Render.snapshot) no ha escrit el PNG dins del temps esperat · es reintenta el QE una vegada (l'API seq.exportFrame ja no existeix)", "WARN");
+                    snapRes = await callJSX(`Render.snapshot('${utils.escape(destNoExt)}', ${tcCap})`, { rawError: true });
                     pngRes = await waitPng(destNoExt, 20);
                     pngOk = pngRes.ok;
-                    via = 'API';
+                    via = 'QE-retry';
                 }
                 log(`📸 [Portada] ${via} → ${snapRes}`);
 

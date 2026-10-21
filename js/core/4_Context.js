@@ -26,10 +26,13 @@
     // Durada llegible: 812 → "812 ms"; 108568 → "108,6 s".
     const _bsec = (ms) => (ms >= 10000 ? (Math.round(ms / 100) / 10) + ' s' : ms + ' ms');
 
-    // ─── MECÀNICA D'INICI (2026-09-04) ────────────────────────────────────────
+    // ─── MECÀNICA D'INICI (2026-09-04 · revisada 2026-10-21 #177) ─────────────
     // La data de treball NO es dedueix de l'hora del programa ni dels repositoris.
-    //   - Defecte: HOY (data del sistema) en seleccionar Programa+Bloque.
-    //   - Mode correcció: AYER (Ctrl+clic a MAIN) → dia natural anterior.
+    //   - Defecte: HOY (data del sistema) SEMPRE. Un projecte d'un altre dia obert
+    //     NO arrossega la sessió: si el panell queda obert de la nit abans amb el
+    //     projecte d'AHIR, un clic sense Ctrl treballa amb el dia d'AVUI.
+    //   - Mode correcció: AHIR (Ctrl+clic a MAIN) → dia natural anterior (o la data
+    //     del projecte obert, si és d'un altre dia).
     // S'ha eliminat el TimeGuard (PROGRAM_START_HOURS / PRE_EMISSION_GUARD_HOURS).
 
     FASTPASS_UI.Core.Context = {
@@ -46,23 +49,36 @@
 
         /**
          * _targetDateDir: Retorna la data de treball (YYYY_MM_DD).
-         * @returns {string} Data del sistema (HOY) o dia natural anterior (AYER)
-         *                   si State.workTarget === 'yesterday'.
+         * @returns {string} Data del sistema (HOY) — SEMPRE, si no hi ha Ctrl+clic —
+         *                   o la del dia anterior (AHIR) en mode correcció.
          */
         _targetDateDir: function () {
             const St = (window.FASTPASS_UI && window.FASTPASS_UI.State) ? window.FASTPASS_UI.State : null;
-            // 1) DATA DEL PROJECTE OBERT (font única): si treballem en un projecte
-            //    d'un altre dia (ex: correcció d'AHIR), TOTA la sessió (escaleta,
-            //    media MP4/SRT, wotts, portades) s'ha de datar amb la SEVA data.
-            //    El poll d'estat no la pot canviar mentre el projecte sigui obert.
-            if (St && St.projectDateDir) return St.projectDateDir;
-            // 2) Data de treball explícita: HOY per defecte, AHIR en mode correcció.
             const useYesterday = !!(St && St.workTarget === 'yesterday');
             const d = new Date();
-            if (useYesterday) d.setDate(d.getDate() - 1);
             const dd = ('0' + d.getDate()).slice(-2);
             const mm = ('0' + (d.getMonth() + 1)).slice(-2);
-            return '' + d.getFullYear() + '_' + mm + '_' + dd;
+            const todayYmd = '' + d.getFullYear() + '_' + mm + '_' + dd;
+
+            // ── SENSE Ctrl: LA DATA ÉS LA D'AVUI, SEMPRE (2026-10-21 · #177) ────
+            // Abans, `State.projectDateDir` (el projecte obert) manava també en un
+            // clic normal: amb el projecte d'AHIR encara obert (panell obert des de
+            // la sessió anterior), un clic sense Ctrl carregava/actualitzava el
+            // projecte d'AHIR. Ara un projecte d'un altre dia NOMÉS s'agafa amb
+            // Ctrl+clic (mode correcció explícit).
+            if (!useYesterday) return todayYmd;
+
+            // ── MODO CORRECCIÓ (Ctrl+clic) → AHIR ───────────────────────────────
+            // 1) Si el projecte obert és d'un ALTRE dia, mana la SEUA data: tota la
+            //    sessió (escaleta, MP4/SRT, wotts, portades, portada) s'ha de datar
+            //    amb la data del projecte que s'està corregint.
+            if (St && St.projectDateDir && St.projectDateDir !== todayYmd) return St.projectDateDir;
+            // 2) Si no, el dia natural anterior.
+            const dY = new Date();
+            dY.setDate(dY.getDate() - 1);
+            const ddY = ('0' + dY.getDate()).slice(-2);
+            const mmY = ('0' + (dY.getMonth() + 1)).slice(-2);
+            return '' + dY.getFullYear() + '_' + mmY + '_' + ddY;
         },
 
         /**
@@ -120,70 +136,18 @@
                 if (!useYesterday) {
                     if (!action) {
                         const st = this._lastConclusion;
-                        if (st === 'MASSA') u.status("MASSA D'HORA: avui encara no hi ha res publicat", "warn");
-                        else if (st === 'ESPERANT') {
-                            // ── FALLBACK FOTO (2026-09-22) ──────────────────────────────────────
-                            // Si el bloqueig és que no hi ha escaleta vàlida (el cas típic: el bloc
-                            // demanat no en té al NAS o el JSON és un error de digition), es fa la
-                            // FOTO automàtica — exactament el que fa el botó FOTO — i es recalcula
-                            // l'estat. Si la FOTO desbloqueja el bloc, s'executa el flux directament;
-                            // si no, es mostren els missatges informatius de sempre.
-                            try {
-                                const semF = (this._lastButtonData && this._lastButtonData.semaforo) || null;
-                                // "No hi ha escaleta valida": no s'ha trobat cap escaleta del dia/bloc
-                                // (found !== true) o la trobada NO és una escaleta completa/valida
-                                // (complete.ok === false) → és exactament quan la FOTO ajuda.
-                                const escFalta = !!(semF && semF.esc && (
-                                    semF.esc.found !== true ||
-                                    (semF.esc.complete && semF.esc.complete.ok === false)
-                                ));
-                                const MB = (window.FASTPASS_UI.Workflows && window.FASTPASS_UI.Workflows.MainButton) || null;
-                                if (escFalta && MB && MB._photoEscaleta && MB._setupContext) {
-                                    const ctxF = await MB._setupContext();
-                                    // Ordre oficial: (1) el nostre bloc —ja comprovat— (2) bloc POSTERIOR
-                                    // del mateix dia (se n'extreu el nostre bloc) (3) FOTO via API.
-                                    var escOkF = false;
-                                    if (MB._escaletaFromLaterBlock) {
-                                        try {
-                                            const laterF = await MB._escaletaFromLaterBlock(ctxF, (ctxF.dateDir || '').replace(/_/g, ''));
-                                            if (laterF) {
-                                                u.log('📋 [MAIN] Escaleta del bloc ' + laterF.blockId + ' (posterior) copiada per al bloc ' + ctxF.bloque, 'INFO');
-                                                escOkF = true;
-                                            }
-                                        } catch (eLater) {
-                                            u.log('⚠️ [MAIN] Blocs posteriors: ' + eLater.message, 'WARN');
-                                        }
-                                    }
-                                    var fotoRes = escOkF ? { ok: true } : await MB._photoEscaleta(ctxF);
-                                    if (fotoRes.ok) {
-                                        await this.checkContext({ force: true });
-                                        const st2 = this._lastConclusion;
-                                        if (st2 === 'NEW' || st2 === 'UPDATE' || st2 === 'GO' || st2 === 'LOAD') {
-                                            u.log('🔄 [MAIN] FOTO automàtica OK → estat ' + st2 + '. Executant.', 'INFO');
-                                            await FASTPASS_UI.Workflows.MainButton.runMainAction((st2 === 'NEW') ? 'NEW' : st2, this._lastButtonData);
-                                            return;
-                                        }
-                                        u.status('FOTO feta, però el bloc encara no es pot muntar (' + st2 + ')', 'warn');
-                                        return;
-                                    }
-                                    u.log("⚠️ [MAIN] FOTO automàtica fallida: " + fotoRes.error, 'WARN');
-                                }
-                            } catch (eF) {
-                                u.log('⚠️ [MAIN] FOTO automàtica: ' + eF.message, 'WARN');
-                            }
-                            const mot = (this._lastButtonData && this._lastButtonData.motiu) || '';
-                            const sem = (this._lastButtonData && this._lastButtonData.semaforo) || null;
-                            const cc = (sem && sem.esc && sem.esc.complete) ? sem.esc.complete : null;
-                            // (2026-09-17) Si no hi ha escaleta per un error del motor,
-                            // digues-ho clarament en comptes del generic "ESPERANT".
-                            const escMot2 = (sem && sem.esc && sem.esc.reason) ? String(sem.esc.reason) : '';
-                            if (escMot2) {
-                                u.status("ESPERANT: no hi ha cap escaleta valida del dia. Motiu: " + escMot2, "warn");
-                            } else if (mot === 'bloc_en_emissio') {
-                                u.status("ESPERANT: el bloc encara s'està emetent" + (cc && cc.total ? (" (" + cc.emitted + "/" + cc.total + " ítems" + (cc.pending && cc.pending.num ? ", pendent " + cc.pending.num : "") + ")") : "") + ". Fes FOTO quan acabi l'emissió.", "warn");
-                            } else {
-                                u.status('ESPERANT: la ingesta encara no ha arribat al TC final. Torna-hi més tard', "warn");
-                            }
+                        if (st === 'MASSA') {
+                            // (2026-10-21 · #177) Ni MP4 origen ni wotts: el bloc encara no s'ha emés.
+                            u.status("MASSA D'HORA: no hi ha ni el MP4 origen ni els wotts del bloc (encara no s'ha emés). S'actualitza sol cada 15 s. Ctrl+clic = AHIR.", 'warn');
+                        } else if (st === 'ESPERANT') {
+                            // (2026-10-21 · #177) MP4 origen sí, wotts encara no.
+                            u.status("ESPERA: ja hi ha el MP4 origen però encara falten els wotts del bloc. Quan isquen, el botó passarà a CREA tot sol. Ctrl+clic = AHIR.", 'warn');
+                        }
+                        // (2026-10-21 · #177) "Pull": el clic força un repintat IMMEDIAT de
+                        // l'estat (el poll automàtic és de 15 s), per si el material acaba
+                        // d'arribar al NAS.
+                        if (st === 'MASSA' || st === 'ESPERANT') {
+                            try { await this.checkContext({ force: true }); } catch (ePull) { }
                         }
                         return;
                     }
@@ -208,155 +172,71 @@
                     return;
                 }
                 // ── MODO CORRECCIÓN: Ctrl+clic → AYER ──
+                // (2026-10-21) Mateix mecanisme que HOY, amb la data canviada: TOT el
+                // flux (gate de wotts, escaleta local, FOTO i `_runNew`) va amb
+                // ctx.dateDir = AHIR. Els wotts d'AHIR es daten amb el MATEIX
+                // `birthtime` (la carpeta en conserva ~7 dies) i la memòria curta de
+                // `wottsToday` té el dia a la clau → AHIR no contamina HOY ni al revés.
+                // `finally`: es torna SEMPRE a HOY, també si `runMainAction` peta;
+                // abans, en aquell cas `workTarget` quedava en 'yesterday' i el poll
+                // de 15 s repintava l'AHIR indefinidament.
                 const St = window.FASTPASS_UI.State;
                 u.log('🔄 [MAIN] Ctrl+clic → mode correcció (AHIR).', 'INFO');
                 St.workTarget = 'yesterday';
-                await this.checkContext({ force: true });
-                const stA = this._lastConclusion;
-                const dataA = this._lastButtonData;
-                if (stA === 'NEW' || stA === 'UPDATE' || stA === 'GO' || stA === 'LOAD') {
-                    const actA = (stA === 'NEW') ? 'NEW' : stA;
-                    u.log('🔄 [MAIN] Correcció AHIR → ' + stA + (dataA && dataA.name ? ' · ' + dataA.name : ''), 'INFO');
-                    await FASTPASS_UI.Workflows.MainButton.runMainAction(actA, dataA);
-                } else {
-                    u.log('⚠️ [MAIN] Mode correcció: AHIR sense material útil (estat ' + stA + ')', 'WARN');
-                    u.status('AHIR: sense material per corregir', 'warn');
+                try {
+                    await this.checkContext({ force: true });
+                    const stA = this._lastConclusion;
+                    const dataA = this._lastButtonData;
+                    if (stA === 'NEW' || stA === 'UPDATE' || stA === 'GO' || stA === 'LOAD') {
+                        const actA = (stA === 'NEW') ? 'NEW' : stA;
+                        u.log('🔄 [MAIN] Correcció AHIR → ' + stA + (dataA && dataA.name ? ' · ' + dataA.name : ''), 'INFO');
+                        await FASTPASS_UI.Workflows.MainButton.runMainAction(actA, dataA);
+                    } else {
+                        u.log('⚠️ [MAIN] Mode correcció: AHIR sense material útil (estat ' + stA + ')', 'WARN');
+                        u.status('AHIR: sense material per corregir', 'warn');
+                    }
+                } finally {
+                    St.workTarget = 'today';
+                    // Repintat de HOY (si `runMainAction` ha petat, el panell no es
+                    // queda ensenyant l'estat d'AHIR ni un botó desactivat).
+                    try { await this.checkContext({ force: true }); } catch (eRep) { }
                 }
-                St.workTarget = 'today';
-                await this.checkContext({ force: true });
             } catch (e) {
                 u.handleError(e, 'onMainClick');
             }
         },
 
-        // ── F4/D (2026-10-01) · SCAN DE MEDIA+WOTTS EN SEGON PLA ─────────────
-        // PROBLEMA (#113): al camí «encara no hi ha escaleta del dia» el
-        // checkContext feia DOS scans COMPLETS i bloquejants (mediaAssets +
-        // wotts). Tots dos passen per IO.scanDirectory, que llegeix 3 propietats
-        // per fitxer via COM/SMB (i obre els .mov amb length 0): 1.080 fitxers
-        // ≈ 70 s ⇒ el panell es quedava ~78 s sense pintar res.
-        //
-        // SOLUCIÓ (provisió ràpida + veritat en segon pla):
-        //   1) SONDA RÀPIDA (aquest mètode): enumera les dues carpetes amb
-        //      cep.fs.readdir (~0,03 s, NOMÉS noms) i mira si hi ha CANDIDATS
-        //      del programa+bloc. Serveix per pintar MASSA/ESPERANT de seguida.
-        //   2) SCAN REAL (_resolveNoEscaletaBg): s'engega SENSE bloquejar, omple
-        //      les cachés (Scanner · TTL 30 s) i, si el seu veredicte difereix
-        //      de la provisió, repinta botó i llums.
-        // Si cap de les dues carpetes es pot enumerar (readdir falla) es manté
-        // el camí antic bloquejant: mai pitjor que abans.
-        //
-        // ⚠️ La sonda NO llegeix metadades: un .mov que no porta la data al nom
-        // compta com a candidat encara que sigui d'un altre dia. Per això la
-        // provisió pot ser optimista (ESPERANT) i el scan real la corregeix.
-        //
-        // @param {Object} ctx - Context (config.rutas, progData, bloque, dateDir)
-        // @returns {{ok:boolean, ingesta:boolean, chyrons:boolean}}
-        //           `ok:false` = cap carpeta enumerable (cal el camí antic).
-        _quickProbeNoEscaleta: function (ctx) {
-            const out = { ok: false, ingesta: false, chyrons: false };
-            if (!ctx || !ctx.config || !ctx.config.rutas) return out;
-            if (!window.cep || !window.cep.fs || typeof window.cep.fs.readdir !== 'function') return out;
 
-            // Enumeració per nom (sense stats). null = no s'ha pogut llegir.
-            const listNames = function (folder) {
-                try {
-                    if (!folder) return null;
-                    const rd = window.cep.fs.readdir(folder);
-                    if (!rd || rd.err !== 0 || !rd.data) return null;
-                    return rd.data.map(function (n) { return String(n).toUpperCase(); });
-                } catch (eRd) { return null; }
-            };
-            const namesMedia = listNames(ctx.config.rutas.verticalitzacio || ctx.config.rutas.vertical);
-            const namesChyrons = listNames(ctx.config.rutas.chyrons);
-            if (!namesMedia && !namesChyrons) return out;   // sense sonda → camí antic
-
-            const dateTarget = ctx.dateDir ? String(ctx.dateDir).replace(/_/g, '') : null;
-            // MATEIX mecanisme de datació per nom que Scanner (mecanisme únic):
-            // token sencer de 8/14 dígits separat per '_'. ⚠️ NO es pot fer servir
-            // un regex sobre tot el nom: els .mov acaben amb el nº de seqüència
-            // (…Barcelona.00612292.mov) i es prendria per data.
+        /**
+         * _wottsToday (2026-10-21): sonda de wotts del BLOC d'avui, sense mai llançar.
+         * Delega a Scan.wottsToday (Node `birthtime` + caché per nom). `ok:false`
+         * vol dir que no s'ha pogut llegir → NO s'ha de canviar d'estat.
+         */
+        _wottsToday: async function (ctx) {
             const sc = (window.FASTPASS_UI && window.FASTPASS_UI.Logic) ? window.FASTPASS_UI.Logic.Scan : null;
-            const nameDate = (sc && typeof sc._extractDateFromFileName === 'function')
-                ? function (n) { return sc._extractDateFromFileName(n); }
-                : function (n) {
-                    const parts = String(n).split('_');
-                    for (let i = 0; i < parts.length; i++) {
-                        if (/^\d{8}$/.test(parts[i])) return parts[i];
-                        if (/^\d{14}$/.test(parts[i])) return parts[i].substring(0, 8);
-                    }
-                    return null;
-                };
-            // Un fitxer serveix si no porta data al nom (no es pot datar amb la
-            // sonda) o si porta la data de treball.
-            const dateOk = function (name) {
-                const d = nameDate(name);
-                if (!d || !dateTarget) return true;
-                return d === dateTarget;
-            };
-
-            if (namesMedia) {
-                const pMedia = (String((ctx.progData && ctx.progData.archivo) || '') + '_' +
-                    String(ctx.bloque || '') + '_').toUpperCase();
-                out.ingesta = namesMedia.some(function (n) {
-                    return n.indexOf(pMedia) !== -1 &&
-                           (n.endsWith('.MP4') || n.endsWith('.SRT')) && dateOk(n);
-                });
+            if (!sc || typeof sc.wottsToday !== 'function') return { ok: false, found: false, count: 0 };
+            try {
+                return await sc.wottsToday(ctx);
+            } catch (e) {
+                getUtils().log('⚠️ [checkContext] wottsToday: ' + e.message, 'WARN');
+                return { ok: false, found: false, count: 0 };
             }
-            if (namesChyrons) {
-                const pWott = ((ctx.progData && ctx.progData.wott ? String(ctx.progData.wott).toUpperCase() : 'TNV') +
-                    (ctx.bloque ? '_' + ctx.bloque + '_' : '_V1_')).toUpperCase();
-                out.chyrons = namesChyrons.some(function (n) {
-                    return n.indexOf(pWott) !== -1 && n.endsWith('.MOV') && dateOk(n);
-                });
-            }
-            out.ok = true;
-            return out;
         },
 
         /**
-         * _resolveNoEscaletaBg: veredicte REAL de l'estat (MASSA/ESPERANT) sense
-         * bloquejar el pintat. El crida checkContext quan la sonda ràpida ja ha
-         * pintat una provisió; si el resultat difereix, repinta botó i llums.
-         * @param {Object} ctx - Mateix context que checkContext
-         * @param {Object} semaforoData - Semàfor ja calculat (per repintar)
-         * @param {string} provState - Estat provisional pintat ('MASSA'|'ESPERANT')
+         * _mediaToday (2026-10-21 · #177): sonda del MP4 ORIGEN del bloc d'avui.
+         * Delega a Scan.mp4Today (noms per Node + birthtime només dels candidats),
+         * mai a `Scan.mediaAssets` (escaneig ExtendScript de tota la carpeta en UNC).
+         * `ok:false` vol dir que no s'ha pogut llegir → no es pot afirmar res.
          */
-        _resolveNoEscaletaBg: async function (ctx, semaforoData, provState) {
-            const token = ++this._bgProbeToken;
-            const _t0 = Date.now();
+        _mediaToday: async function (ctx) {
             const sc = (window.FASTPASS_UI && window.FASTPASS_UI.Logic) ? window.FASTPASS_UI.Logic.Scan : null;
-            let mediaD = null;
-            let wotsD = null;
-            try { if (sc && sc.mediaAssets) mediaD = await sc.mediaAssets(ctx); } catch (eM) { /* sense xarxa */ }
-            try { if (sc && sc.wotts) wotsD = await sc.wotts(ctx); } catch (eW) { /* sense xarxa */ }
-            if (token !== this._bgProbeToken) return;   // un checkContext més nou ha manat
-
-            const hasIngesta = !!(mediaD && (mediaD.mp4 || mediaD.srt));
-            const hasChyrons = !!(wotsD && wotsD.list && wotsD.list.length > 0);
-            const real = (hasIngesta || hasChyrons) ? 'ESPERANT' : 'MASSA';
-            _bmark('checkContext · scan media+wotts EN SEGON PLA (' + _bsec(Date.now() - _t0) + ') → ' + real);
-            log('🔎 [checkContext] Scan en segon pla (' + _bsec(Date.now() - _t0) + '): ' + real +
-                ' · provisional era ' + provState + ' · media: ' + (hasIngesta ? 'sí' : 'no') +
-                ' · rètols: ' + (hasChyrons ? 'sí' : 'no'), 'INFO');
-
-            if (real === provState) return;                  // la provisió ja era bona
-            if (this._lastConclusion !== provState) return;  // algú altre ha manat mentrestant
-
-            const data = { ...ctx, name: real };
-            data.motiu = (real === 'ESPERANT' && semaforoData.esc && semaforoData.esc.complete && !semaforoData.esc.complete.ok)
-                ? 'bloc_en_emissio'
-                : (real === 'ESPERANT' ? 'ingesta' : 'sense_dades');
-            data.semaforo = semaforoData;
-            this._lastConclusion = real;
-            this._lastButtonData = data;
-            _bmark('checkContext · repintat en segon pla → ' + real);
+            if (!sc || typeof sc.mp4Today !== 'function') return { ok: false, found: false };
             try {
-                const elProg = document.getElementById('programa');
-                this.updateLights(elProg ? elProg.value : null, ctx.bloque, null, false, semaforoData);
-                this.updateButton(real, data);
-            } catch (eRp) {
-                log("⚠️ [checkContext] No s'ha pogut repintar l'estat de segon pla: " + eRp.message, 'DEBUG');
+                return await sc.mp4Today(ctx);
+            } catch (e) {
+                getUtils().log('⚠️ [checkContext] mp4Today: ' + e.message, 'WARN');
+                return { ok: false, found: false };
             }
         },
 
@@ -453,151 +333,96 @@
                     ctx.bloque
                 );
 
-                // ── MECÀNICA D'INICI (2026-09-04) ────────────────────────────────
-                // Estats del botó: MASSA D'HORA / ESPERANT / CREAR / ACTUALITZAR.
-                // Si el projecte del dia ja existeix → ACTUALITZAR (s'obri/recarrega);
-                // només quan NO existeix projecte s'avalua si el dia té material útil.
+                // ── MECÀNICA D'INICI (2026-10-21 · 3 ESTATS, #177) ────────────────
+                // Amb el projecte del dia ja fet (o d'un altre dia obert) no canvia res:
+                // ACTUALITZAR / OBRIR. Si NO hi ha projecte del dia, el botó només pot
+                // estar en un d'estos TRES estats (per ordre de material disponible):
+                //   · CREA          → hi ha WOTTS del bloc (el bloc ja s'ha emés).
+                //   · ESPERA        → hi ha el MP4 ORIGEN però encara no els wotts.
+                //   · MASSA D'HORA  → no hi ha ni MP4 origen ni wotts (res a fer).
+                // Les dos sondes són BARATES (noms + birthtime; cap escaneig ExtendScript)
+                // i el poll de 15 s de main.js repinta el botó tot sol.
+                // (2026-10-21) Fora `getStatus` sobre …\ESCALETES: era el 96% de
+                // l'arrencada (5,2 s) i, amb el projecte ja fet (ACTUALITZAR), no servia de res.
                 let semaforoData = {
                     esc: { found: false, ready: false },
                     mp4: false, wot: false, srt: false
                 };
                 let earlyState = null;
-                // F4/D (2026-10-01): true si l'estat l'ha decidit la SONDA ràpida
-                // (llavors cal confirmar-lo amb el scan complet en segon pla).
-                let provNoEscaleta = false;
                 const readerE = window.EscaletaReader || window.FASTPASS_UI.EscaletaReader;
-                if (readerE) {
-                    const datePrefixD = ctx.dateDir ? String(ctx.dateDir).replace(/_/g, '') : null;
-                    const _tEsc = Date.now();
+
+                // ── 1. ESCALETA: NOMÉS el directori del projecte (còpia prèvia o FOTO)
+                if (readerE && typeof readerE.lookupLocalStatus === 'function') {
+                    const _tLoc = Date.now();
                     try {
-                        semaforoData.esc = await readerE.getStatus(ctx.progData.archivo, ctx.bloque, datePrefixD);
-                    } catch (eSt) {
-                        getUtils().log('⚠️ [checkContext] Error llegint estat de l\'escaleta: ' + eSt.message, 'DEBUG');
+                        const escLocal = await readerE.lookupLocalStatus(ctx);
+                        if (escLocal && escLocal.found) {
+                            semaforoData.esc = escLocal;
+                            getUtils().log('📷 [checkContext] Escaleta local (' + escLocal.filename + ')' +
+                                (escLocal.ready ? ' [bloc complet]' : ' [bloc en emissió]'), 'INFO');
+                        }
+                    } catch (eLoc) {
+                        getUtils().log('⚠️ [checkContext] Error buscant escaleta local: ' + eLoc.message, 'DEBUG');
                     }
-                    _bmark('checkContext · escaleta getStatus (' + _bsec(Date.now() - _tEsc) + ')');
+                    _bmark('checkContext · escaleta local (' + _bsec(Date.now() - _tLoc) + ')');
                 } else {
                     _bmark('checkContext · SENSE EscaletaReader');
                 }
 
                 if (!existingProjectName) {
-                    // Ingesta en curs = el cleanFeed encara no ha arribat al TC de sortida del bloc.
-                    let ingestaEnCurs = false;
-
-                    // ── ESCALETA LOCAL (FOTO on_demand) ────────────────────────────
-                    // La "foto" generada amb el botó FOTO viu al directori del dia
-                    // (escaleta_on_demand_*.json).
-                    // FIX (2026-09-16): es consulta SEMPRE, no només quan el NAS no té cap
-                    // escaleta. Abans, si el NAS ja tenia el JSON del dia però el bloc
-                    // encara s'estava emetent (found=true, ready=false), haver fet FOTO no
-                    // canviava res: l'estat quedava a ESPERANT i el semàfor mai es posava
-                    // verd. Ara la FOTO local passa a ser font vàlida i permet arrancar.
-                    let escLocal = null;
-                    if (readerE && typeof readerE.lookupLocalStatus === 'function') {
-                        const _tLoc = Date.now();
-                        try { escLocal = await readerE.lookupLocalStatus(ctx); } catch (eLoc) {
-                            getUtils().log('⚠️ [checkContext] Error buscant escaleta local: ' + eLoc.message, 'DEBUG');
-                        }
-                        _bmark('checkContext · escaleta local/FOTO (' + _bsec(Date.now() - _tLoc) + ')');
+                    // ── 2. MATERIAL DEL BLOC D'AVUI: wotts + MP4 origen ───────────
+                    // Fets FÍSICS (els wotts es generen en acabar l'emissió i el MP4
+                    // origen es publica amb el bloc), mai un horari.
+                    const wots = await this._wottsToday(ctx);
+                    if (wots.ok) {
+                        semaforoData.wot = wots.found ? 'blink' : 'pending';
+                        semaforoData.wotDetail = String(wots.count);
                     }
+                    const mp4 = await this._mediaToday(ctx);
+                    if (mp4 && mp4.ok) semaforoData.mp4 = mp4.found ? 'blink' : 'error';
 
-                    // La ingesta es mesura sobre l'escaleta més fiable disponible.
-                    const escPerIngesta = (semaforoData.esc && semaforoData.esc.found) ? semaforoData.esc : escLocal;
-                    if (escPerIngesta && escPerIngesta.mediaStop && escPerIngesta.blockOut && readerE) {
-                        try {
-                            const stopSecs = readerE.tcToSeconds(escPerIngesta.mediaStop);
-                            const outSecs = readerE.tcToSeconds(escPerIngesta.blockOut);
-                            ingestaEnCurs = (stopSecs < outSecs);
-                        } catch (eIng) { /* TC no comparable */ }
+                    const escFound = !!(semaforoData.esc && semaforoData.esc.found);
+                    if (wots.found) {
+                        // CREA: el bloc ja s'ha emés (hi ha wotts).
+                        getUtils().log('✅ [checkContext] CREA: wotts del bloc (' + wots.count + ')' +
+                            (mp4.found ? ' + MP4 origen' : '') + ' (' + (wots.via || '?') + ')', 'INFO');
+                    } else if (!wots.ok) {
+                        // El NAS no ha respost: NO es bloqueja el botó per un error
+                        // transitori (el CREAR farà la FOTO i, si tampoc no pot, avortarà).
+                        getUtils().log('⚠️ [checkContext] Sonda de wotts KO → no es bloqueja el botó', 'WARN');
+                    } else if (mp4.found) {
+                        // ESPERA: hi ha el MP4 origen però encara falten els wotts.
+                        earlyState = 'ESPERANT';
+                        _bmark('checkContext · ESPERA (MP4 origen sí, wotts encara no)');
+                    } else if (mp4.ok) {
+                        // MASSA D'HORA: ni MP4 origen ni wotts (el bloc ni s'ha emés).
+                        // (2026-10-21 · #177) Semàfors en ROIG: no hi ha res a importar.
+                        earlyState = 'MASSA';
+                        semaforoData.wot = 'error';
+                        _bmark('checkContext · MASSA D\'HORA (sense MP4 origen ni wotts)');
+                    } else {
+                        // No es pot llegir el repositori de verticalització: no se sap si
+                        // hi ha MP4 → ESPERA (no s'aventura un MASSA D'HORA fals).
+                        earlyState = 'ESPERANT';
+                        getUtils().log('⚠️ [checkContext] Sonda d\'MP4 KO → ESPERA (no es pot afirmar MASSA D\'HORA)', 'WARN');
                     }
-
-                    // ── PRIORITAT DE LA FOTO (2026-09-16) ──────────────────────────
-                    // Si l'usuari ha fet FOTO, aquesta és la font i mana SEMPRE sobre la
-                    // del sistema (encara que el NAS tingui una escaleta més nova): la FOTO
-                    // és una acció deliberada i el JSON del servidor pot estar
-                    // desactualitzat o ser un fitxer d'error del motor.
-                    if (escLocal && escLocal.found) {
-                        const nasEsc = semaforoData.esc;
-                        semaforoData.esc = escLocal;
-                        // Si el NAS ja té el bloc complet se'n conserva la informació
-                        // (la foto pot ser més antiga que el JSON del servidor).
-                        if (nasEsc && nasEsc.found && nasEsc.ready && !escLocal.ready) {
-                            semaforoData.esc.ready = true;
-                            semaforoData.esc.complete = nasEsc.complete;
-                        }
-                        getUtils().log('📷 [checkContext] FOTO local amb PREFERÈNCIA (' + escLocal.filename + ')' +
-                            (semaforoData.esc.ready ? ' [bloc complet]' : ' [bloc en emissió → es permet CREAR i fer ACTUALITZAR després]'), 'INFO');
-                    }
-
-                    if (!semaforoData.esc || !semaforoData.esc.found) {
-                        // Sense JSON del dia D (ni remot ni local): hi ha MP4/SRT o chyrons
-                        // del dia (ingesta/preparació en curs)?
-                        // ── F4/D (2026-10-01) · SENSE BLOQUEJAR ~70 s ──────────────
-                        // El scan complet de media+wotts costava ~70 s (3 lectures de
-                        // propietats per fitxer via IO.scanDirectory) i deixava el
-                        // panell sense pintar. Ara es decideix amb una SONDA de noms
-                        // (cep.fs.readdir, ~0,03 s) i el scan real s'engega en segon
-                        // pla; si el seu veredicte difereix, es repinta (més avall).
-                        const _tMw = Date.now();
-                        const prov = this._quickProbeNoEscaleta(ctx);
-                        if (prov.ok) {
-                            earlyState = (prov.ingesta || prov.chyrons) ? 'ESPERANT' : 'MASSA';
-                            provNoEscaleta = true;
-                            _bmark('checkContext · sonda ràpida media+wotts (' + _bsec(Date.now() - _tMw) +
-                                ') → ' + earlyState + ' [provisional]');
-                        } else {
-                            // Sense sonda fiable (readdir KO): camí antic, garantit.
-                            let mediaD = null;
-                            let wotsD = null;
-                            const sc = (window.FASTPASS_UI && window.FASTPASS_UI.Logic && window.FASTPASS_UI.Logic.Scan);
-                            try { if (sc && sc.mediaAssets) mediaD = await sc.mediaAssets(ctx); } catch (eM) { /* sense xarxa */ }
-                            try { if (sc && sc.wotts) wotsD = await sc.wotts(ctx); } catch (eW) { /* sense xarxa */ }
-                            _bmark('checkContext · scan media+wotts (sense projecte) (' + _bsec(Date.now() - _tMw) + ')');
-                            const hasIngesta = !!(mediaD && (mediaD.mp4 || mediaD.srt));
-                            const hasChyrons = !!(wotsD && wotsD.list && wotsD.list.length > 0);
-                            earlyState = (hasIngesta || hasChyrons) ? 'ESPERANT' : 'MASSA';
-                        }
-                    } else if (!semaforoData.esc.ready || ingestaEnCurs) {
-                        // Es permet CREAR sempre que hi hagi una ESCALETA localitzada:
-                        //   · FOTO local (on_demand) capturada per l'usuari,
-                        //   · escaleta del SISTEMA amb el bloc encara en emissió,
-                        //   · ingesta del cleanFeed en curs.
-                        // L'usuari completa la feina amb ACTUALITZAR quan acabi l'emissió.
-                        // Només s'espera (ESPERANT) si NO hi ha cap escaleta, que és quan
-                        // realment es treballaria a cegues.
-                        // FIX (2026-09-16): abans això només passava amb FOTO local; si el
-                        // motor publicava el bloc amb error o endarrerit, el botó quedava
-                        // atrapat a ESPERANT sense manera de començar.
-                        const esFotoLocal = !!(semaforoData.esc && semaforoData.esc.local);
-                        const ccEsc = semaforoData.esc ? semaforoData.esc.complete : null;
-                        getUtils().log((esFotoLocal ? '📷 [checkContext] FOTO local' : '📡 [checkContext] Escaleta del sistema') +
-                            (ingestaEnCurs ? ' amb ingesta en curs' : ' amb bloc en emissió') +
-                            (ccEsc && ccEsc.total ? ' (' + ccEsc.emitted + '/' + ccEsc.total + ' ítems emesos)' : '') +
-                            ' → es permet CREAR el projecte (després ACTUALITZAR per a la media).', 'INFO');
+                    if (earlyState) {
+                        getUtils().log('⏳ [checkContext] ' + (earlyState === 'ESPERANT' ? 'ESPERA' : "MASSA D'HORA") +
+                            ': MP4 origen=' + (mp4.ok ? (mp4.found ? 'sí' : 'no') : '?') +
+                            ' · wotts=' + (wots.ok ? wots.count : '?') +
+                            (escFound ? ' · escaleta local=' + semaforoData.esc.filename : ''), 'INFO');
                     }
                 }
 
                 if (earlyState) {
                     const data = { ...ctx, name: earlyState };
-                    // Motiu llegible per als estats d'espera (bloc en emissió vs ingesta)
-                    data.motiu = (earlyState === 'ESPERANT' && semaforoData.esc && semaforoData.esc.complete && !semaforoData.esc.complete.ok)
-                        ? 'bloc_en_emissio'
-                        : (earlyState === 'ESPERANT' ? 'ingesta' : 'sense_dades');
+                    data.motiu = (earlyState === 'MASSA') ? 'sense_mp4_ni_wotts' : 'sense_wotts';
                     data.semaforo = semaforoData;
                     this._lastConclusion = earlyState;
                     this._lastButtonData = data;
                     _bmark('checkContext · TOTAL (' + _bsec(Date.now() - _tCC0) + ') → ' + earlyState + ' [early]');
                     this.updateLights(elProg.value, ctx.bloque, null, false, semaforoData);
                     this.updateButton(earlyState, data);
-                    // ── F4/D (2026-10-01): confirmar la provisió en segon pla ────
-                    // El pintat ja s'ha fet amb la sonda (instantani). El scan
-                    // complet (metadades → dates) corre ARA sense bloquejar:
-                    // omple les cachés de Scanner (TTL 30 s) i, si el veredicte
-                    // és un altre, repinta botó i llums.
-                    if (provNoEscaleta) {
-                        this._resolveNoEscaletaBg(ctx, semaforoData, earlyState).catch(function (eBg) {
-                            log('⚠️ [checkContext] Scan de segon pla fallit: ' + eBg.message, 'DEBUG');
-                        });
-                    }
                     return;
                 }
 
@@ -772,12 +597,16 @@
                             }
                             semaforoData.srt = (mediaN && mediaN.srt) ? 'error' : 'off';
                         }
-                        if (scN && scN.wotts) {
-                            const wN = await scN.wotts(ctx);
-                            const nW = (wN && wN.list) ? wN.list.length : 0;
-                            const expN = semaforoData.esc.totalExpected || 0;
-                            semaforoData.wot = (nW === 0) ? 'pending' : ((expN > 0 && nW < expN) ? 'pending' : 'blink');
-                            semaforoData.wotDetail = nW + '/' + expN;
+                        // (2026-10-21) wottsToday (Node `birthtime` + caché) en comptes de
+                        // Scanner.wotts: este llegia 963 fitxers per JSX (~4 s) cada repintat.
+                        if (typeof this._wottsToday === 'function') {
+                            const wN = await this._wottsToday(ctx);
+                            if (wN.ok) {
+                                const nW = wN.count;
+                                const expN = semaforoData.esc.totalExpected || 0;
+                                semaforoData.wot = (nW === 0) ? 'pending' : ((expN > 0 && nW < expN) ? 'pending' : 'blink');
+                                semaforoData.wotDetail = nW + '/' + expN;
+                            }
                         }
                     } catch (eSN) {
                         getUtils().log('⚠️ [checkContext] Error calculant semàfor NEW: ' + eSN.message, 'DEBUG');
@@ -846,7 +675,9 @@
                 // escaleta_io (ER._lastReject) llegint el JSON d'error del motor.
                 const escMotiu = (semaforoData.esc && semaforoData.esc.reason) ? (' | Motiu: ' + semaforoData.esc.reason) : '';
                 // ESC: Escaleta
-                if (!semaforoData.esc.found) set('sem-esc', 'error', "No s'ha trobat cap escaleta (servidor ni FOTO local)" + escMotiu);
+                // (2026-10-21) Sense escaleta NO és un error: el directori del projecte
+                // encara no existeix i la FOTO es farà al clic de CREAR.
+                if (!semaforoData.esc.found) set('sem-esc', 'pending', "Encara no hi ha escaleta al directori del projecte (es baixarà amb la FOTO de CREAR)" + escMotiu);
                 else if (semaforoData.esc.local) {
                     // FIX (2026-09-16): amb FOTO local es pot COMENÇAR a treballar encara
                     // que el bloc segueixi en emissió → semàfor en VERD. Si la foto és
@@ -974,7 +805,10 @@
 
             switch (state) {
                 case 'NEW':
-                    btn.innerText = "CREAR";
+                    // (2026-10-21 · #177) Els tres estats d'inici es diuen com les
+                    // opcions: CREA · ESPERA · MASSA D'HORA.
+                    btn.innerText = "CREA";
+                    btn.title = "Ja hi ha wotts del bloc (s'ha emés): crea el projecte del dia. Ctrl+clic = AHIR.";
                     btn.onclick = function (ev) {
                         FASTPASS_UI.Core.Context._onMainClick(ev, 'NEW', data);
                     };
@@ -989,14 +823,17 @@
                     break;
                 case 'MASSA':
                     btn.innerText = "MASSA D'HORA";
-                    btn.title = "Avui encara no hi ha res publicat. Ctrl+clic = treballar amb AHIR.";
+                    // (2026-10-21 · #177) Ni MP4 origen ni wotts del bloc.
+                    // El poll de 15 s (main.js) repinta el botó sol quan arriba material.
+                    btn.title = "No hi ha ni el MP4 origen ni els wotts del bloc (encara no s'ha emés). S'actualitza sol cada 15 s. Ctrl+clic = treballar amb AHIR.";
                     btn.onclick = function (ev) {
                         FASTPASS_UI.Core.Context._onMainClick(ev, null, data);
                     };
                     break;
                 case 'ESPERANT':
-                    btn.innerText = "ESPERANT...";
-                    btn.title = "La ingesta encara no ha arribat al TC final. Ctrl+clic = treballar amb AHIR.";
+                    // (2026-10-21 · #177) Hi ha el MP4 origen però encara no els wotts.
+                    btn.innerText = "ESPERA";
+                    btn.title = "Ja hi ha el MP4 origen però encara falten els wotts del bloc. Passarà a CREA tot sol. Ctrl+clic = treballar amb AHIR.";
                     btn.onclick = function (ev) {
                         FASTPASS_UI.Core.Context._onMainClick(ev, null, data);
                     };

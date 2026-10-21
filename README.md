@@ -17,7 +17,21 @@ dels informatius (TN COMARQUES · TN MIGDIA · TN VESPRE) i la **verticalitzaci�
   traducció i editor SRT amb waveform.
 - **MAPA / MARCADORS** — marcadors d'ítem de l'escaleta sobre la timeline.
 - **EXPORTAR** — MP4 a la carpeta de publicació (preset `presets/*.epr`) i **portada PNG** a la
-  carpeta de portades publicades.
+  carpeta de portades publicades. La portada és el PNG amb el literal **`PORTADA`** al nom i es treu
+  de l'**ítem ja importat** (bin `PORTADES`); només s'escaneja el NAS si el projecte encara no en té
+  cap (abans: 1.028 fitxers → 93 s per clic).
+
+El botó principal, quan encara no hi ha projecte del dia, només pot estar en un d'aquests tres estats
+(es repinta sol cada 15 s):
+
+| Estat | Quan | Què fa |
+| --- | --- | --- |
+| **MASSA D'HORA** | ni MP4 origen ni wotts del bloc | semàfors en roig; espera |
+| **ESPERA** | MP4 origen sí, wotts encara no | espera (el bloc s'està emetent/ingestant) |
+| **CREA** | wotts del bloc (ja s'ha emés) | crea el projecte del dia |
+
+Un clic **sense Ctrl treballa SEMPRE amb la data d'avui** (encara que el panell vinga d'una sessió amb
+el projecte d'ahir obert). Per a un projecte d'ahir cal **Ctrl+clic** (mode correcció) — obligatori.
 
 Els fluxos els dirigeix el **botó principal**, que canvia d'estat segons el context
 (`NOU` → `OBRIR` → `ANAR-HI` → `ACTUALITZAR`). Detall a [`docs/guides/USER_GUIDE.md`](docs/guides/USER_GUIDE.md)

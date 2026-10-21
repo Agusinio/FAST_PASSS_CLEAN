@@ -548,7 +548,10 @@
                         if (portadas && portadas.length > 0) {
                             const withStatsP = portadas.map(function (p) {
                                 const st = statsByName[p.name] || {};
-                                return { name: p.name, path: p.path, created: st.created, mtime: st.mtime };
+                                // (2026-10-21) Si la portada ve del BIN PORTADES (no del llistat
+                                // del NAS) porta la seua pròpia data: sense això es descartava
+                                // com a «no datable» i no s'importava.
+                                return { name: p.name, path: p.path, created: st.created || p.created, mtime: st.mtime || p.mtime };
                             });
                             const resP = ScanAPI.filterByWorkDate(withStatsP, ctx.dateDir);
                             utils.log('[INGEST] Filtre final portades per data ' + ctx.dateDir + ': ' + withStatsP.length + ' -> ' + resP.keep.length +
@@ -964,6 +967,46 @@
         },
 
         /**
+         * _fpsSeq: FPS amb què s'alineen les durades de wott (defecte 25).
+         * Es llig de `config.titolet.fps` perquè és l'única clau de fps del perfil.
+         * @returns {number}
+         */
+        _fpsSeq: function () {
+            try {
+                const cfg = (window.FASTPASS_UI && window.FASTPASS_UI.Config && window.FASTPASS_UI.Config.get)
+                    ? window.FASTPASS_UI.Config.get() : null;
+                const f = (cfg && cfg.titolet && Number(cfg.titolet.fps)) || 25;
+                return (f > 0 && f <= 120) ? f : 25;
+            } catch (eFps) { return 25; }
+        },
+
+        /**
+         * _frameSnapDur: Alinea una durada a la GRAELLA DE FRAMES (al més prop).
+         *
+         * ── PER QUÈ (2026-10-21) ────────────────────────────────────────────────
+         * Quan el DOM no dóna `projectItem.duration` (mesurat: «Bin CHY: 19
+         * fitxers, 0 amb durada del DOM») la durada del wott s'ESTIMA per la mida
+         * del fitxer → valors com 6,1873 s, que NO cauen a la graella. En fixar el
+         * final (`Clips.retrim`/`endAt`) Premiere arrodoneix cap AMUNT al frame
+         * següent i el clip quedava **1 FRAME més llarg que el mèdia**. Alineant la
+         * durada ABANS de planificar, el final demanat ja és a la graella i
+         * Premiere no hi afig res. L'arrodoniment és AL MÉS PROP (no `ceil`): mai
+         * no s'allarga el clip, que és el defecte que es vol llevar.
+         * @param {number} sec - durada en segons (crua, estimada o del DOM)
+         * @returns {number} durada alineada a frames (0 si no és vàlida)
+         */
+        _frameSnapDur: function (sec) {
+            const d = Number(sec);
+            if (!isFinite(d) || d <= 0) return 0;
+            const fps = this._fpsSeq();
+            // Al més prop, amb un biaix de 1 ms CAP AVALL: una durada que cau just al
+            // mig frame (p. ex. 1,02 s = 25,5 frames) es queda en 25 frames, no en 26
+            // — la regla és «mai 1 frame de més», i el mèdia sempre té frames sencers.
+            return Math.max(1, Math.round(d * fps - 0.001)) / fps;
+        },
+
+
+        /**
          * _resolveWottDur: Durada fiable (segons) d'un chyron.
          * Ordre: durada del DOM (nom → norm → ID) → estimació per mida amb el
          * bitrate calibrat del propi bin → default ProRes (~43,5 MB/s) marcat
@@ -974,30 +1017,34 @@
          */
         _resolveWottDur: function (index, chyron) {
             const name = String((chyron && chyron.name) || '');
+            // (2026-10-21) TOTA durada que ix d'ací va alineada a la graella de
+            // frames: les estimades per mida no hi cauen i Premiere les arrodonia
+            // cap amunt → el wott quedava 1 frame més llarg que el mèdia.
+            const snap = (v) => this._frameSnapDur(v);
             if (index) {
                 // 1) Mapes directes (inclou la compatibilitat amb el mapa pla nom → segons)
                 if (index.byName && typeof index.byName[name] === 'number' && index.byName[name] > 0) {
-                    return { dur: index.byName[name], src: 'bin', size: 0 };
+                    return { dur: snap(index.byName[name]), src: 'bin', size: 0 };
                 }
                 const norm = this._normWottName(name);
                 if (index.byNorm && norm && typeof index.byNorm[norm] === 'number' && index.byNorm[norm] > 0) {
-                    return { dur: index.byNorm[norm], src: 'bin~norm', size: 0 };
+                    return { dur: snap(index.byNorm[norm]), src: 'bin~norm', size: 0 };
                 }
                 for (const id of this._idsDeWott(name)) {
                     if (index.byId && typeof index.byId[id] === 'number' && index.byId[id] > 0) {
-                        return { dur: index.byId[id], src: 'bin~id', size: 0 };
+                        return { dur: snap(index.byId[id]), src: 'bin~id', size: 0 };
                     }
                 }
             }
             // 2) Entrada del bin (per estimar la durada amb la mida del fitxer)
             const entry = this._wottEntryFor(index, name);
-            if (entry && entry.dur > 0) return { dur: entry.dur, src: 'bin', size: entry.size };
+            if (entry && entry.dur > 0) return { dur: snap(entry.dur), src: 'bin', size: entry.size };
             const size = entry ? (entry.size || 0) : 0;
             if (size > 0) {
                 let bps = (index && index.bytesPerSec) ? index.bytesPerSec : 0;
                 let src = 'mida';
                 if (!(bps > 0)) { bps = 43500000; src = 'mida~est'; }   // ~43,5 MB/s (ProRes 422 HQ 1080x1920)
-                return { dur: size / bps, src: src, size: size };
+                return { dur: snap(size / bps), src: src, size: size };
             }
             return { dur: 0, src: 'cap', size: 0 };
         },

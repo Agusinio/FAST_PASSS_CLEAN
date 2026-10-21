@@ -322,7 +322,7 @@ function applySliderLimits() {
     // ── ESTAT D'ESPERA DEL BOTÓ MAIN ─────────────────────────────────────────
     // Mentre el motor JSX i el primer checkContext no acabin, el botó MAIN no ha de
     // mostrar "NOU" ni acceptar clics: es posa en estat BUSY. Es desactiva sol quan
-    // updateButton() pinta el primer estat real (NEW/UPDATE/ESPERANT/…).
+    // updateButton() pinta el primer estat real (NEW/UPDATE/MASSA/…).
     try {
         if (window.FASTPASS_UI && FASTPASS_UI.Core && FASTPASS_UI.Core.Context
             && typeof FASTPASS_UI.Core.Context.setMainBusy === 'function') {
@@ -342,6 +342,22 @@ function applySliderLimits() {
 
         utils.log("📂 Ruta detectada: " + safeRoot, "DEBUG");
         _bootMarkSafe('ruta de l\'extensió resolta');
+
+        // ── ESCALETES: LLISTAT NATIU EN PARAL·LEL (2026-10-21) ────────────────
+        // A l'arrencada en fred del 21/10 (TNC V1) el 96% del temps (5,2 s de
+        // 5,4 s) era el llistat de la carpeta d'escaletes fet amb `IO.listFolder`
+        // del motor ExtendScript (~127 fitxers × stats + obertura per `eof`).
+        // Ara el llistat és NATIU (Node asíncron → no bloqueja ni el motor ni el
+        // fil de la UI) i s'engega AQUÍ, en paral·lel al bootstrap del motor:
+        // checkContext el reaprofitarà gràcies a la memòria curta + deduplicació
+        // d'`EscaletaReader._listEscaletas`.
+        try {
+            var _ER0 = window.FASTPASS_UI && window.FASTPASS_UI.EscaletaReader;
+            if (_ER0 && typeof _ER0.warmList === 'function') {
+                _ER0.warmList();
+                _bootMarkSafe('escaletes: llistat engegat en paral·lel');
+            }
+        } catch (eWarm) { }
 
         // 3. LLAMADA QUIRÚRGICA:
         // Usamos comillas simples para el envoltorio y dobles para el contenido
@@ -807,19 +823,26 @@ if (btnMarksC1) btnMarksC1.addEventListener('click', () => callWorkflow('Markers
         const btnSrtAdjust = document.getElementById('btnSrtAdjust');
         const btnSrtExport = document.getElementById('btnSrtExport');
         const btnSrtReset = document.getElementById('btnSrtReset');
+        const btnSrtFill = document.getElementById('btnSrtFill');
+        const btnSrtDel = document.getElementById('btnSrtDel');
 
         if (btnSrtLoad) {
             btnSrtLoad.addEventListener('click', async function (e) {
                 const u = FASTPASS_UI.Utils;
                 // [SRT 2026-09-04] El mecanisme d'emergencia (SRTs per blocs de 15 min)
-                // passa a ser el mecanisme PRINCIPAL de CARREGAR (abans nomes amb Ctrl+clic).
-                if (e && (e.ctrlKey || e.metaKey)) e.preventDefault();
-                u.log("[SRT_CARREGAR] Carregant SRT (mecanisme principal: blocs de 15 min)...");
+                // passa a ser el mecanisme PRINCIPAL de CARREGAR.
+                // (F3.2, 2026-10-21) Ctrl+clic = carrega els SUBTITOLS SINTETICS del dia
+                // (i el segon Ctrl+clic torna al SRT normal). Alt+clic = forca el fallback
+                // directe (l'antic Ctrl+clic).
+                if (e && (e.ctrlKey || e.metaKey || e.altKey)) e.preventDefault();
                 if (window.SrtEditor && window.SrtEditor.loadEmergencySrt) {
-                    // Fallback automàtic: si els blocs de 15 min no han carregat res,
-                    // s'intenta el .SRT de la carpeta de verticalització (workflow Srt).
-                    // Ctrl+clic → força directament el fallback.
-                    const forceFb = !!(e && (e.ctrlKey || e.metaKey));
+                    if (e && (e.ctrlKey || e.metaKey)) {
+                        u.log("[SRT_CARREGAR] Ctrl+clic → SUBTITOLS SINTETICS del dia...");
+                        await callWorkflow('Srt', 'runSrtLoadSynthetic');
+                        return;
+                    }
+                    const forceFb = !!(e && e.altKey);
+                    u.log("[SRT_CARREGAR] Carregant SRT (mecanisme principal: blocs de 15 min)" + (forceFb ? " · Alt+clic = FALLBACK directe" : "") + "...");
                     await callWorkflow('Srt', 'runSrtLoad', forceFb);
                 } else {
                     u.status("Error: SrtEditor no disponible", "error");
@@ -838,8 +861,17 @@ if (btnMarksC1) btnMarksC1.addEventListener('click', () => callWorkflow('Markers
         if (btnSrtAdjust) btnSrtAdjust.addEventListener('click', function () {
             if (window.SrtEditor) window.SrtEditor.applyAdjust();
         });
-        if (btnSrtExport) btnSrtExport.addEventListener('click', function () {
-            if (window.SrtEditor) window.SrtEditor.exportToPremiere();
+        // (F3.3) 🧩 REOMLIR: buits del SRT normal amb les entrades SINT (vista MOD)
+        if (btnSrtFill) btnSrtFill.addEventListener('click', () => callWorkflow('Srt', 'runSrtFillGaps'));
+        // (F3.1) 🗑 ESBORRAR: entrada seleccionada de la taula (i del timeline si hi es)
+        if (btnSrtDel) btnSrtDel.addEventListener('click', function () {
+            if (window.SrtEditor) window.SrtEditor.deleteSelected();
+        });
+        if (btnSrtExport) btnSrtExport.addEventListener('click', function (e) {
+            if (!window.SrtEditor) return;
+            // (F3.2) Ctrl+clic = forca l'exportacio a S2 (els SINT ja hi van sols)
+            const toS2 = !!(e && (e.ctrlKey || e.metaKey));
+            window.SrtEditor.exportToPremiere(toS2 ? { track: 1 } : undefined);
         });
         // (2026-09-22) RESET ♻️ → reinicia la taula I **torna a buscar els .SRT del tema**
         // del bloc (abans només restaurava el SRT que ja hi havia carregat, així que si
@@ -922,15 +954,14 @@ if (btnMarksC1) btnMarksC1.addEventListener('click', () => callWorkflow('Markers
                         utils.log('[Fetch] No s\'ha pogut resoldre la data de treball: ' + eDate.message, 'WARN');
                     }
                     // ── PRIORITAT 0 · DATA DEL PROJECTE OBERT (2026-10-14 · BUG #156) ──────
-                    // `State.projectDateDir` es pot perdre a mig sessió (el poll d'estat el
-                    // desancorava amb una sola lectura buida de Registry.activeProjectName) i
-                    // aleshores `_targetDateDir()` cau a la data del SISTEMA → la FOTO demanava
-                    // l'escaleta de HOY amb un projecte d'AHIR obert (cas real 2026-10-14 09:22:
-                    // "No s'ha localitzat cap clean feed amb títol [TN VESPRE [senyal net]] per
-                    // la data/hora [2026-10-14 21:00:00]") → cap snapshot nou al projecte.
-                    // Es re-deriva de la ruta del .prproj (`FASTPASS.Project.path()`, àtom JSX
-                    // existent) i es re-ancora `projectDateDir` per a tota la resta del flux.
-                    if (!useYesterdayFoto) {
+                    // (2026-10-21 · #177) NOMÉS en mode correcció (`workTarget` = 'yesterday').
+                    // SENSE Ctrl la data de treball és la D'AVUI, SEMPRE: si el panell ve
+                    // d'una sessió amb el projecte d'AHIR obert, la FOTO no pot baixar
+                    // l'escaleta d'AHIR i guardar-la al directori d'AHIR mentre el botó
+                    // principal treballa amb el dia d'AVUI. Per a un projecte d'AHIR cal
+                    // Ctrl (Ctrl+clic a MAIN o Ctrl+FOTO).
+                    const _wtFoto = (window.FASTPASS_UI.State && window.FASTPASS_UI.State.workTarget) || 'today';
+                    if (!useYesterdayFoto && _wtFoto === 'yesterday') {
                         let projDateDir = null;
                         try {
                             const ctxDate = window.FASTPASS_UI.Core && window.FASTPASS_UI.Core.Context;
@@ -1616,19 +1647,23 @@ function sizeVideoToFit(force) {
 }
 window.addEventListener('resize', function () { sizeVideoToFit(true); });
 
-// AUTO-REFRESC DE L'ESTAT D'ARRENCADA (cada 60 s)
-// Mentre no tenim tot el necessari (escaleta llista, MP4/rètols pendents) el
-// semàfor es recalcula sol: així l'usuari veu quan pot CREAR o ACTUALITZAR
-// sense haver de tocar res. S'atura mentre el visor SRT reprodueix.
-// NOTA: cada checkContext fa un escaneig COMPLET del NAS (escaleta + media +
-// wotts + chyrons) amb crides JSX síncirones que BLOQUEGEN la UI del panell.
-// Per això: (a) no se solapen (guard _ctxRefreshBusy) i (b) s'espacien a 60 s.
+// AUTO-REFRESC DE L'ESTAT D'ARRENCADA (cada 15 s)
+// Mentre no tenim el senyal que desbloqueja el CREAR (wotts del bloc d'avui) el
+// semàfor es recalcula sol: el botó passa de MASSA D'HORA a CREAR tot sol en
+// quant l'emissió acaba i el generador deixa els wotts al NAS. S'atura mentre el
+// visor SRT reprodueix i quan l'estat ja no és MASSA (o hi ha un projecte obert).
+//
+// (2026-10-21) Aquest poll pot anar a 15 s perquè checkContext ja NO escaneja el
+// NAS: mira el directori del projecte (Node, ~20 ms) i data els wotts amb
+// `birthtime` + caché per nom (~35 ms en règim estable). Abans costava 5,4 s i
+// per això s'espaciava a 60 s.
 var _ctxRefreshBusy = false;
 // (2026-10-14 · BUG #156) Comptador de cicles seguits sense projecte actiu llegit pel
 // Registry. Calen 2 (~2 min) per desancorar `State.projectDateDir`: una sola lectura buida
 // (poll de Registry limitat a 1 cicle/2 s, System.clear() del mouseenter, etc.) no pot
 // deixar la sessió sense data de treball.
 var _projDateMissTicks = 0;
+var _ctxRefreshPollMs = 15000;
 setInterval(async function () {
     var srA = window.FASTPASS_UI && FASTPASS_UI.Editor && FASTPASS_UI.Editor.SrtEditor;
     if (srA && (srA._isPlaying || srA._timelineRunning)) return;
@@ -1665,11 +1700,13 @@ setInterval(async function () {
     var stA = ctA._lastConclusion;
     var semA = (ctA._lastButtonData && ctA._lastButtonData.semaforo) || null;
     var pendA = !!(semA && (semA.mp4 === "pending" || semA.wot === "pending"));
-    if (stA === "MASSA" || stA === "ESPERANT" || stA === null || pendA) {
+    // (2026-10-21) Només mentre s'espera el senyal d'arrencada: MASSA D'HORA
+    // (sense wotts ni escaleta), estat encara desconegut, o material pendent.
+    if (stA === "MASSA" || stA === null || pendA) {
         _ctxRefreshBusy = true;
         try { await ctA.checkContext(); } catch (eA) { } finally { _ctxRefreshBusy = false; }
     }
-}, 60000);
+}, _ctxRefreshPollMs);
 
 setInterval(function () {
     if (isUserDraggingSlider) _perf.ticks++;   // 📊 FASE 0: ticks de 500 ms amb el slider arrossegant

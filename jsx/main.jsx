@@ -167,6 +167,10 @@ $.global.IO = {
         if (!$.global.FASTPASS.IO) return "false";
         return FASTPASS.IO.exists(p) ? "true" : "false";
     },
+    fileInfo: function(p) {
+        // (2026-10-21) exists/size/modified d'UN fitxer sense llegir-lo (waitPng de la portada).
+        return ($.global.FASTPASS.IO) ? FASTPASS.IO.fileInfo(p) : "{\"exists\":false,\"size\":0,\"modified\":0,\"created\":0}";
+    },
     getUser: function() { 
         return ($.global.FASTPASS.IO) ? FASTPASS.IO.getUser() : "UnknownUser"; 
     },

@@ -190,6 +190,143 @@
             return result;
         },
 
+        // ════════════════════════════════════════════════════════════════════
+        // F3 (2026-10-21) · SUBTITOLS SINTETICS I REOMLIMENT DE BUITS
+        // --------------------------------------------------------------------
+        // Tota la decisio viu aci (PUR: sense DOM, sense CEP, sense IO) perque
+        // es puga provar a bin/smoke/fp_probe_srt.js. L'editor nomes pinta i
+        // crida aquestes funcions.
+        // CRITERI DUR: les entrades EXISTENTS del SRT normal no es toquen MAI
+        // (ni start, ni end, ni text): la fusio nomes AFEGEIX les entrades
+        // sintetiques que cauen dins d'un buit.
+        // ════════════════════════════════════════════════════════════════════
+
+        /** cloneEntries: copia PROFUNDA d'una taula (texts inclosos). */
+        cloneEntries: function (entries) {
+            if (!entries || entries.length === 0) return [];
+            var out = [];
+            for (var i = 0; i < entries.length; i++) {
+                var e = entries[i];
+                out.push({
+                    index: (e.index != null) ? e.index : (i + 1),
+                    timeStr: e.timeStr || '',
+                    texts: (e.texts || []).slice(),
+                    startSec: Number(e.startSec) || 0,
+                    endSec: Number(e.endSec) || 0
+                });
+            }
+            return out;
+        },
+
+        /**
+         * _overlaps: dos intervals [aS,aE] i [bS,bE] es toquen o se solapen,
+         * amb tolerancia en SEGONS per cada costat.
+         */
+        _overlaps: function (aS, aE, bS, bE, tolSec) {
+            var tol = Number(tolSec) || 0;
+            return (aS < bE + tol) && (bS < aE + tol);
+        },
+
+        /**
+         * findGaps: buits ENTRE entrades (no el cap ni la cua).
+         * @param {Array} entries
+         * @returns {{gaps:Array<{startSec:number,endSec:number,durSec:number}>, firstSec:number, lastSec:number}}
+         */
+        findGaps: function (entries) {
+            var list = this.cloneEntries(entries).sort(function (a, b) { return a.startSec - b.startSec; });
+            var gaps = [];
+            if (list.length === 0) return { gaps: gaps, firstSec: null, lastSec: null };
+            var lastEnd = list[0].endSec;
+            for (var i = 1; i < list.length; i++) {
+                var e = list[i];
+                if (e.startSec > lastEnd) {
+                    gaps.push({ startSec: lastEnd, endSec: e.startSec, durSec: e.startSec - lastEnd });
+                }
+                if (e.endSec > lastEnd) lastEnd = e.endSec;
+            }
+            return { gaps: gaps, firstSec: list[0].startSec, lastSec: lastEnd };
+        },
+
+        /**
+         * mergeSyntheticGaps: fusiona el SRT normal amb els SINTETICS.
+         * Nomes AFEGEIX; mai modifica ni lleva les entrades existents.
+         *
+         * @param {Array} baseEntries - SRT normal
+         * @param {Array} sintEntries - SRT sintetic (font de les entrades noves)
+         * @param {Object} [opts] { tolSec=0.2, includeEdges=false }
+         * @returns {{entries:Array, added:Array, rejected:Array, gaps:Array, tolSec:number}}
+         *   added:    {startSec,endSec,texts,reason:'buit'}
+         *   rejected: {startSec,endSec,texts,reason:'solapa'|'duplicat'|'fora-del-tram'}
+         */
+        mergeSyntheticGaps: function (baseEntries, sintEntries, opts) {
+            var o = opts || {};
+            var tol = (o.tolSec != null && isFinite(Number(o.tolSec))) ? Number(o.tolSec) : 0.2;
+            if (tol < 0) tol = 0;
+            var base = this.cloneEntries(baseEntries).sort(function (a, b) { return a.startSec - b.startSec; });
+            var sint = this.cloneEntries(sintEntries).sort(function (a, b) { return a.startSec - b.startSec; });
+            var info = this.findGaps(base);
+            var out = { entries: base, added: [], rejected: [], gaps: info.gaps, tolSec: tol };
+            if (sint.length === 0) return out;
+            if (base.length === 0) return out;   // sense SRT normal no hi ha res a reomplir
+
+            var fromSec = (o.includeEdges) ? -Infinity : info.firstSec;
+            var toSec = (o.includeEdges) ? Infinity : info.lastSec;
+
+            var accepted = [];   // intervals ja afegits (anti-duplicat)
+            for (var i = 0; i < sint.length; i++) {
+                var s = sint[i];
+                var rec = { startSec: s.startSec, endSec: s.endSec, texts: s.texts.slice(), reason: '' };
+                // 1) Fora del tram amb contingut real
+                if (s.startSec < fromSec - tol || s.endSec > toSec + tol) {
+                    rec.reason = 'fora-del-tram';
+                    out.rejected.push(rec);
+                    continue;
+                }
+                // 2) Solapa una entrada EXISTENT (amb tolerancia) → no es toca res
+                var clash = false;
+                for (var b = 0; b < base.length; b++) {
+                    if (this._overlaps(s.startSec, s.endSec, base[b].startSec, base[b].endSec, tol)) { clash = true; break; }
+                }
+                if (clash) {
+                    rec.reason = 'solapa';
+                    out.rejected.push(rec);
+                    continue;
+                }
+                // 3) Duplicat respecte d'una altra sintetica ja acceptada
+                for (var a = 0; a < accepted.length; a++) {
+                    if (this._overlaps(s.startSec, s.endSec, accepted[a].startSec, accepted[a].endSec, tol)) { clash = true; break; }
+                }
+                if (clash) {
+                    rec.reason = 'duplicat';
+                    out.rejected.push(rec);
+                    continue;
+                }
+                accepted.push({ startSec: s.startSec, endSec: s.endSec });
+                rec.reason = 'buit';
+                out.added.push(rec);
+            }
+
+            if (out.added.length === 0) return out;
+
+            // 4) Fusionar i reindexar (les existents conserven start/end/texts)
+            var merged = base.concat(out.added.map(function (r) {
+                return { index: 0, timeStr: '', texts: r.texts.slice(), startSec: r.startSec, endSec: r.endSec };
+            }));
+            merged.sort(function (a, b) { return a.startSec - b.startSec; });
+            for (var m = 0; m < merged.length; m++) merged[m].index = m + 1;
+            out.entries = merged;
+            return out;
+        },
+
+        /** removeEntryAt: taula sense l'entrada `idx`, reindexada. Mai muta l'original. */
+        removeEntryAt: function (entries, idx) {
+            var list = this.cloneEntries(entries);
+            if (!isFinite(idx) || idx < 0 || idx >= list.length) return list;
+            list.splice(idx, 1);
+            for (var i = 0; i < list.length; i++) list[i].index = i + 1;
+            return list;
+        },
+
         extractEntriesFromSrtFile: async function (srtPath) {
             var escapedPath = srtPath.replace(/\\/g, '\\\\');
             // (2026-10-02) IO.readTxt llegeix amb ANSI i els .srt del projecte són UTF-8

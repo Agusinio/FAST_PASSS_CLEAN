@@ -447,6 +447,81 @@
         },
 
         /**
+         * runSrtLoadSynthetic (F3.2): Ctrl+clic al botó ⬇️ CARREGAR.
+         * Carrega els SRT SINTETICS del dia (`rutas.subtitulosSinteticos`) a
+         * l'editor amb marca PROPRIA (taronja, `_kind='SINT'`) i SENSE tocar el
+         * SRT normal: la taula que es veia es guarda a l'editor (`_views.NORMAL`)
+         * i el segon Ctrl+clic hi torna.
+         * @returns {Promise<boolean>} true si s'ha carregat (o s'ha tornat al NORMAL)
+         */
+        runSrtLoadSynthetic: async function () {
+            const ed = window.SrtEditor;
+            if (!ed || !ed.loadSrt) { getUtils().status("Error: SrtEditor no disponible", "error"); return false; }
+            try {
+                // Ja s'esta veient el SINT → el Ctrl+clic alterna al SRT normal
+                if (ed._kind === 'SINT' && typeof ed.hasView === 'function' && ed.hasView('NORMAL')) {
+                    if (ed.switchView('NORMAL')) {
+                        getUtils().status("SINT ocultat · tornat al SRT normal", "exito");
+                        log("📥 SRT_SINT: tornat a la vista NORMAL");
+                        return true;
+                    }
+                }
+                // Ja hi ha una taula SINT en memoria (s'hi havia tornat al normal):
+                // es recupera TAL QUAL, sense rellegir el fitxer (conserva les edicions)
+                if (ed._kind !== 'SINT' && typeof ed.hasView === 'function' && ed.hasView('SINT')) {
+                    if (ed.switchView('SINT')) {
+                        getUtils().status("SINT recuperat (sense rellegir)", "exito");
+                        log("📥 SRT_SINT: vista SINT recuperada de memoria");
+                        return true;
+                    }
+                }
+                const ctx = this._srtCtx();
+                if (!ctx) { getUtils().status("Selecciona un programa", "warn"); return false; }
+                const cand = await getScanner().srtSynthetic(ctx);
+                if (!cand) {
+                    const fecha = String(ctx.dateDir || '').replace(/_/g, '-');
+                    getUtils().status("SINT: cap .srt sintetic de " + (ctx.programa || '?') + ' ' + (ctx.bloque || '?') +
+                        " del dia " + (fecha || '?'), "warn");
+                    log("⚠️ SRT_SINT: cap sintetic del dia " + (ctx.dateDir || '?') + " a " +
+                        (ctx.config.rutas.subtitulosSinteticos || '?'));
+                    return false;
+                }
+                log("📥 SRT_SINT: N" + cand.level + " (" + cand.reason + ", " + cand.candidates + " candidat(s)) → " + cand.path);
+                const ok = await ed.loadSrt(cand.path, { kind: 'SINT' });
+                if (ok) {
+                    getUtils().status("SINT carregat: " + cand.name, "exito");
+                    log("✅ SRT_SINT: carregat a l'editor: " + cand.name + " (s'exporta a S2 per defecte)");
+                    return true;
+                }
+                getUtils().status("SINT: no s'ha pogut carregar " + cand.name, "error");
+                return false;
+            } catch (e) {
+                log("💥 SRT_SINT: " + e.message);
+                getUtils().handleError(e, "SrtSynthetic");
+                return false;
+            }
+        },
+
+        /**
+         * runSrtFillGaps (F3.3 · opcio B): reomple els BUITS del SRT normal amb
+         * les entrades sintetiques que hi cauen (tolerancia
+         * `general.srtSyntheticGapTolSec`). El resultat es una vista MOD: el SRT
+         * normal no es modifica i el fitxer original no es toca mai.
+         */
+        runSrtFillGaps: async function () {
+            const ed = window.SrtEditor;
+            if (!ed || !ed.mergeSyntheticGaps) { getUtils().status("Error: SrtEditor no disponible", "error"); return false; }
+            try {
+                log("🧩 SRT_FILL: reomplint buits amb els SINT...");
+                return await ed.mergeSyntheticGaps();
+            } catch (e) {
+                log("💥 SRT_FILL: " + e.message);
+                getUtils().handleError(e, "SrtFillGaps");
+                return false;
+            }
+        },
+
+        /**
          * runSrtIn: Elimina entrades ANTERIORS al CTI. Mou primera al frame 10.
          */
         runSrtIn: async function () {

@@ -169,7 +169,15 @@ VERTICALITZACIO`, revisat 2026-10-21): `01_MATINS_PROJECTES`, `02_COMARQUES_PROJ
 del perfil hi coincideixen exactament (MATINS = `01_MATINS_PROJECTES`). `05_VIDEOMATON` encara no
 té cap programa associat (la pestanya «Fotomató» té `programas: []`).
 
-### F2.1 · TO DO (deute tècnic): retirar `escaletes` i `escaletes_domini`
+### F2.1 · Retirar `escaletes` i `escaletes_domini` — NUCLI FET (2026-10-21)
+
+> **ESTAT:** el CREAR ja NO consumeix les escaletes del motor. `_runNew` crida
+> `ensureLocalCopy(ctx, datePrefix, {localOnly:true})` (només el directori del projecte) i, si no
+> hi ha res, fa la FOTO (`_photoEscaleta`) i crea amb eixa escaleta; s'ha esborrat
+> `_escaletaFromLaterBlock` (el pas «bloc POSTERIOR del NAS»). **Queda** (un altre coll, no
+> bloqueja): les dues claus del perfil i `_listEscaletas`, que només s'usa dins de la FOTO
+> (`escaleta_fetch._estimateEscaletaIdFromHistory`) per deduir la sèrie d'`escaletaId`; si es
+> retira, la FOTO ha de provar config + veïns (cada intent pot costar ~30 s).
 
 **Idea (usuari, 2026-10-21):** en la mecànica final aquestes dues claus no calen. En comptes de
 llegir l'escaleta que genera el motor a la carpeta de digition, el **Crear** del botó MAIN ha de fer
@@ -206,6 +214,86 @@ d'escaletes (`main.js:972`).
 
 ---
 
+### F2.2 · Arrencada en fred: el llistat d'escaletes (FET 2026-10-21)
+
+**Mesura** (`_boot_timing.log`, TNC V1, primera arrencada del dia 11:29:32):
+`checkContext · escaleta getStatus` = **5233 ms** d'un total de **5435 ms** (96%),
+amb el fil del panell viu tot el temps (batecs `DIAG HB` a +1,5/+3/+4,5 s) → el temps
+es consumia DINS del motor ExtendScript. Detall complet a
+`docs/perf/ARRANCADA_2026-10-21_TNC_V1.md`.
+
+**Causa:** `ER._listEscaletas` llistava la carpeta de digition (127 `.json`) amb
+`IO.listFolder` → `FASTPASS.IO.scanDirectory` (`length`+`modified`+`created` per fitxer,
+i `f.open('r')`/`eof` quan `length` val 0 en UNC). El natiu de Windows fa el mateix
+llistat en ~10 ms; el motor hi esmerça segons. A més `getStatus` ho feia dos cops.
+
+**Fet:** llistat amb `fs.promises.readdir` de Node (asíncron) → `cep.fs.readdir` (natiu) →
+motor (últim respatller); memòria curta `LIST_TTL_MS` + `_invalidateEscaletas()` +
+deduplicació; `warmList()` a `main.js` (engega el llistat en paral·lel al bootstrap);
+`load()` normalitza `/`→`\` per a `cep.fs.readFile` (`err=3` → respatller ExtendScript);
+`findLatestValid` reutilitza el JSON del fallback; marques `[ER:IO]` al timing.
+Prova: `bin/smoke/fp_probe_arrancada.js` (#BOOT/1..#BOOT/15).
+
+**Pendent (següent coll, fora de l'arrencada):** `[SCAN:wotts]` 4 s, portades 5 s i
+cleanFeed 10 s al CREAR (11:31:08→11:31:28) — també passen per `IO.scanDirectory`
+perquè necessiten `created`; el pas natural és `fs.promises.stat` de Node (`birthtime`).
+
+### F2.3 · Desbloqueig del CREAR per WOTTS (FET 2026-10-21)
+
+**Idea (usuari):** «una manera de saber que ja puc editar el projecte d'avui… si no hi ha wotts del
+programa d'avui, el botó està en MASSA D'HORA; si existeixen, passa a CREAR». Els wotts es generen
+just en acabar l'emissió del bloc → és un fet físic, no un horari.
+
+| Situació | Estat del botó |
+|---|---|
+| Existeix el `.prproj` del dia | `ACTUALITZAR` (sense cap consulta al NAS) |
+| No existeix · hi ha wotts del bloc d'avui | `CREAR` |
+| No existeix · escaleta al directori del projecte (còpia o FOTO) | `CREAR` (vàlvula manual: el botó FOTO desbloqueja) |
+| No existeix · ni wotts ni escaleta | `MASSA D'HORA` + poll de 15 s (`main.js`, `_ctxRefreshPollMs`) |
+
+`ESPERANT` desapareix com a estat: el seu significat («el bloc encara s'emet») ara és exactament
+«no hi ha wotts».
+
+**Per què `birthtime` i no `mtime`:** els noms dels wotts no porten data
+(`Wott_TNV_v1_05_00.01_TEMA_…mov`) i el `mtime` està contaminat pel procés nocturn (mesurat: creat
+16/10 19:17 UTC → modificat 17/10 00:32 UTC). Mesura del 2026-10-21 sobre `…\VERTICALITZACIO`
+(963 entrades): `readdir` **32 ms**, `stat` **1,5 ms/fitxer** → primera passada ~220 ms (149 wotts
+de `_V1_` de tots els dies) i, amb caché per nom, **~35 ms per poll**.
+
+**Fet:** `Scan.wottsToday` + `_dateWotts` (Node → CEP → JSX, caché `_wottDateCache` i memòria
+curta `_wottProbeCache` de 5 s; si no es pot llistar retorna `ok:false` i el botó **no es bloqueja**),
+`Context._wottsToday`, estat nou a `checkContext`, llums (`sem-esc` en `pending` quan encara no hi ha
+escaleta local) i tooltips;
+`Scanner.js?v=12`, `4_Context.js?v=26`, `escaleta_io.js?v=19`, `flow_mainButton.js?v=35`,
+`main.js?v=84`. Prova: `bin/smoke/fp_probe_wotts.js` (#WOTT/1..#WOTT/11, `fs` simulat).
+
+**AHIR (Ctrl+clic a MAIN): mateix mecanisme, data canviada.** No hi ha cap camí especial: `_onMainClick`
+posa `State.workTarget='yesterday'`, `_targetDateDir()` retorna el dia natural anterior i TOT el flux
+va amb `ctx.dateDir` d'AHIR — gate de wotts (`wottsToday` filtra per `dateTarget`), `lookupLocalStatus`
+sobre el directori del projecte d'AHIR, `_runNew` amb `datePrefix` d'AHIR i FOTO amb la data d'AHIR.
+La carpeta de wotts en conserva ~7 dies (mesurat 2026-10-21: 785 fitxers, del 14/10 al 21/10), així
+que l'AHIR sempre és dins la finestra; la memòria curta porta el dia a la clau (`folder|prefix|dia`) i
+`_wottDateCache` (nom → dia) es reutilitza, així que el poll d'AHIR també costa ~35 ms i HOY/AHIR no es
+contaminen. Si el dia anterior no va tenir emissió (ni wotts ni escaleta al directori ni `.prproj`), el
+botó diu `AHIR: sense material per corregir`; la vàlvula és el botó FOTO (o `Ctrl+FOTO`, que força la
+data d'AHIR): deixa l'`escaleta_on_demand_*.json` al directori d'AHIR i el següent Ctrl+clic ja troba
+`CREAR`. El retorn a HOY (`workTarget='today'` + repintat) viu en un `finally`: abans, si
+`runMainAction` petava, `workTarget` quedava en `'yesterday'` i el poll de 15 s repintava l'AHIR
+indefinidament. Matís heretat (BUG #156): amb un projecte obert, `_targetDateDir()` retorna
+`projectDateDir` (la data del `.prproj` obert) i ignora `workTarget`, així que per corregir AHIR no hi
+pot haver ancorat un projecte d'un altre dia.
+
+**Pendent (manual, a Premiere):**
+1. Primera arrencada del dia, abans del bloc → `MASSA D'HORA` i al log
+   `[SCAN:wottsToday] TNV_V1 <data>: 0/N wotts del dia`.
+2. En acabar l'emissió, sense tocar res, el botó ha de passar a `CREAR` en ≤15 s.
+3. `CREAR` sense escaleta local → `📷 [NOU] Cap escaleta del bloc … → FOTO automàtica` i el projecte
+   es crea amb l'escaleta de la FOTO.
+4. `Ctrl+clic` (AHIR) amb els wotts d'ahir → `CREAR` directe (i `ACTUALITZAR` si el `.prproj` d'ahir
+   ja existeix).
+
+---
+
 **Criteri d'acceptació:** canviar qualsevol de les 8 rutes a `setup.html` → reiniciar el panell →
 el projecte, els renders, la portada, els grafismes i els subtítols es creen/lligen de la ruta
 nova, sense tocar cap fitxer `.js`.
@@ -214,14 +302,64 @@ nova, sense tocar cap fitxer `.js`.
 
 ## F3 · EDITOR DE SUBTÍTOLS: selecció/esborrat + sintètics + reomplir buits
 
-### Estat actual
-- `js/editor/srt_editor.js`: taula d'entrades, canvas amb wave/marcadors, previsualització,
-  exportació a Premiere (`exportToPremiere` → pistes `tracks.subtitle.s1/s2`).
-- Botons a `index.html` (`#secSubtitols`): `btnSrtLoad` (⬇️ CARREGAR), `btnSrtExport` (💾),
-  `btnSrtReset` (♻️), `btnSrtIn` / `btnSrtOut`.
-- **No hi ha** cap ruta ni cap codi de subtítols sintètics.
+### Estat actual (DESPRÉS de F3, 2026-10-21)
+- `js/editor/srt_editor.js`: canvas amb wave/marcadors, previsualització i exportació a
+  Premiere (`exportToPremiere({track})` → `tracks.subtitle.s1` o **`s2`**). **No hi ha cap
+  taula HTML**: la «taula d'entrades» és la fila de clips del canvas, i la selecció es fa
+  clicant el clip.
+- Botons a `index.html` (`#secSubtitols`): `btnSrtLoad` (⬇️ CARREGAR · **Ctrl = SINT** ·
+  Alt = fallback directe), `btnSrtExport` (💾 · Ctrl = força S2), `btnSrtReset` (♻️),
+  **`btnSrtFill` (🧩 REOMLIR)** i **`btnSrtDel` (🗑 ESBORRAR)**, `btnSrtIn` / `btnSrtOut`.
+- Ruta de sintètics: `rutas.subtitulosSinteticos` (F2) + `Scanner.srtSynthetic` (F3.2).
 
-### F3.1 · Seleccionar i esborrar un clip de subtítol
+### Fet (2026-10-21)
+El pla s'ha implementat sencer, amb tres desviacions que cal tindre presents:
+
+1. **No existix la «taula d'entrades»** que el pla pressuposava: l'editor només té el
+   canvas. La selecció de F3.1 s'ha fet sobre el **clip del canvas**
+   (`_clipAtSec`/`_selectAtSec`, ressaltat blanc + número i començament del text) i les
+   tecles Supr/Backspace més el botó 🗑. Els dos abasts es mantenen: **taula**
+   (`_entries` i `_originalEntries`) i **timeline** (només el clip de subtítol de la pista
+   on cau el TC, sense ripple).
+2. **No s'ha creat cap àtom nou `Srt.removeAt`**: l'esborrat al timeline és JSX inline
+   sobre `seq.subtitleTracks` (`_refreshTimelineSubs` + `_removeTimelineSubAt`). El motiu:
+   `Clips.removeAt(track, startSec, type)` casa el clip per `start` amb ±0,05 s i el TC del
+   SRT pot anar quantitzat a frame; el JSX nou casa per **interval** (amb ±0,2 s de marge)
+   i retorna la pista, que és el que el log necessita. `Clips.removeAt` no s'ha tocat.
+3. **`placeSrtOnExistingSubtitleTrack` guanya `trackIdx`** (0 = S1, 1 = S2). I la neteja
+   prèvia de l'exportació, que abans esborrava **totes** les pistes de subtítols, ara
+   esborra **només la pista de destí** — imprescindible per tindre NORMAL a S1 i SINT a S2
+   alhora.
+
+Detall per sub-fase:
+
+- **F3.1 · FET.** `_selIndex`, `deleteSelected()`, `_initKeys` (Supr/Backspace), botó 🗑.
+  Confirmació si l'entrada ja està al timeline (`confirm`: Accepta = timeline + taula,
+  Cancel·la = només taula). `_loadedEntries` intacte → ♻️ restaura; el `.srt` del NAS no
+  s'escriu mai. L'entrada s'esborra també de `_originalEntries`: si no, el drag de
+  marcadors la reconstruïa i «tornava» (forat detectat en implementar).
+- **F3.2 · FET.** `Scanner.srtSynthetic` (3 nivells, sempre filtrat per data de treball,
+  fitxers no datables descartats) + `loadSrt(path,{kind:'SINT'})`. Les taules viuen a
+  `_views`: el SRT normal queda guardat i el **segon Ctrl+clic hi torna**. Color taronja
+  per als SINT; exportació per defecte a **S2**; Ctrl+clic a 💾 força S2. L'antic
+  Ctrl+clic (fallback forçat) passa a **Alt+clic**. `createCaptionTrack` com a fallback si
+  la S2 no existix; `_detectExportTrack` informa de la pista real (si no hi havia cap
+  pista de subtítols, Premiere crea la S1 encara que es demanara la S2).
+- **F3.3 · FET (opció A i opció B).** Opció A: carregar SINT (Ctrl) i exportar a S2.
+  Opció B (automàtica): `SrtParser.findGaps` / `mergeSyntheticGaps` / `removeEntryAt`
+  (pures, provades aïlladament) i botó 🧩. Només AFEGIX, amb tolerància
+  `general.srtSyntheticGapTolSec` (**0,2 s**): `solapa`, `duplicat` i `fora-del-tram` es
+  descarten i es compten al log. Resultat = vista **MOD** (verda) amb `_loadedEntries` =
+  SRT normal (♻️ ho desfà). `findGaps` no compta el cap ni la cua, només els buits reals
+  entre entrades.
+
+**Prova**: `bin/smoke/fp_probe_srt.js` (27 assercions, `#F3/1..#F3/27`). Validació:
+smoke PASS 336 / FAIL 0, `check_js_v8` 61/61, `check_dead` 0 orfes, `check_rutas` OK.
+**Pendent**: validació manual a Premiere (acceptació de davall).
+
+### Pla original (per a traçabilitat)
+
+### F3.1 · Seleccionar i esborrar un clip de subtítol — FET (2026-10-21)
 1. Estat de selecció únic a l'editor (`_selIndex`) alimentat per: clic a la fila de la taula i
    clic al clip del canvas (ressaltat visual).
 2. Esborrar amb `Supr`/`Backspace` i amb un botó 🗑 de la secció SUBTÍTOLS. Dos abasts:
@@ -231,7 +369,7 @@ nova, sense tocar cap fitxer `.js`.
 3. Confirmació si l'entrada ja està exportada + log del que s'ha tret; mai es toca el `.srt`
    original del NAS (l'editor treballa sobre la còpia del projecte).
 
-### F3.2 · Ctrl+clic a CARREGAR = importar els SINTÈTICS
+### F3.2 · Ctrl+clic a CARREGAR = importar els SINTÈTICS — FET (2026-10-21)
 1. Ruta nova `rutas.subtitulosSinteticos` (F2).
 2. `btnSrtLoad` amb `ctrlKey` → `Workflow.Srt.runSrtLoadSynthetic()`: busca
    `{archivo}_{bloque}_*` del dia de treball (mateix patró que els normals) i el carrega a
@@ -240,7 +378,7 @@ nova, sense tocar cap fitxer `.js`.
    `exportToPremiere({ track: 's2' })`.
 4. `Ctrl+clic` a RESET (♻️) continua reiniciant com ara; el reset del SINT és explícit.
 
-### F3.3 · Reomplir buits (opcions, de menys a més automàtic)
+### F3.3 · Reomplir buits (opcions, de menys a més automàtic) — FET (A i B, 2026-10-21)
 - **Opció A (simple, recomanada per començar):** carregar els SINT i exportar-los a S2; l'operador
   col·loca a mà els que falten. Cap barreja automàtica, risc zero.
 - **Opció B (automàtica):** detectar BUITS del SRT normal (cap entrada dins d'una finestra on el
@@ -300,7 +438,7 @@ després deixa el manifest i el log inconsistents i pot trencar l'ancoratge dels
 ## Ordre d'execució
 1. **F0/F1** — validació manual a Premiere (portada i reset).
 2. **F2** — config (base per a F3.2: la carpeta de sintètics).
-3. **F3** — subtítols (A i després B).
+3. **F3** — subtítols (A i després B). **FET 2026-10-21** (pendent només la validació manual).
 4. **F4** — document d'anàlisi → snapshots → deduplicació.
 
 ## Convencions de tancament (cada fase)

@@ -231,69 +231,6 @@
         },
 
         /**
-         * _escaletaFromLaterBlock: (2026-09-22) Quan NO hi ha escaleta del NOSTRE bloc, busca al NAS
-         * una escaleta del MATEIX DIA i del MATEIX PROGRAMA d'un bloc POSTERIOR (V4, V5...) — que ja
-         * conté els ítems del nostre bloc — i la copia al directori del projecte.
-         *
-         * Ordre oficial de resolució de l'escaleta (indicat per l'usuari):
-         *   1) escaleta del nostre bloc
-         *   2) escaleta d'un bloc POSTERIOR (se n'extreu el nostre bloc amb getLinesForBlock)
-         *   3) FOTO via API de digition (escaleta_on_demand_*)
-         * Mai no s'usa una escaleta d'un bloc ANTERIOR (no té els nostres ítems).
-         *
-         * @param {Object} ctx - {config, progData, bloque, dateDir}
-         * @param {string} datePrefix - YYYYMMDD del dia de treball
-         * @returns {Promise<{path:string, filename:string, blockId:string}|null>}
-         */
-        _escaletaFromLaterBlock: async function (ctx, datePrefix) {
-            const reader = window.EscaletaReader || (window.FASTPASS_UI && window.FASTPASS_UI.EscaletaReader);
-            if (!reader || typeof reader._listEscaletas !== 'function' || typeof reader.extractBlockIdFromFilename !== 'function') {
-                return null;
-            }
-            const ourNum = parseInt(String(ctx.bloque || '').replace(/\D/g, ''), 10);
-            if (!ourNum) return null;
-            let listing = null;
-            try { listing = await reader._listEscaletas(); } catch (eL) { return null; }
-            if (!listing || !listing.raw) return null;
-            let files = [];
-            try { files = JSON.parse(listing.raw) || []; } catch (eP) { return null; }
-            const prog = String(ctx.progData.archivo || '').toUpperCase();
-            const base = String(listing.path || '').replace(/[\\/]+$/, '') + '\\';
-            const cands = [];
-            for (let i = 0; i < files.length; i++) {
-                const name = String(files[i].name || '');
-                if (!/\.json$/i.test(name)) continue;
-                if (name.indexOf('escaleta_on_demand') === 0) continue;          // les FOTO no porten bloc
-                if (datePrefix && name.indexOf(datePrefix) === -1) continue;      // NOMÉS el mateix dia
-                if (prog && name.toUpperCase().indexOf(prog) === -1) continue;    // mateix programa
-                const bid = reader.extractBlockIdFromFilename(name);
-                const num = parseInt(String(bid || '').replace(/\D/g, ''), 10);
-                if (!num || !(num > ourNum)) continue;                            // NOMÉS blocs POSTERIORS
-                cands.push({ name: name, path: base + name, blockId: bid, num: num });
-            }
-            if (cands.length === 0) return null;
-            // El MÉS RECENT (nom porta YYYYMMDD_HHMMSS → ordre alfabètic = cronològic)
-            cands.sort(function (a, b) { return (a.name < b.name) ? -1 : ((a.name > b.name) ? 1 : 0); });
-            const best = cands[cands.length - 1];
-            // Copiar al directori del projecte (la extensió treballa sempre amb la còpia local)
-            try {
-                const folderPath = getUtils().workFolder(ctx);
-                await callJSX("IO.createFolder('" + reader._escapePath(folderPath) + "')");
-                const destPath = folderPath.replace(/[\\/]+$/, '') + '\\' + best.name;
-                const copyRes = await callJSX("IO.copyFile('" + reader._escapePath(best.path) + "', '" + reader._escapePath(destPath) + "')");
-                if (copyRes !== 'OK') {
-                    log('⚠️ [NOU] No s\'ha pogut copiar l\'escaleta del bloc ' + best.blockId + ': ' + copyRes, 'WARN');
-                    return null;
-                }
-                log('📁 [NOU] Escaleta del bloc posterior ' + best.blockId + ' copiada al projecte: ' + best.name);
-                return { path: destPath, filename: best.name, blockId: best.blockId };
-            } catch (eC) {
-                log('⚠️ [NOU] Error copiant escaleta de bloc posterior: ' + eC.message, 'WARN');
-                return null;
-            }
-        },
-
-        /**
          * _photoEscaleta: Genera una escaleta "on demand" via API de digition per al context
          * actual — exactament el mateix que fa el botó FOTO — i la deixa al directori del projecte
          * (escaleta_on_demand_*.json, que MANA sobre les del NAS).
@@ -313,6 +250,9 @@
             try {
                 getUtils().status('📷 Escaleta del bloc ' + ctx.bloque + ': fent FOTO…', 'procesando');
                 log("📷 [FOTO·auto] Petició a l'API d'escaletes: " + ctx.progData.archivo + ' / ' + ctx.bloque + ' / ' + ctx.dateDir);
+                // (2026-10-21) La FOTO vol l'estat del servidor d'ARA: el llistat de
+                // …\ESCALETES (memòria de 8 s) serveix per deduir la sèrie d'escaletaId.
+                try { if (typeof reader._invalidateEscaletas === 'function') reader._invalidateEscaletas(); } catch (eInv) { }
                 // Guarda de temps (igual que el botó FOTO): el handshake TLS amb digition
                 // pot trigar ~26 s en aquesta xarxa i es proven 2-3 candidats d'escaletaId.
                 const FOTO_TIMEOUT_MS = 180000;
@@ -371,8 +311,10 @@
                         // ─── ESCALETA LOCAL (DIRECTORI DEL PROJECTE) ──
                         // La extensió treballa SEMPRE amb la còpia de l'escaleta al directori
                         // del projecte (tant si ve del NAS copiada com si la genera el botó Foto).
-                        // ensureLocalCopy: busca local i, si no hi és, la baixa del NAS i la copia.
-                        jsonMeta = await reader.ensureLocalCopy(ctx, datePrefixJson);
+                        // ensureLocalCopy: busca local i prou. (2026-10-21 · LOCAL-FIRST)
+                        // Si no hi ha cap escaleta al directori del projecte NO se'n baixa
+                        // cap del NAS: es fa una FOTO nova (més avall) i es treballa amb eixa.
+                        jsonMeta = await reader.ensureLocalCopy(ctx, datePrefixJson, { localOnly: true });
                         if (jsonMeta) {
                             jsonData = await reader.load(jsonMeta.path);
                         }
@@ -384,11 +326,11 @@
                         // (INTRO) → avortament. En aquest cas es fa una FOTO automàtica (mateixa via
                         // que el botó FOTO) i es torna a carregar. Si la FOTO tampoc no en dona,
                         // s'avorta amb el motiu real de l'API de digition.
-                        // ── RESOLUCIÓ DE L'ESCALETA: ORDRE OFICIAL (2026-09-22) ────────────────
-                        //   1) escaleta del NOSTRE bloc (la carregada)
-                        //   2) escaleta d'un bloc POSTERIOR del mateix dia (conté el nostre bloc:
-                        //      se n'extreuen els ítems amb getLinesForBlock)
-                        //   3) FOTO via API de digition (escaleta_on_demand_*)
+                        // ── RESOLUCIÓ DE L'ESCALETA: ORDRE OFICIAL (2026-10-21 · LOCAL-FIRST) ────
+                        //   1) escaleta al DIRECTORI DEL PROJECTE (còpia prèvia o FOTO anterior)
+                        //   2) FOTO via API de digition (escaleta_on_demand_*)
+                        // (2026-10-21) S'ha eliminat el pas "escaleta d'un bloc POSTERIOR del NAS":
+                        // les escaletes que publica el motor a …\ESCALETES ja no es consumeixen.
                         // MAI una escaleta d'un bloc ANTERIOR: no té els nostres ítems, el tema
                         // s'havia d'inventar i acabava en paraula reservada (INTRO) → avortament.
                         var escNom = String((jsonMeta && (jsonMeta.name || jsonMeta.path)) || '');
@@ -402,31 +344,23 @@
 
                         if (!escaletaOk) {
                             log('⚠️ [NOU] Escaleta no utilitzable per al bloc ' + ctx.bloque + ' (' +
-                                (escNom.split(/[\\\/]/).pop() || 'cap escaleta') + ') → provant blocs posteriors', 'WARN');
-                            // ── 2) BLOC POSTERIOR del mateix dia (que ja conté el nostre bloc) ──
-                            var laterMeta = await this._escaletaFromLaterBlock(ctx, datePrefixJson);
-                            if (laterMeta) {
-                                jsonMeta = laterMeta;
-                                jsonData = await reader.load(laterMeta.path);
-                                escaletaOk = !!jsonData;
-                                if (escaletaOk) {
-                                    log('📋 [NOU] Escaleta del bloc ' + laterMeta.blockId + ' (posterior) → se n\'extreu el bloc ' + ctx.bloque);
-                                }
-                            } else {
-                                jsonData = null;   // descartem explícitament l'escaleta d'un bloc anterior
-                            }
+                                (escNom.split(/[\\\/]/).pop() || 'cap escaleta') + ') → FOTO', 'WARN');
+                            // (2026-10-21 · LOCAL-FIRST) S'ha eliminat el pas "bloc POSTERIOR
+                            // del NAS": les escaletes que publica el motor ja no es fan servir.
+                            // Si la còpia local no és del nostre bloc/dia, es descarta i es fa FOTO.
+                            jsonData = null;
                         }
 
                         if (!escaletaOk || !jsonData) {
-                            // ── 3) FOTO via API de digition (últim recurs) ──
-                            log('📷 [NOU] Cap escaleta utilizable per al bloc ' + ctx.bloque + ' (ni del bloc, ni posterior) → FOTO automàtica', 'WARN');
+                            // ── 2) FOTO via API de digition ──
+                            log('📷 [NOU] Cap escaleta del bloc ' + ctx.bloque + ' al directori del projecte → FOTO automàtica', 'WARN');
                             var fotoAuto = await this._photoEscaleta(ctx);
                             if (!fotoAuto.ok) {
                                 log('⛔ [NOU] Sense escaleta del bloc ' + ctx.bloque + ' i la FOTO ha fallat: ' + fotoAuto.error, 'ERROR');
                                 getUtils().status("Bloc " + ctx.bloque + ": no hi ha escaleta i la FOTO ha fallat (" + fotoAuto.error + ")", "error");
                                 return;
                             }
-                            jsonMeta = await reader.ensureLocalCopy(ctx, datePrefixJson);
+                            jsonMeta = await reader.ensureLocalCopy(ctx, datePrefixJson, { localOnly: true });
                             jsonData = jsonMeta ? await reader.load(jsonMeta.path) : null;
                             if (!jsonData) {
                                 log('⛔ [NOU] La FOTO ha generat ' + fotoAuto.filename + ' però no s\'ha pogut carregar.', 'ERROR');

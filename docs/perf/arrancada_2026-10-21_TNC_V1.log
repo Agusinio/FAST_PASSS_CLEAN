@@ -1,0 +1,25 @@
+FASTPASS · timing d'arrencada del panell
+Inici: 11:29:32  (ms = des de l'inici · Δ = des de la marca anterior)
++      0 ms  (Δ      0 ms)  main.js: arrencada
++      6 ms  (Δ      6 ms)  ruta de l'extensió resolta
++     25 ms  (Δ     19 ms)  DIAG P1 ping motor JSX (16 ms)
++     41 ms  (Δ     16 ms)  DIAG P2 $.writeln del motor (11 ms)
++     90 ms  (Δ     49 ms)  DIAG P3 bootstrap · cua motor=2 ms | execucio=44 ms | tornada=-1 ms
++     93 ms  (Δ      3 ms)  motor JSX a punt (jsx_BOOTSTRAP)
++    117 ms  (Δ     24 ms)  comprovació de frescor JSX (20 ms)
++    121 ms  (Δ      4 ms)  [Context] init · selectors PROG/BLOC (0 ms)
++    140 ms  (Δ     19 ms)  [Context] checkContext · readFolder NAS (14 ms, 0 fitxers)
++   1523 ms  (Δ   1383 ms)  DIAG HB 1 viu a +1514 ms
++   3012 ms  (Δ   1489 ms)  DIAG HB 2 viu a +3003 ms
++   4522 ms  (Δ   1510 ms)  DIAG HB 3 viu a +4513 ms
++   5377 ms  (Δ    855 ms)  [Context] checkContext · escaleta getStatus (5233 ms)
++   5384 ms  (Δ      7 ms)  [Context] checkContext · escaleta local/FOTO (4 ms)
++   5404 ms  (Δ     20 ms)  [Context] checkContext · sonda ràpida media+wotts (17 ms) → ESPERANT [provisional]
++   5407 ms  (Δ      3 ms)  [Context] checkContext · TOTAL (5282 ms) → ESPERANT [early]
++   5410 ms  (Δ      3 ms)  [Context] init · checkContext (5285 ms)
++   5413 ms  (Δ      3 ms)  [Context] syncConductorUI · inici (programa=TN Comarques, defaults=1)
++   5424 ms  (Δ     11 ms)  [Context] syncConductorUI · NAS conductors (8 ms, 25 noms)
++   5427 ms  (Δ      3 ms)  [Context] init · syncConductorUI/COND (14 ms)
++   5430 ms  (Δ      3 ms)  [Context] init · TOTAL (5309 ms)
++   5432 ms  (Δ      2 ms)  Context.init (config + 1r checkContext) (5312 ms)
++   5435 ms  (Δ      3 ms)  ARRENCADA COMPLETA
