@@ -221,9 +221,9 @@
             var idx = await readRepo('index.html');
             ok('#175/20 index.html carrega `19_Fs_Wipe.js` i ha pujat els cache-busts',
                 /19_Fs_Wipe\.js\?v=1/.test(idx) && /utils\.js\?v=26/.test(idx) &&
-                /flow_mainButton\.js\?v=33/.test(idx) && /srt_editor\.js\?v=76/.test(idx),
+                /flow_mainButton\.js\?v=33/.test(idx) && /srt_editor\.js\?v=77/.test(idx),
                 'modul=' + /19_Fs_Wipe\.js\?v=1/.test(idx) + ' * utils=' + /utils\.js\?v=26/.test(idx) +
-                ' * main=' + /flow_mainButton\.js\?v=33/.test(idx) + ' * srt=' + /srt_editor\.js\?v=76/.test(idx));
+                ' * main=' + /flow_mainButton\.js\?v=33/.test(idx) + ' * srt=' + /srt_editor\.js\?v=77/.test(idx));
         } catch (e) {
             ok('#175 la prova no ha llancat cap excepcio', false, e && (e.message + ' | ' + e.stack));
         }

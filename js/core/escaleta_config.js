@@ -32,16 +32,33 @@
     // ----------------------------------------------------------------
 
     /**
-     * Ruta d'escaletes al servidor.
-     * PRIMÀRIA: IP directa (algunes màquines amb polítiques no resolen
-     * el nom de domini public.ad-ccrtv.local i el listat es bloqueja).
+     * Ruta d'escaletes al servidor (F2 · 2026-10-21).
+     * ABANS era una constant FIXA aci. Ara ve de la configuracio de l'usuari
+     * (`Profile.json` -> rutas.escaletes) i es llig EN CADA ACCES, perque canviar
+     * la ruta a la finestra de configuracio tinga efecte sense reiniciar el panell.
+     * Es mantenen els MATEIXOS noms (ESCALETES_PATH / ESCALETES_PATH_DOMAIN)
+     * perque escaleta_io.js i escaleta_fetch.js els lligen com a propietats.
      */
-    ER.ESCALETES_PATH = "\\\\192.168.147.199\\public\\VERTICALITZACIO_INFORMATIUS\\ESCALETES";
+    function _rutaConfig(clau) {
+        try {
+            var cfg = window.FASTPASS_UI.Config && window.FASTPASS_UI.Config.get();
+            var rutas = (cfg && cfg.rutas) || {};
+            return rutas[clau] || '';
+        } catch (e) { return ''; }
+    }
+
+    Object.defineProperty(ER, 'ESCALETES_PATH', {
+        get: function () { return _rutaConfig('escaletes'); },
+        enumerable: true, configurable: true
+    });
 
     /**
      * Fallback pel nom de domini (antics equips on la IP podia variar).
      */
-    ER.ESCALETES_PATH_DOMAIN = "\\\\public.ad-ccrtv.local\\Public\\VERTICALITZACIO_INFORMATIUS\\ESCALETES";
+    Object.defineProperty(ER, 'ESCALETES_PATH_DOMAIN', {
+        get: function () { return _rutaConfig('escaletesDomini'); },
+        enumerable: true, configurable: true
+    });
 
     /**
      * Handles en segons (marge de seguretat al voltant del TC d'emissió).

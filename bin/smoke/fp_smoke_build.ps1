@@ -52,6 +52,9 @@ $files = @(
     # (2026-10-21 · RESET absolut) Esborrat d'arbres entrada per entrada amb
     # verificacio i reintents; el prova la prova 20-reset amb un disc SIMULAT.
     (Join-Path $repo 'js\logic\19_Fs_Wipe.js'),
+    # (2026-10-21 - F2) Resolutor de rutes PUR (tokens, fusio del Profile.json,
+    # rutes derivades). El prova la prova 21-rutas.
+    (Join-Path $repo 'js\logic\20_Rutas_Logic.js'),
     (Resolve-Harness 'fp_probe_f45.js'),
     # (2026-10-16 · BUG #167) Rètol de localització del directe → ítem IPD/directe.
     (Resolve-Harness 'fp_probe_ipd_chyron.js'),
@@ -65,6 +68,9 @@ $files = @(
     # (2026-10-21 · RESET absolut) Motor FsWipe (disc simulat: fitxer nomes lectura,
     # bloquejat i lock transitori) + guardes de runReset i cache-busts.
     (Resolve-Harness 'fp_probe_reset.js'),
+    # (2026-10-21 - F2) Rutes i variables d'usuari: resolutor pur, fusio del
+    # perfil i guardes (cap literal UNC fora dels defaults).
+    (Resolve-Harness 'fp_probe_rutas.js'),
     (Resolve-Harness 'fp_smoke_runner.js')
 )
 

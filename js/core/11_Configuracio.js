@@ -321,6 +321,17 @@
             portadas: "\\\\public.ad-ccrtv.local\\Public\\VERTICALITZACIO_INFORMATIUS\\AAA_PORTADES",   // 🖼️ (2026-10-09) destí del PNG de portada publicat
             render1: "\\\\public.ad-ccrtv.local\\Public\\VERTICALITZACIO_INFORMATIUS\\EXPORTS PROVISIONALS",   // 📤 (2026-10-09) DESTÍ DIRECTE del render (EXPORTS PROVISIONALS); després es copia a render2
             render2: "\\\\svftpccma\\videos\\MP4_3CATINFO_VERTICAL\\CONVERTITS_1080-1920\\608-1080",
+            // (2026-10-21 · F2) RUTES DE TREBALL configurables. Fins ara vivien al
+            // codi: `escaletes` a escaleta_config.js, `grafismos` a flow_mapa.js i
+            // `subtitulos` a srt_editor.js. Si un Profile.json desplegat no les
+            // porta, `Logic.Rutas.normalizeRutas` les DERIVA de `vertical` (i
+            // `projectes` de `destino_base`): compatibilitat cap enrere.
+            projectes: "",            // alies de destino_base (arrel dels blocs)
+            escaletes: "",            // escaletes de digition
+            escaletes_domini: "",     // fallback pel nom de domini (xarxa)
+            grafismos: "",            // ZZZ_GRAFISME (MAPA / grafismes del dia)
+            subtitulos: "",           // SRT_MP4_PER_TEMPS_15MINUTS (SRT d'emergencia)
+            subtitulosSinteticos: "", // F3.2: SRT sintetics (abans no existia)
             nnews_root_1: "",
             nnews_root_2: ""
         },
@@ -378,6 +389,135 @@
         }
     };
 
+    // ══════════════════════════════════════════════════════════════════════════
+    // F2 (2026-10-21) · CARREGA DE Profile.json
+    // --------------------------------------------------------------------------
+    // FINS ARA `Profile.json` NOMES S'ESCRIVIA (setup.html): `Config.get()`
+    // tornava sempre aquest objecte fix, aixi que canviar una ruta a la finestra
+    // de configuracio NO tenia CAP efecte (calia editar el .js). Ara:
+    //   1) `_defaults` guarda aquest objecte INTACTE (xarxa de seguretat).
+    //   2) `_applyProfile(obj)` fong el perfil damunt d'una COPIA dels defaults i
+    //      normalitza les rutes (`Logic.Rutas.mergeProfile` / `normalizeRutas`).
+    //   3) `_loadProfile()` llig Profile.json amb `cep.fs.readFile` (SINCRON i
+    //      sense dependre del motor JSX, que en arrencar encara no hi es) i
+    //      l'aplica. S'executa en carregar aquest fitxer i cada volta que
+    //      setup.html desa (event FASTPASS_CONFIG_UPDATED).
+    // ══════════════════════════════════════════════════════════════════════════
+    var _defaults = _activeConfig;
+    var _lastProfile = { ok: false, reason: 'not-loaded' };
+
+    function _rutasLogic() {
+        try { return (window.FASTPASS_UI.Logic || {}).Rutas || null; } catch (e) { return null; }
+    }
+
+    /** _extensionRoot: carpeta de la extensio (sense separador final) o ''. */
+    function _extensionRoot() {
+        try {
+            var U = window.FASTPASS_UI.Utils;
+            if (U && U.csInterface && typeof SystemPath !== 'undefined' && SystemPath.EXTENSION) {
+                var p1 = U.csInterface.getSystemPath(SystemPath.EXTENSION);
+                if (p1) return String(p1).replace(/[\\/]+$/, '');
+            }
+        } catch (e1) { }
+        try {
+            if (window.__adobe_cep__ && window.__adobe_cep__.getSystemPath) {
+                var p2 = window.__adobe_cep__.getSystemPath('extension');
+                if (p2) return String(p2).replace(/[\\/]+$/, '');
+            }
+        } catch (e2) { }
+        return '';
+    }
+
+    function _profilePath() {
+        var root = _extensionRoot();
+        return root ? (root + '\\Profile.json') : '';
+    }
+
+    /** _readProfileText: UTF-8 de debò (IO.readTxt llig ANSI → trencaria accents). */
+    function _readProfileText(path) {
+        try {
+            if (window.cep && window.cep.fs && window.cep.fs.readFile) {
+                var r = window.cep.fs.readFile(path);
+                if (r && r.err === 0 && r.data != null) return String(r.data);
+            }
+        } catch (e) { }
+        return null;
+    }
+
+    /**
+     * _applyProfile: aplica un objecte de perfil (el de Profile.json o un de
+     * prova). SEMPRE parteix dels defaults: llevar una clau del perfil torna al
+     * valor de fabrica, i recarregar N voltes no acumula res.
+     */
+    function _applyProfile(obj) {
+        var R = _rutasLogic();
+        if (!R) { return (_lastProfile = { ok: false, reason: 'logic-missing' }); }
+        try {
+            var merged = R.mergeProfile(_defaults, obj || {});
+            merged.rutas = R.normalizeRutas(merged.rutas || {});
+            _activeConfig = merged;
+            return (_lastProfile = { ok: true, rutas: merged.rutas });
+        } catch (e) {
+            return (_lastProfile = { ok: false, reason: 'merge-error: ' + (e && e.message) });
+        }
+    }
+
+    function _loadProfile() {
+        var path = _profilePath();
+        if (!path) return (_lastProfile = { ok: false, reason: 'no-extension-root' });
+        var raw = _readProfileText(path);
+        if (raw == null) return (_lastProfile = { ok: false, reason: 'unreadable', path: path });
+        raw = raw.replace(/^\uFEFF/, '');
+        var obj;
+        try { obj = JSON.parse(raw); }
+        catch (eJ) { return (_lastProfile = { ok: false, reason: 'bad-json', path: path }); }
+        var res = _applyProfile(obj);
+        res.path = path;
+        return res;
+    }
+
+    /** _ctxWithDefaults: context de resolucio amb `base` i `autor` de la config. */
+    function _ctxWithDefaults(ctx) {
+        var c = {};
+        var src = ctx || {};
+        for (var k in src) { if (Object.prototype.hasOwnProperty.call(src, k)) c[k] = src[k]; }
+        if (c.base == null || c.base === '') {
+            c.base = _activeConfig.rutas.projectes || _activeConfig.rutas.destino_base || '';
+        }
+        if (c.autor == null || c.autor === '') c.autor = _activeConfig.general.autor || '';
+        return c;
+    }
+
+    // Carrega ARA, abans que cap modul use Config.get().
+    // (F2) Els DEFAULTS tambe es normalitzen: si Profile.json no es pot llegir, les
+    // rutes derivades (escaletes/grafismes/subtitols) existeixen igualment.
+    var _R0 = _rutasLogic();
+    if (_R0) { _defaults.rutas = _R0.normalizeRutas(_defaults.rutas || {}); }
+
+    var _bootProfile = _loadProfile();
+    try {
+        console.log('⚙️ [CONFIG] Profile.json: ' + (_bootProfile.ok ? 'carregat' : ('NO (' + _bootProfile.reason + ')')) +
+            ' · grafismes=' + (_activeConfig.rutas.grafismos || '-') +
+            ' · subtitols=' + (_activeConfig.rutas.subtitulos || '-'));
+    } catch (eCfgLog) { }
+
+    // Recarrega en desar la configuracio (setup.html fa dispatchEvent).
+    try {
+        if (window.__adobe_cep__ && window.__adobe_cep__.addEventListener) {
+            window.__adobe_cep__.addEventListener('FASTPASS_CONFIG_UPDATED', function () {
+                var r = _loadProfile();
+                try {
+                    if (window.FASTPASS_UI.Utils && window.FASTPASS_UI.Utils.log) {
+                        window.FASTPASS_UI.Utils.log('⚙️ [CONFIG] Configuracio recarregada' +
+                            (r.ok ? ' (Profile.json)' : ': ' + r.reason), r.ok ? 'INFO' : 'WARN');
+                    } else {
+                        console.log('⚙️ [CONFIG] Configuracio recarregada' + (r.ok ? '' : ': ' + r.reason));
+                    }
+                } catch (eL) { }
+            });
+        }
+    } catch (eEv) { }
+
     FASTPASS_UI.Config = {
 
         /**
@@ -430,9 +570,19 @@
                     verticalitzacio: cfg.rutas.vertical,
                     chyrons:         cfg.rutas.chyrons,
                     destinoBase:     cfg.rutas.destino_base,
+                    // (2026-10-21 · F2) `projectes` es l'alies nou de destino_base
+                    // (les dues claus apunten a la mateixa carpeta arrel).
+                    projectes:       cfg.rutas.projectes || cfg.rutas.destino_base,
                     portadas:        cfg.rutas.portadas,
                     render1:         cfg.rutas.render1,
-                    render2:         cfg.rutas.render2
+                    render2:         cfg.rutas.render2,
+                    // (2026-10-21 · F2) Rutes que ABANS vivien al codi i ara es
+                    // lligen de la configuracio: cap literal UNC a js/.
+                    escaletes:       cfg.rutas.escaletes,
+                    escaletesDomini: cfg.rutas.escaletes_domini,
+                    grafismos:       cfg.rutas.grafismos,
+                    subtitulos:      cfg.rutas.subtitulos,
+                    subtitulosSinteticos: cfg.rutas.subtitulosSinteticos
                 },
                 mapeoProgramas: this._getLegacyMapping(cfg),
                 export: {
@@ -505,6 +655,44 @@
                 traduccio: Object.assign({}, TRADUCCIO_DEFAULTS, cfg.traduccio || {})
             };
         },
+
+        /**
+         * resolvePath (F2): resol una PLANTILLA de ruta amb les variables
+         * d'usuari/projecte. PUR (delega a Logic.Rutas).
+         * @param {string} tpl  p.ex. '{base}\\{archivo}_{bloque}_{fecha}'
+         * @param {Object} ctx  {progData|prog|archivo|wott|bloque|dateDir|
+         *                       fecha|tema|sanitizedTema|base|autor}
+         * @returns {string} ruta Windows normalitzada, SENSE cap {token}
+         */
+        resolvePath: function (tpl, ctx) {
+            var R = _rutasLogic();
+            if (!R) return String(tpl == null ? '' : tpl);
+            return R.resolve(tpl, _ctxWithDefaults(ctx));
+        },
+
+        /**
+         * resolvePathDetailed (F2): com resolvePath pero diu que falta.
+         * @returns {{out:string, missing:string[], unknown:string[], tokens:string[]}}
+         *   `out` conserva el {token} literal: es el que fa servir el boto
+         *   «Prova» de setup.html per avisar («falta {tema}»).
+         */
+        resolvePathDetailed: function (tpl, ctx) {
+            var R = _rutasLogic();
+            if (!R) return { out: String(tpl == null ? '' : tpl), missing: [], unknown: [], tokens: [] };
+            return R.resolveDetailed(tpl, _ctxWithDefaults(ctx));
+        },
+
+        /** loadProfile (F2): rellegeix Profile.json del disc i l'aplica. */
+        loadProfile: function () { return _loadProfile(); },
+
+        /** applyProfile (F2): aplica un objecte de perfil (proves / migracions). */
+        applyProfile: function (obj) { return _applyProfile(obj || {}); },
+
+        /** profilePath (F2): ruta absoluta del Profile.json ('' si no se sap). */
+        profilePath: function () { return _profilePath(); },
+
+        /** profileStatus (F2): estat de la ultima carrega {ok, reason, path?}. */
+        profileStatus: function () { return _lastProfile; },
 
         /**
          * _getLegacyMapping: Mapa de programas per compatibilitat amb codi existent.

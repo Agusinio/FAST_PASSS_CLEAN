@@ -155,11 +155,17 @@
 
         <div class="card">
             <h2>Rutes de Xarxa (Infraestructura)</h2>
-            <div class="input-group"><label>Plantilla del Canal</label><div class="path-box"><input type="text" id="path-plantilla"><button class="btn-browse" onclick="browseFile('path-plantilla')">📁</button></div></div>
-            <div class="input-group"><label>Repositori Media (MP4/SRT)</label><div class="path-box"><input type="text" id="path-vertical"><button class="btn-browse" onclick="browseFolder('path-vertical')">📁</button></div></div>
-            <div class="input-group"><label>Motor Rètols (Wott/MOV)</label><div class="path-box"><input type="text" id="path-chyrons"><button class="btn-browse" onclick="browseFolder('path-chyrons')">📁</button></div></div>
-            <div class="input-group"><label>Biblioteca Conductors</label><div class="path-box"><input type="text" id="path-conductors"><button class="btn-browse" onclick="browseFolder('path-conductors')">📁</button></div></div>
-            <div class="input-group"><label>Destí Projectes Locals</label><div class="path-box"><input type="text" id="path-destino_base"><button class="btn-browse" onclick="browseFolder('path-destino_base')">📁</button></div></div>
+            <div class="input-group"><label>Plantilla del Canal</label><div class="path-box"><input type="text" id="path-plantilla"><button class="btn-browse" title="Prova aquesta ruta" onclick="provaRuta('path-plantilla')">🧪</button><button class="btn-browse" onclick="browseFile('path-plantilla')">📁</button></div></div>
+            <div class="input-group"><label>Repositori Media (MP4/SRT)</label><div class="path-box"><input type="text" id="path-vertical"><button class="btn-browse" title="Prova aquesta ruta" onclick="provaRuta('path-vertical')">🧪</button><button class="btn-browse" onclick="browseFolder('path-vertical')">📁</button></div></div>
+            <div class="input-group"><label>Motor Rètols (Wott/MOV)</label><div class="path-box"><input type="text" id="path-chyrons"><button class="btn-browse" title="Prova aquesta ruta" onclick="provaRuta('path-chyrons')">🧪</button><button class="btn-browse" onclick="browseFolder('path-chyrons')">📁</button></div></div>
+            <div class="input-group"><label>Biblioteca Conductors</label><div class="path-box"><input type="text" id="path-conductors"><button class="btn-browse" title="Prova aquesta ruta" onclick="provaRuta('path-conductors')">🧪</button><button class="btn-browse" onclick="browseFolder('path-conductors')">📁</button></div></div>
+            <div class="input-group"><label>Projectes (destí dels blocs)</label><div class="path-box"><input type="text" id="path-destino_base"><button class="btn-browse" title="Prova aquesta ruta" onclick="provaRuta('path-destino_base')">🧪</button><button class="btn-browse" onclick="browseFolder('path-destino_base')">📁</button></div></div>
+            <div class="input-group"><label>Escaletes (digition)</label><div class="path-box"><input type="text" id="path-escaletes"><button class="btn-browse" title="Prova aquesta ruta" onclick="provaRuta('path-escaletes')">🧪</button><button class="btn-browse" onclick="browseFolder('path-escaletes')">📁</button></div></div>
+            <div class="input-group"><label>Escaletes · Domini (alternativa)</label><div class="path-box"><input type="text" id="path-escaletes_domini"><button class="btn-browse" title="Prova aquesta ruta" onclick="provaRuta('path-escaletes_domini')">🧪</button><button class="btn-browse" onclick="browseFolder('path-escaletes_domini')">📁</button></div></div>
+            <div class="input-group"><label>Grafismes (MAPA del dia)</label><div class="path-box"><input type="text" id="path-grafismos"><button class="btn-browse" title="Prova aquesta ruta" onclick="provaRuta('path-grafismos')">🧪</button><button class="btn-browse" onclick="browseFolder('path-grafismos')">📁</button></div></div>
+            <div class="input-group"><label>Subtítols 15 min (SRT emergència)</label><div class="path-box"><input type="text" id="path-subtitulos"><button class="btn-browse" title="Prova aquesta ruta" onclick="provaRuta('path-subtitulos')">🧪</button><button class="btn-browse" onclick="browseFolder('path-subtitulos')">📁</button></div></div>
+            <div class="input-group"><label>Subtítols sintètics</label><div class="path-box"><input type="text" id="path-subtitulosSinteticos"><button class="btn-browse" title="Prova aquesta ruta" onclick="provaRuta('path-subtitulosSinteticos')">🧪</button><button class="btn-browse" onclick="browseFolder('path-subtitulosSinteticos')">📁</button></div></div>
+            <div id="rutes-status" style="font-size:11px; color:#777; margin-top:6px; min-height:15px"></div>
         </div>
 
         <div class="card">
@@ -167,6 +173,20 @@
             <div class="input-group"><label>Carpeta Publicació 1</label><div class="path-box"><input type="text" id="path-render1"><button class="btn-browse" onclick="browseFolder('path-render1')">📁</button></div></div>
             <div class="input-group"><label>Carpeta Publicació 2</label><div class="path-box"><input type="text" id="path-render2"><button class="btn-browse" onclick="browseFolder('path-render2')">📁</button></div></div>
             <div class="input-group"><label>Carpeta Portades (PNG)</label><div class="path-box"><input type="text" id="path-portadas"><button class="btn-browse" onclick="browseFolder('path-portadas')">📁</button></div></div>
+        </div>
+
+        <div class="card">
+            <h2>Variables de Ruta (plantilles)</h2>
+            <div style="font-size:11px; color:#777; line-height:1.8; margin-bottom:8px">
+                Es poden usar a qualsevol ruta:
+                <code>{autor}</code> <code>{prog}</code> <code>{archivo}</code> <code>{wott}</code>
+                <code>{bloque}</code> <code>{fecha}</code> (YYYY_MM_DD) <code>{tema}</code> <code>{base}</code>
+            </div>
+            <div class="path-box">
+                <input type="text" id="tpl-prova" value="{base}\{archivo}\{fecha}">
+                <button class="btn-browse" style="width:auto; padding:0 12px; font-weight:600" title="Resol la plantilla amb un context d'exemple" onclick="provaPlantilla()">PROVA</button>
+            </div>
+            <div id="tpl-resultat" style="font-size:11px; color:#777; margin-top:8px; min-height:15px"></div>
         </div>
     </div>
 
@@ -205,11 +225,22 @@
             document.getElementById('val-guarda').value = currentProfile.general.guarda;
             document.getElementById('check-debug').checked = currentProfile.general.debug;
             
-            // Rutas
-            for(let key in currentProfile.rutas) {
-                const el = document.getElementById('path-' + key);
-                if(el) el.value = currentProfile.rutas[key];
-            }
+            // Rutas (F2): les que falten al Profile.json es preomplen amb el valor
+            // vigent del panell (rutes derivades), perque el camp no isca buit.
+            var FALLBACK = {
+                projectes: 'projectes', destino_base: 'projectes',
+                escaletes: 'escaletes', escaletes_domini: 'escaletesDomini',
+                grafismos: 'grafismos', subtitulos: 'subtitulos',
+                subtitulosSinteticos: 'subtitulosSinteticos'
+            };
+            var cfgPare = null;
+            try { cfgPare = window.parent.FASTPASS_UI.Config.get(); } catch (ePare) { cfgPare = null; }
+            document.querySelectorAll('input[id^="path-"]').forEach(function(el) {
+                const key = el.id.replace(/^path-/, '');
+                let v = (currentProfile.rutas && currentProfile.rutas[key]) || '';
+                if (!v && cfgPare && cfgPare.rutas && FALLBACK[key]) v = cfgPare.rutas[FALLBACK[key]] || '';
+                el.value = v;
+            });
 
             // Pestañes d'Estructures
             ["TNs", "Sumari Matins", "Fotomató", "User Defined"].forEach(tabName => {
@@ -285,10 +316,12 @@
             currentProfile.general.guarda = parseInt(document.getElementById('val-guarda').value);
             currentProfile.general.debug = document.getElementById('check-debug').checked;
 
-            for(let key in currentProfile.rutas) {
-                const el = document.getElementById('path-' + key);
-                if(el) currentProfile.rutas[key] = el.value;
-            }
+            // Rutas (F2): es recullen TOTS els camps `path-*` del DOM (aixi tambe
+            // s'escriuen les claus noves en un Profile.json antic).
+            if (!currentProfile.rutas) currentProfile.rutas = {};
+            document.querySelectorAll('input[id^="path-"]').forEach(function(el) {
+                currentProfile.rutas[el.id.replace(/^path-/, '')] = el.value;
+            });
 
             const extensionRoot = csInterface.getSystemPath(SystemPath.EXTENSION);
             const profilePath = extensionRoot + "/Profile.json";
@@ -306,6 +339,90 @@
                 }
             });
         }
+
+        // ── F2 (2026-10-21) · PROVA DE RUTES I PLANTILLES ───────────────────
+        // La resolucio dels {tokens} la fa el PANELL (FASTPASS_UI.Config.resolvePath
+        // → Logic.Rutas): ací NO es duplica cap logica de variables.
+        function sampleCtx() {
+            const p = currentProfile || {};
+            let prog = null;
+            try {
+                const est = (p.estructuras || {})['TNs'] || {};
+                prog = (est.programas || [])[0] || null;
+            } catch (e) { prog = null; }
+            const avui = new Date();
+            const p2 = function (n) { return (n < 10 ? '0' : '') + n; };
+            const fecha = avui.getFullYear() + '_' + p2(avui.getMonth() + 1) + '_' + p2(avui.getDate());
+            const elBase = document.getElementById('path-destino_base');
+            return {
+                autor: (p.general && p.general.autor) || 'AGUS',
+                prog: prog ? prog.id : 'TNM',
+                archivo: prog ? prog.archivo : 'TN_MIGDIA',
+                wott: prog ? prog.wott : 'TNM',
+                bloque: 'V1',
+                fecha: fecha,
+                tema: 'TEMA_EXEMPLE',
+                base: elBase ? elBase.value : ''
+            };
+        }
+
+        function resolveTpl(tpl) {
+            let cfg = null;
+            try { cfg = window.parent.FASTPASS_UI.Config; } catch (e) { cfg = null; }
+            if (cfg && cfg.resolvePathDetailed) return cfg.resolvePathDetailed(tpl, sampleCtx());
+            return { out: tpl, missing: [], unknown: [], tokens: [], noParent: true };
+        }
+
+        // existeixRuta: stat (fitxers) o readdir (carpetes). Mai llança.
+        function existeixRuta(p, cb) {
+            let r = null;
+            try { r = window.cep.fs.stat(p); } catch (e1) { r = null; }
+            if (r && r.err === 0) { cb(true); return; }
+            try { r = window.cep.fs.readdir(p); } catch (e2) { r = null; }
+            cb(!!(r && r.err === 0));
+        }
+
+        function pintaEstat(elId, txt, color) {
+            const el = document.getElementById(elId);
+            if (!el) return;
+            el.style.color = color || '#777';
+            el.textContent = txt;
+        }
+
+        function diagnosi(d) {
+            let txt = '';
+            if (d.missing && d.missing.length) txt += ' · FALTA ' + d.missing.map(function (k) { return '{' + k + '}'; }).join(' ');
+            if (d.unknown && d.unknown.length) txt += ' · DESCONEGUT ' + d.unknown.map(function (k) { return '{' + k + '}'; }).join(' ');
+            return txt;
+        }
+
+        window.provaRuta = function (id) {
+            const el = document.getElementById(id);
+            if (!el) return;
+            const key = id.replace(/^path-/, '');
+            const tpl = el.value || '';
+            if (!tpl) { pintaEstat('rutes-status', '🧪 ' + key + ': camp buit', '#ffb300'); return; }
+            const d = resolveTpl(tpl);
+            if (d.noParent) { pintaEstat('rutes-status', '🧪 No puc accedir al panell (Config.resolvePath)', '#ff5252'); return; }
+            const txt = '🧪 ' + key + ' → ' + (d.out || '(buit)') + diagnosi(d);
+            pintaEstat('rutes-status', txt + ' · comprovant...', '#777');
+            existeixRuta(d.out, function (ok) {
+                const mal = (d.missing && d.missing.length) || (d.unknown && d.unknown.length);
+                pintaEstat('rutes-status', txt + ' · ' + (ok ? 'EXISTEIX' : 'NO EXISTEIX'),
+                    mal ? '#ff5252' : (ok ? '#00c853' : '#ffb300'));
+            });
+        };
+
+        window.provaPlantilla = function () {
+            const el = document.getElementById('tpl-prova');
+            const d = resolveTpl(el ? el.value : '');
+            if (d.noParent) { pintaEstat('tpl-resultat', 'No puc accedir al panell (Config.resolvePath)', '#ff5252'); return; }
+            const mal = (d.missing && d.missing.length) || (d.unknown && d.unknown.length);
+            pintaEstat('tpl-resultat', (d.out || '(buit)') + diagnosi(d), mal ? '#ff5252' : '#00c853');
+            const out = document.getElementById('tpl-resultat');
+            if (out && d.tokens && d.tokens.length) out.title = 'Tokens: ' + d.tokens.join(', ');
+        };
+
 
         window.browseFolder = function(id) { 
             var r = window.cep.fs.showOpenDialog(false, true, "Tria Carpeta", null); 

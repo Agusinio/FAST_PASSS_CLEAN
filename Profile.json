@@ -15,7 +15,15 @@
         "destino_base": "\\\\DSMEDIA07\\portal324\\PROJECTE 9x16 PREMIERE 2\\AAA_PROJECTES PREMIERE VERTICALITZACIO\\PROVES\\",
         "portadas": "\\\\public.ad-ccrtv.local\\Public\\VERTICALITZACIO_INFORMATIUS\\AAA_PORTADES",
         "render1": "\\\\public.ad-ccrtv.local\\Public\\VERTICALITZACIO_INFORMATIUS\\EXPORTS PROVISIONALS",
-        "render2": "\\\\svftpccma\\videos\\MP4_3CATINFO_VERTICAL\\CONVERTITS_1080-1920\\608-1080"
+        "render2": "\\\\svftpccma\\videos\\MP4_3CATINFO_VERTICAL\\CONVERTITS_1080-1920\\608-1080",
+        "projectes": "\\\\DSMEDIA07\\portal324\\PROJECTE 9x16 PREMIERE 2\\AAA_PROJECTES PREMIERE VERTICALITZACIO\\PROVES\\",
+        "escaletes": "\\\\192.168.147.199\\public\\VERTICALITZACIO_INFORMATIUS\\ESCALETES",
+        "escaletes_domini": "\\\\public.ad-ccrtv.local\\Public\\VERTICALITZACIO_INFORMATIUS\\ESCALETES",
+        "grafismos": "\\\\public.ad-ccrtv.local\\Public\\VERTICALITZACIO_INFORMATIUS\\ZZZ_GRAFISME",
+        "subtitulos": "\\\\public.ad-ccrtv.local\\Public\\VERTICALITZACIO_INFORMATIUS\\SRT_MP4_PER_TEMPS_15MINUTS",
+        "subtitulosSinteticos": "\\\\public.ad-ccrtv.local\\Public\\VERTICALITZACIO_INFORMATIUS\\SRT_SINTETICS",
+        "nnews_root_1": "",
+        "nnews_root_2": ""
     },
     "estructuras": {
         "TNs": {
@@ -83,7 +91,8 @@
                     "archivo": "MATINS",
                     "wott": "MAT",
                     "dir": "01_MATINS_PROJECTES",
-                    "conductor": "Conduct_Ariadna Oltra.mov"
+                    "conductor": "Conduct_Ariadna Oltra.mov",
+                    "escaletaId": "PRO1378"
                 }
             ]
         },

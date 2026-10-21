@@ -59,7 +59,7 @@ M carpetes, intent 1)` i, si queda alguna resta, `Esborrat INCOMPLET` + la llist
 
 ---
 
-## F2 · PANTALLA DE CONFIG: rutes i variables d'usuari
+## F2 · PANTALLA DE CONFIG: rutes i variables d'usuari — FET EN AQUESTA FASE
 
 **Objectiu:** que CAP ruta de treball viva al codi. Tot definit per l'usuari a la finestra de
 configuració i consumit per una única API (`Config.get().rutas` + un resolutor de variables).
@@ -104,6 +104,41 @@ Altres rutes fixades al codi que haurien de derivar de les anteriors:
 5. **Guarda nova**: prova que cap fitxer de `js/` continga el prefix UNC dels servidors coneguts
    (`DSMEDIA07`, `192.168`, `public.ad-ccrtv`, `svftpccma`, `nas1.ad-ccrtv`) fora de
    `11_Configuracio.js` (defaults) i de les línies de comentari.
+
+### F2.0 · Forat descobert en implementar (BLOCANT)
+
+`Profile.json` **no es llegia enlloc**: `setup.html` l'escrivia, però `11_Configuracio.js`
+retornava sempre `_activeConfig`, un objecte fix del codi. Canviar qualsevol ruta a la finestra
+de configuració **no tenia cap efecte** (calia editar el `.js`), i per tant el criteri
+d'acceptació era impossible. S'ha resolt amb:
+
+- `Config` llig `Profile.json` en carregar-se amb `cep.fs.readFile` (sincron, UTF-8 de debò i
+  sense dependre del motor JSX, que encara no hi és) i el **fusiona** damunt d'una còpia dels
+  defaults (`Logic.Rutas.mergeProfile`: els arrays es reemplacen sencers, els defaults no es
+  muten → recarregar N voltes no acumula res).
+- Recàrrega en desar: `setup.html` ja feia `dispatchEvent('FASTPASS_CONFIG_UPDATED')`;
+  `Config` escolta l'event i torna a llegir el perfil (efecte immediat, sense reiniciar CEP).
+- `Config.applyProfile(obj)` / `loadProfile()` / `profilePath()` / `profileStatus()` per a
+  proves i diagnòstic.
+
+### Fet (2026-10-21)
+
+| Peça | Fitxer | Què fa |
+|---|---|---|
+| Resolutor PUR | `js/logic/20_Rutas_Logic.js` | `resolve` (producció, sense `{token}`), `resolveDetailed` (diu què falta), `normalize`, `join`, `fechaOf`, `tokensIn`, `mergeProfile`, `normalizeRutas` |
+| Config | `js/core/11_Configuracio.js` | càrrega + fusió del perfil, recàrrega per event, `resolvePath`/`applyProfile`, `rutas.*` noves a `get()` |
+| Esquema | `Profile.json` | `projectes`, `escaletes`, `escaletes_domini`, `grafismos`, `subtitulos`, `subtitulosSinteticos` (i `escaletaId` de MATINS, que el perfil no portava) |
+| Finestra | `setup.html` | 10 camps de ruta amb 🧪 «Prova» (resol + `cep.fs.stat`/`readdir`), targeta «Variables de Ruta» amb PROVA de plantilla; desa TOTS els `path-*` |
+| Consumidors | `escaleta_config.js`, `srt_editor.js`, `flow_mapa.js` | `ESCALETES_PATH`/`DOMAIN` són *getters* de la config; `_srt15MinDir()` i `_grafRoot()` lliguen la ruta en cada ús |
+| Guardes | `bin/check_rutas.ps1`, `bin/smoke/fp_probe_rutas.js` | cap literal UNC dins de cadenes a `js/` ni `jsx/` (fora dels defaults) + 26 assercions (resolutor, fusió, fitxers reals) |
+
+**Derivació per a perfils vells**: si `Profile.json` no porta les claus noves,
+`normalizeRutas` les deriva de `vertical` (`ESCALETES`, `ZZZ_GRAFISME`,
+`SRT_MP4_PER_TEMPS_15MINUTS`, `…\SINTETICS`) i `projectes` de `destino_base` (i al revés).
+Les rutes que JA portaven separador final el **conserven**: mig codi concatena amb `+` sense
+posar-ne (`${rutas.conductors}${fitxer}`, `rutas.destinoBase + progDir`). Els DEFAULTS també es
+normalitzen: si `Profile.json` no es pot llegir (absència, JSON trencat, permisos), les rutes
+derivades existeixen igualment i el panell no es queda sense escaletes/grafismes/subtítols.
 
 ---
 

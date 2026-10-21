@@ -24,7 +24,9 @@
     var W = window.FASTPASS_UI.Workflows = window.FASTPASS_UI.Workflows || {};
 
     // ── Configuració ──────────────────────────────────────────────────────
-    var GRAF_ROOT = '\\\\public.ad-ccrtv.local\\Public\\VERTICALITZACIO_INFORMATIUS\\ZZZ_GRAFISME';
+    // (F2 · 2026-10-21) La carpeta arrel dels grafismes del dia JA NO es una
+    // constant: ve de `Profile.json` -> rutas.grafismos (setup.html). Es llig en
+    // cada us perque un canvi de configuracio s'aplique sense reiniciar.
     var GRAF_BIN = 'GRAF';
     // (2026-09-22) Mapa FINAL de pistes: GRAF/grafismes = fondos = V3 (v_graf/v_graficos),
     // congelat del tema-títol = V6 (v_tema). Es resolen des de la CONFIG a _flow()
@@ -46,6 +48,19 @@
     function callJSX(script) { return U().callJSX(script); }
     function getClipsLogic() { return window.FASTPASS_UI.Logic.Clips; }
     function stripExt(name) { return String(name || '').replace(/\.[^.]+$/, ''); }
+
+    /**
+     * _grafRoot (F2): carpeta arrel dels grafismes del dia, de la configuracio.
+     * '' si l'usuari encara no l'ha configurada (els qui la usen avisen i surten).
+     */
+    function _grafRoot() {
+        try {
+            var cfg = window.FASTPASS_UI.Config && window.FASTPASS_UI.Config.get();
+            var p = (cfg && cfg.rutas && cfg.rutas.grafismos) ? cfg.rutas.grafismos : '';
+            // Sense separador final: davall s'hi concatena '\\' + dia.
+            return String(p).replace(/[\\/]+$/, '');
+        } catch (e) { return ''; }
+    }
 
     W.Mapa = {
 
@@ -371,7 +386,12 @@
             var day = parseInt(m[3], 10);
             var month = parseInt(m[2], 10);
             if (day < 1 || day > 31 || month < 1 || month > 12) return null;
-            return GRAF_ROOT + '\\' + day + ' ' + MESOS[month - 1];
+            var root = _grafRoot();
+            if (!root) {
+                L('⚠️ [MAPA] Falta la ruta de GRAFISMES a la configuracio (Config Gral → Grafismes)', 'WARN');
+                return null;
+            }
+            return root + '\\' + day + ' ' + MESOS[month - 1];
         },
 
         // ═══════════════════════════════════════════════════════════════

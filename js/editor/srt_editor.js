@@ -510,7 +510,12 @@
                 if (!programa) { u.status("Programa no suportat per emergència", "warn"); return; }
                 const fecha = (dateDir || '').replace(/_/g, '-');
                 const prefix = fecha + '_Telenot_cies_' + programa + '_';
-                const dir = '\\\\public.ad-ccrtv.local\\Public\\VERTICALITZACIO_INFORMATIUS\\SRT_MP4_PER_TEMPS_15MINUTS';
+                const dir = this._srt15MinDir();
+                if (!dir) {
+                    u.status("Falta la ruta dels SRT de 15 min (Configuracio → Subtitols)", "warn");
+                    log("SRT_EMERGENCIA: ruta 'rutas.subtitulos' buida a la configuracio");
+                    return;
+                }
 
                 // 4. Llistar i seleccionar els arxius que solapen la finestra del bloc
                 const files = await u.readFolder(dir);
@@ -608,6 +613,21 @@
             const endSec = h2 * 3600 + mi2 * 60 + s2;
             if (endSec <= startSec) return null;
             return { startSec: startSec, endSec: endSec };
+        },
+
+        /**
+         * _srt15MinDir (F2): carpeta dels SRT de 15 min, de la CONFIGURACIO.
+         * ABANS era un literal UNC aci dins. Es llig en cada us perque un canvi a
+         * la finestra de configuracio s'aplique sense reiniciar el panell.
+         * @returns {string} '' si l'usuari encara no l'ha configurada.
+         */
+        _srt15MinDir: function () {
+            try {
+                const cfg = window.FASTPASS_UI.Config.get();
+                const p = (cfg && cfg.rutas && cfg.rutas.subtitulos) ? cfg.rutas.subtitulos : '';
+                // Sense separador final: davall s'hi concatena '\\' + nom del fitxer.
+                return String(p).replace(/[\\/]+$/, '');
+            } catch (e) { return ''; }
         },
 
         _showEditor: function () {
