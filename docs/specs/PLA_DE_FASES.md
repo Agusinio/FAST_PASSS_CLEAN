@@ -130,7 +130,7 @@ d'acceptació era impossible. S'ha resolt amb:
 | Esquema | `Profile.json` | `projectes`, `escaletes`, `escaletes_domini`, `grafismos`, `subtitulos`, `subtitulosSinteticos` (i `escaletaId` de MATINS, que el perfil no portava) |
 | Finestra | `setup.html` | 10 camps de ruta amb 🧪 «Prova» (resol + `cep.fs.stat`/`readdir`), targeta «Variables de Ruta» amb PROVA de plantilla; desa TOTS els `path-*` |
 | Consumidors | `escaleta_config.js`, `srt_editor.js`, `flow_mapa.js` | `ESCALETES_PATH`/`DOMAIN` són *getters* de la config; `_srt15MinDir()` i `_grafRoot()` lliguen la ruta en cada ús |
-| Guardes | `bin/check_rutas.ps1`, `bin/smoke/fp_probe_rutas.js` | cap literal UNC dins de cadenes a `js/` ni `jsx/` (fora dels defaults) + 26 assercions (resolutor, fusió, fitxers reals) |
+| Guardes | `bin/check_rutas.ps1`, `bin/smoke/fp_probe_rutas.js` | cap literal UNC dins de cadenes a `js/` ni `jsx/` (fora dels defaults) + 27 assercions (resolutor, fusió, fitxers reals) |
 
 **Derivació per a perfils vells**: si `Profile.json` no porta les claus noves,
 `normalizeRutas` les deriva de `vertical` (`ESCALETES`, `ZZZ_GRAFISME`,
