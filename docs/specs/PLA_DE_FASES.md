@@ -1,0 +1,213 @@
+# Pla de feines per fases — FAST >>> PASS
+
+Data: **2026-10-21** · origen: sessió de proves amb usuaris reals
+Abast: 4 punts reportats per l'usuari. Cada fase es tanca amb validació (smoke + Premiere) i
+entrada a `docs/BUGS_FIXED.md` / `docs/CHANGELOG.md`.
+
+| Fase | Tema | Estat |
+|------|------|-------|
+| **F0** | Portada (#174): el PNG ha de ser EXACTAMENT el frame triat | implementada · **pendent validació a Premiere** |
+| **F1** | RESET GENERAL: esborrat ABSOLUT de la carpeta del projecte (#175) | implementada · pendent validació a Premiere |
+| **F2** | Pantalla de CONFIG: rutes i variables definides per l'usuari | pendent |
+| **F3** | Editor de SUBTÍTOLS: seleccionar/esborrar clips + importar sintètics (Ctrl) + reomplir buits | pendent |
+| **F4** | MARKERS: anàlisi completa de la mecànica + snapshots de posicions + fi dels TC amuntegats | pendent (document primer) |
+
+---
+
+## F0 · PORTADA: el frame triat no es mou (BUG #174)
+
+**Fet:** `js/logic/18_Portada_Window.js` (`PortadaWindow.plan` / `frameError`), `flow_render.js`
+usa el pla (s'escurça la CUA de la finestra, mai el frame), `9_Render.jsx` llig el timebase REAL
+de la seqüència per construir el timecode de QE. Guarnició: part E de `fp_probe_portada.js`.
+
+**Pendent (manual, a Premiere):**
+1. Recarregar el panell (cache-busts de `flow_render.js` i `18_Portada_Window.js`).
+2. Frame **a prop del final** d'un clip llarg → exportar portada → el PNG ha de ser el frame
+   triat; al log: `finestra X.XXs (pre 0,08 + cua Y.YY)` amb la cua escurçada.
+3. Frame **lluny del final** → comportament idèntic a l'anterior (#160).
+4. Seqüència **no-25 fps** (23,976 / 24 / 29,97 / 50 / 59,94) → el frame exportat és el triat.
+
+---
+
+## F1 · RESET GENERAL: esborrat absolut (#175) — FET EN AQUESTA FASE
+
+**Problema:** el RESET deixava fitxers dins la carpeta del projecte i el flux NOU treballava
+sobre material vell.
+
+**Causa:** `fs.rmSync({recursive:true,force:true})` s'atura al primer error (a Windows: `.prproj`
+i `Adobe Premiere Pro Auto-Save` encara oberts → EPERM) i deixa l'arbre MIG esborrat; a més
+`runReset` només avisava i **continuava** creant el projecte. Fora de la carpeta sobrevivien les
+còpies de marcadors SRT de `C:/temp` (mateix `projectKey` → es podien restaurar al projecte nou).
+
+**Solució implementada:**
+- `js/logic/19_Fs_Wipe.js` (NOU, pur): esborrat entrada per entrada, `chmod` per als fitxers de
+  només lectura, reintents (4) i **verificació final**; informe `{ok, attempts, files, dirs,
+  failed[], leftovers[], reason}`.
+- `js/core/utils.js`: `wipeFolder()` (async, verificat) + `isInsideFolder()`; `deleteFolder`
+  reescrit sobre el mateix motor (sense `rmSync`).
+- `js/workflows/flow_mainButton.js` (`runReset`): guarda de carpeta (dins `rutas.destinoBase` i
+  últim tram = bloc), espera de 700 ms després de `Project.close()`, `wipeFolder` i **avortament**
+  si `!wipe.ok` (no es crida `_runNew()` sobre restes) + `SrtEditor.wipeMarkersForProject()`.
+- `js/editor/srt_editor.js`: `wipeMarkersForProject(folder)` buida les còpies de `C:/temp` del
+  projecte.
+- Guarnició: `bin/smoke/fp_probe_reset.js` (20 assercions, disc simulat).
+
+
+**Pendent (manual, a Premiere):** RESET amb el projecte obert (ha d'esborrar tot i recrear) i
+RESET amb el projecte tancat; al log ha de sortir `Carpeta esborrada del tot: ... (N fitxers,
+M carpetes, intent 1)` i, si queda alguna resta, `Esborrat INCOMPLET` + la llista.
+
+---
+
+## F2 · PANTALLA DE CONFIG: rutes i variables d'usuari
+
+**Objectiu:** que CAP ruta de treball viva al codi. Tot definit per l'usuari a la finestra de
+configuració i consumit per una única API (`Config.get().rutas` + un resolutor de variables).
+
+### Estat actual (mesurat)
+- `Profile.json` (arrel de l'extensió) → `rutas`: `nas_informatius`, `plantilla`, `vertical`,
+  `chyrons`, `conductors`, `destino_base`, `portadas`, `render1`, `render2`; `estructuras`
+  (pistes + programes).
+- `setup.html` ja edita aquestes rutes amb els camps `path-plantilla`, `path-vertical`,
+  `path-chyrons`, `path-conductors`, `path-destino_base`, `path-render1`, `path-render2`,
+  `path-portadas`.
+- `js/core/11_Configuracio.js` mapeja `rutas.*` → noms interns (`plantilla_net`,
+  `verticalitzacio`, `chyrons`, `conductors`, `destinoBase`, `portadas`, `render1`, `render2`).
+
+### Rutes que demana l'usuari i forat actual
+| Ruta demanada | Clau actual | Forat |
+|---|---|---|
+| Projectes | `destino_base` | ja hi és (cal aclarir el nom a la UI) |
+| Chyrons | `chyrons` | ok |
+| Subtítols | — | **hardcoded** a `srt_editor.js` (`SRT_MP4_PER_TEMPS_15MINUTS`) |
+| Subtítols sintètics | — | **no existeix** (ni clau, ni carpeta, ni codi) |
+| Grafismes | — | **hardcoded** a `flow_mapa.js` (`GRAF_ROOT` = `ZZZ_GRAFISME`) |
+| Render1 | `render1` | ok |
+| Render2 | `render2` | ok |
+| Portades | `portadas` | ok |
+
+Altres rutes fixades al codi que haurien de derivar de les anteriors:
+`escaleta_config.js` (`ESCALETES_PATH`, que hauria de ser `vertical` + `ESCALETES`).
+
+### Pla
+1. **Esquema**: `rutas.projectes` (àlies de `destino_base`), `rutas.subtitulos`,
+   `rutas.subtitulosSinteticos`, `rutas.grafismos`. Migració suau: si falten, es deriven dels
+   valors actuals (compatibilitat amb els `Profile.json` ja desplegats).
+2. **Variables d'usuari**: tokens `{autor}`, `{prog}`, `{archivo}`, `{wott}`, `{bloque}`,
+   `{fecha}` (YYYY_MM_DD), `{tema}`, `{base}`. Nou `Config.resolvePath(tpl, ctx)` (pur,
+   testable) aplicat a TOTES les rutes de sortida (projecte, renders, portada, grafismes,
+   subtítols).
+3. **Finestra de config** (`setup.html`): camps per a les 8 rutes + ajuda de variables + botó
+   «Prova» que resol la ruta amb un ctx d'exemple i diu si existeix.
+4. **Consumidors**: `flow_mapa.js` (`GRAF_ROOT`), `srt_editor.js` (subtítols), `flow_render.js`
+   (portada/renders) i `escaleta_config.js` (escaletes) passen a llegir de `Config.get().rutas`.
+5. **Guarda nova**: prova que cap fitxer de `js/` continga el prefix UNC dels servidors coneguts
+   (`DSMEDIA07`, `192.168`, `public.ad-ccrtv`, `svftpccma`, `nas1.ad-ccrtv`) fora de
+   `11_Configuracio.js` (defaults) i de les línies de comentari.
+
+---
+
+**Criteri d'acceptació:** canviar qualsevol de les 8 rutes a `setup.html` → reiniciar el panell →
+el projecte, els renders, la portada, els grafismes i els subtítols es creen/lligen de la ruta
+nova, sense tocar cap fitxer `.js`.
+
+---
+
+## F3 · EDITOR DE SUBTÍTOLS: selecció/esborrat + sintètics + reomplir buits
+
+### Estat actual
+- `js/editor/srt_editor.js`: taula d'entrades, canvas amb wave/marcadors, previsualització,
+  exportació a Premiere (`exportToPremiere` → pistes `tracks.subtitle.s1/s2`).
+- Botons a `index.html` (`#secSubtitols`): `btnSrtLoad` (⬇️ CARREGAR), `btnSrtExport` (💾),
+  `btnSrtReset` (♻️), `btnSrtIn` / `btnSrtOut`.
+- **No hi ha** cap ruta ni cap codi de subtítols sintètics.
+
+### F3.1 · Seleccionar i esborrar un clip de subtítol
+1. Estat de selecció únic a l'editor (`_selIndex`) alimentat per: clic a la fila de la taula i
+   clic al clip del canvas (ressaltat visual).
+2. Esborrar amb `Supr`/`Backspace` i amb un botó 🗑 de la secció SUBTÍTOLS. Dos abasts:
+   - **Taula** (el SRT carregat): treu l'entrada → no s'exportarà.
+   - **Timeline** (clips ja inserits): nou àtom JSX `Srt.removeAt(tc, trackKey)` que esborra el
+     clip de subtítol que cau en eixe TC (mai altres pistes).
+3. Confirmació si l'entrada ja està exportada + log del que s'ha tret; mai es toca el `.srt`
+   original del NAS (l'editor treballa sobre la còpia del projecte).
+
+### F3.2 · Ctrl+clic a CARREGAR = importar els SINTÈTICS
+1. Ruta nova `rutas.subtitulosSinteticos` (F2).
+2. `btnSrtLoad` amb `ctrlKey` → `Workflow.Srt.runSrtLoadSynthetic()`: busca
+   `{archivo}_{bloque}_*` del dia de treball (mateix patró que els normals) i el carrega a
+   l'editor amb marca `SINT` (color propi) i estat separat del SRT normal.
+3. Es pot exportar a una altra pista (`s2`) per tenir-los al costat sense barrejar-los:
+   `exportToPremiere({ track: 's2' })`.
+4. `Ctrl+clic` a RESET (♻️) continua reiniciant com ara; el reset del SINT és explícit.
+
+### F3.3 · Reomplir buits (opcions, de menys a més automàtic)
+- **Opció A (simple, recomanada per començar):** carregar els SINT i exportar-los a S2; l'operador
+  col·loca a mà els que falten. Cap barreja automàtica, risc zero.
+- **Opció B (automàtica):** detectar BUITS del SRT normal (cap entrada dins d'una finestra on el
+  SINT sí que en té) i inserir NOMÉS les entrades sintètiques que cauen dins del buit, amb
+  tolerància (`srtSyntheticGapTolSec`, per defecte 0,2 s). Resultat = SRT fusionat marcat `MOD`
+  (mai se sobreescriu l'original) + log de les entrades afegides.
+- Criteris: no duplicar intervals, no tocar entrades existents, mateix eix de temps que el SRT
+  normal (`_axisOrigin`).
+
+**Criteri d'acceptació:** esborrar un clip de la taula i un altre del timeline; importar SINT amb
+Ctrl i exportar-los a S2; fusionar un buit amb l'opció B i comprovar al timeline que no hi ha ni
+solapaments ni entrades duplicades.
+
+---
+
+## F4 · MARKERS: anàlisi, snapshots i TC amuntegats
+
+**Per què primer un document:** els marcadors són la peça central (tot en depèn). Abans de tocar
+codi s'escriu `docs/specs/MARKERS_OPERATIVA.md` amb la mecànica COMPLETA i la de cada botó.
+
+### Abast de l'anàlisi
+- Pipeline OUT & GO (`main.js`): fases OUT → TROSSEJA → MARCADORS (`flow_cut.js`,
+  `flow_markers.js`) i què deixa cada una a la seqüència.
+- `flow_markers.js`: `_setupEstructural`, `_classifyItems`, `_calcTemporalAnchors`,
+  `_correlationSnap`, `_imantAlCorte`, `_asignarAnclasPorDuracion`, `_preAssignDeducedToBreaks`,
+  `_chooseSnapTarget` (quan un marcador s'imanta a un tall o a un silenci).
+- COL·LOCAR / REPARTIR (`flow_chyrons.js`): quan es creen marcadors addicionals, quins es mouen i
+  quins no.
+- Manifest: `AnalysisCenter.writeMarkers` + `manifest.markers.list` (font de veritat) i els
+  derivats `MARCADORS_*.txt/.json`.
+- Colors i famílies (`docs/specs/MARKER_COLORS*`).
+
+### Snapshot de posicions (eina de diagnòstic)
+- Ja existeix `Markers.dumpMarkersSnapshot()` i `main.js` la crida **al final d'OUT & GO**
+  (`MARCADORS_<data>_<hora>.txt` + `.json` a la carpeta del projecte).
+- **Falta**: cridar-la al **principi de COL·LOCAR** (abans que el flux toque res) i ampliar-la amb
+  etiqueta: `dumpMarkersSnapshot({ tag: 'pre-chyrons' })` → `MARCADORS_<stamp>_<tag>.json`
+  (`out-go`, `pre-chyrons`, `post-chyrons`). Així es pot comparar «com els deixa l'usuari» amb
+  «com els deixa el procés».
+- Eina nova `bin/compare_markers.ps1`: llig tots els `MARCADORS_*` d'un projecte i llista
+  (a) TC duplicats (±1 frame), (b) marcadors que han canviat de posició, (c) marcadors afegits i
+  (d) colors canviats.
+
+### Regla dura
+**Dos marcadors al mateix TC (o a menys de 1 frame) és un ERROR.** La deduplicació ha de ser
+ABANS de crear el marcador (funció única `_canPlaceAt(tc)`), no una neteja posterior: netejar
+després deixa el manifest i el log inconsistents i pot trencar l'ancoratge dels chyrons.
+
+### Mètode
+1. Obrir els projectes del dia anterior (ja creats) i desar els snapshots.
+2. Comparar amb `bin/compare_markers.ps1` + `bin/analyze_prproj_*.py`.
+3. Anotar cada cas real amb TC, ítem i botó que l'ha creat.
+4. Només després: correccions, una per una, amb prova que reproduïsca el cas.
+
+---
+
+## Ordre d'execució
+1. **F0/F1** — validació manual a Premiere (portada i reset).
+2. **F2** — config (base per a F3.2: la carpeta de sintètics).
+3. **F3** — subtítols (A i després B).
+4. **F4** — document d'anàlisi → snapshots → deduplicació.
+
+## Convencions de tancament (cada fase)
+- `.js` / `.jsx`: sense accents al codi (només a les cadenes d'usuari), com la resta del repo.
+- Cache-bust a `index.html` per a cada fitxer tocat.
+- `bin/smoke/fp_smoke_build.ps1` (PASS/FAIL), `bin/check_js_v8.ps1` (60/60), `bin/check_dead.ps1`
+  (0 orfes) en verd abans de commitar.
+- Entrada a `docs/BUGS_FIXED.md` (SIMPTOMA / CAUSA ARREL / SOLUCIO / FITXERS / VALIDACIO) i a
+  `docs/CHANGELOG.md`.

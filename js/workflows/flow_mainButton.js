@@ -79,15 +79,22 @@
         },
 
         /**
-         * runReset: (2026-10-07) RESET GENERAL de la selecció actual.
+         * runReset: (2026-10-07, revisat 2026-10-21) RESET GENERAL del bloc seleccionat.
          * Des de la cantonada superior esquerra (sobre INICI, a l'esquerra del
-         * semàfor ESC) fa, en ordre:
-         *   1) Tanca el projecte del bloc seleccionat si està obert a Premiere.
-         *   2) Esborra la carpeta sencera del bloc (<base><prog>_PROJECTES/<data>/<V*>)
-         *      → projecte, escaleta local, MP4, manifest, snapshots, anàlisi, logs...
-         *   3) Reinicia la sessió (State.reset preservant HOY/AHIR) i torna a crear
+         * semafor ESC) fa, en ordre:
+         *   1) Tanca el projecte del bloc seleccionat si esta obert a Premiere i
+         *      espera que Windows allibere el .prproj i l'Auto-Save.
+         *   2) ESBORRA ABSOLUTAMENT la carpeta del bloc
+         *      (<base><prog>_PROJECTES/<data>/<V*>): projecte, escaleta local,
+         *      MP4, manifest, snapshots, analisi, subtitols, marcadors, logs...
+         *      (2026-10-21) Amb VERIFICACIO: si en queda alguna resta NO es crea
+         *      res i s'avisa l'usuari. Abans s'avisava i es continuava, i el flux
+         *      NOU treballava sobre material vell (mes problemes que solucions).
+         *   3) Buida tambe les copies de marcadors de subtitols que viuen FORA de
+         *      la carpeta (respatller C:/temp de l'editor SRT): sobreviuen a
+         *      l'esborrat i es podrien re-injectar al projecte nou.
+         *   4) Reinicia la sessio (State.reset preservant HOY/AHIR) i torna a crear
          *      el projecte de zero (flux NOU).
-         * Pensat perquè l'usuari comenci de nou sense anar a mà al NAS.
          */
         runReset: async function () {
             log('♻️ [RESET] Petició de reset general del bloc seleccionat');
@@ -112,6 +119,21 @@
                 if (!folder) {
                     log("⚠️ [RESET] No s'ha pogut resoldre la carpeta del bloc.", 'WARN');
                     getUtils().status('RESET: no es pot resoldre la carpeta del bloc.', 'error');
+                    return;
+                }
+
+                // ── GUARDA DE SEGURETAT (2026-10-21) ──────────────────────────────
+                // El RESET esborra una CARPETA SENCERA: nomes pot ser la del BLOC
+                // (<base>/<programa>/<data>/<Vn>). Si la ruta calculada no es dins
+                // de la base de projectes o l'ultim tram no es el bloc seleccionat,
+                // s'avorta: mai s'ha d'esborrar una carpeta de data o de programa.
+                const baseProj = (config.rutas && config.rutas.destinoBase) || '';
+                const lastSeg = String(folder).replace(/[\\/]+$/, '').split(/[\\/]/).pop().toUpperCase();
+                const blocSeg = String(bloque || '').toUpperCase().replace(/\s+/g, '');
+                if (!blocSeg || lastSeg !== blocSeg || !getUtils().isInsideFolder(folder, baseProj)) {
+                    log('⛔ [RESET] Carpeta NO valida per esborrar: ' + folder +
+                        ' (base="' + baseProj + '" · bloc="' + bloque + '")', 'ERROR');
+                    getUtils().status('RESET avortat: la carpeta no és la del bloc dins la base de projectes.', 'error');
                     return;
                 }
                 const progNom = (progData && (progData.archivo || progData.nombre)) || idProg;
@@ -145,11 +167,41 @@
                     log('⚠️ [RESET] Error tancant el projecte: ' + eClose.message, 'WARN');
                 }
 
-                // ── 2. ESBORRAR la carpeta sencera del bloc ──
-                if (getUtils().deleteFolder(folder)) {
-                    log('🗑️ [RESET] Carpeta esborrada: ' + folder);
-                } else {
-                    log("⚠️ [RESET] No s'ha pogut esborrar del tot la carpeta: " + folder, 'WARN');
+                // Premiere allibera els handles una mica DESPRES de tancar: sense
+                // aquesta espera el primer intent xoca amb EPERM/EBUSY i deixa restes.
+                await getUtils().delay(700);
+
+                // ── 2. ESBORRAT ABSOLUT + VERIFICACIO ──────────────────────────
+                const wipe = await getUtils().wipeFolder(folder);
+                if (!wipe.ok) {
+                    log('⛔ [RESET] Esborrat INCOMPLET: NO es crea cap projecte sobre les restes.', 'ERROR');
+                    for (let i = 0; i < wipe.leftovers.length && i < 20; i++) {
+                        log('   · resta: ' + wipe.leftovers[i], 'ERROR');
+                    }
+                    if (wipe.failed && wipe.failed.length) {
+                        for (let j = 0; j < wipe.failed.length && j < 20; j++) {
+                            log('   · error: ' + wipe.failed[j].path + ' [' + wipe.failed[j].code + ']', 'ERROR');
+                        }
+                    }
+                    getUtils().status("RESET: no s'ha pogut esborrar tot (" + wipe.leftovers.length +
+                        ' restes). Tanca Premiere i torna-ho a provar.', 'error');
+                    return;
+                }
+                log('🗑️ [RESET] Carpeta esborrada del tot: ' + folder +
+                    ' (' + wipe.files + ' fitxers, ' + wipe.dirs + ' carpetes, intent ' + wipe.attempts + ')');
+
+                // ── 2b. RESTES FORA DE LA CARPETA (marcadors SRT a C:/temp) ────
+                // Les copies de marcadors de C:/temp NO s'esborren amb la carpeta i
+                // la restauracio nomes comprova projectKey + nom + empremta: podrien
+                // re-injectar marques velles al projecte nou.
+                try {
+                    const ed = window.SrtEditor;
+                    if (ed && typeof ed.wipeMarkersForProject === 'function') {
+                        const nBk = ed.wipeMarkersForProject(folder);
+                        log('🧹 [RESET] Copies de marcadors de subtitols fora del projecte buidades: ' + nBk, 'INFO');
+                    }
+                } catch (eBk) {
+                    log("⚠️ [RESET] No s'han pogut buidar les copies de marcadors: " + eBk.message, 'WARN');
                 }
 
                 // ── 3. REINICIAR sessió (preservant el mode HOY/AHIR) i crear de zero ──

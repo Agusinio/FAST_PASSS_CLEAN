@@ -1166,6 +1166,20 @@ Ordre cronologic pel numero d incident. 105 entrades.
 
 **NOTA**: Regla per al futur: cap càlcul de la portada pot canviar el frame triat per l'usuari. Si falta material, s'escurça la FINESTRA (o s'avisa), mai el frame: un PNG «bonic» d'un altre moment és pitjor que un PNG correcte amb menys cua.
 
+### #175 - resolt (2026-10-21)
+
+**SIMPTOMA**: El botó RESET GENERAL (🔄 d'INICI) no deixava la carpeta del projecte completament buida: hi quedaven fitxers (projecte `.prproj`, escaleta local, manifest...) i el flux NOU que arrenca tot seguit treballava sobre material vell; segons l'usuari, «genera més problemes que solucions».
+
+**CAUSA ARREL**: (1) `utils.deleteFolder` feia `fs.rmSync(dir,{recursive:true,force:true})`, que S'ATURA al primer error: a Windows n'hi ha prou que Premiere tinga el `.prproj` o la carpeta `Adobe Premiere Pro Auto-Save` oberts (encara que `Project.close()` haja tornat) perquè l'esborrat done EPERM i deixe l'arbre MIG esborrat. (2) `runReset` només AVISAVA quan l'esborrat fallava (`log WARN`) i CONTINUAVA: creava el projecte NOU sobre les restes. (3) Fora de la carpeta sobrevivien les còpies de marcadors de subtítols de `C:/temp` (`fastpass_srt_markers_<srt>.json`): `_restoreMarkers` només comprova `projectKey` + nom + empremta, i el `projectKey` és exactament la mateixa carpeta → les marques velles es podien re-injectar al projecte nou.
+
+**SOLUCIO**: (1) Mòdul NOU i PUR `js/logic/19_Fs_Wipe.js` (`FASTPASS_UI.Logic.FsWipe`): esborrat ENTRADA per ENTRADA (`readdirSync`/`lstatSync`/`unlinkSync`/`rmdirSync`) tolerant errors —un fitxer bloquejat no atura la resta—, els fitxers de NOMÉS LECTURA es desbloquegen amb `chmodSync` i es reintenten, i `wipe()` reintenta l'arbre fins a 4 vegades (Premiere allibera els handles un instant després de tancar) amb `exists()` tolerant (un `existsSync` fals no es pren per bo si `readdirSync` diu que hi és); retorna un informe `{ok, attempts, files, dirs, failed[], leftovers[], reason}` i `ok` només és cert si la carpeta ja no hi és o està BUIDA (una lectura fallida mai és un èxit). (2) `js/core/utils.js`: nou `wipeFolder(path)` (async, verifica i informa) + `isInsideFolder(child, base)` (guarda de contenció); `deleteFolder` es reescriu sobre el mateix motor (ja no usa `rmSync`). (3) `js/workflows/flow_mainButton.js` (`runReset`): guarda de SEGURETAT (el camí ha de ser DINS de `rutas.destinoBase` i l'últim tram ha de ser el BLOC seleccionat → mai una carpeta de data o de programa), espera de 700 ms després de `Project.close()`, `wipeFolder`, i si `!wipe.ok` AVORTA (llista les restes i els codis d'error) sense cridar `_runNew()`; tot seguit `SrtEditor.wipeMarkersForProject(folder)` buida les còpies de marcadors de fora la carpeta. (4) `js/editor/srt_editor.js`: nou `wipeMarkersForProject(projectFolder)` (llista `C:/temp`, llig cada `fastpass_srt_markers_*.json` i buida els que tenen el mateix `projectKey`). (5) `index.html`: `19_Fs_Wipe.js?v=1`, `utils.js?v=26`, `flow_mainButton.js?v=33`, `srt_editor.js?v=76` + títol del botó actualitzat. (6) GUARDA NOVA: `bin/smoke/fp_probe_reset.js` (20 assercions: arbre de bloc real amb Auto-Save/Snapshots/anàlisi, fitxer de només lectura, fitxer bloquejat, lock transitori, casos límit i 8 guardes estàtiques) i el mòdul afegit al bundle de `bin/smoke/fp_smoke_build.ps1`.
+
+**FITXERS**: `js/logic/19_Fs_Wipe.js` (nou), `js/core/utils.js`, `js/workflows/flow_mainButton.js`, `js/editor/srt_editor.js`, `index.html`, `bin/smoke/fp_smoke_build.ps1`, `bin/smoke/fp_probe_reset.js` (nou), `docs/BUGS_FIXED.md`, `docs/CHANGELOG.md`, `docs/specs/PLA_DE_FASES.md` (nou)
+
+**VALIDACIO**: `bin/smoke/fp_smoke_build.ps1` → **PASS 254 FAIL 0** (fase 20-reset) · `bin/check_js_v8.ps1` → 60/60 OK · `bin/check_dead.ps1` → 0 orfes · pendent el test a Premiere (cal RECARREGAR el panell: `utils.js`, `flow_mainButton.js` i `srt_editor.js` tenen cache-bust nou).
+
+**NOTA**: El RESET no pot ser mai «best effort»: si queda una resta, el flux NOU es converteix en font de problemes. Millor aturar-se i avisar que crear sobre material vell.
+
 ## 3. Bugs en curs / pendents
 
 

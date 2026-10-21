@@ -1939,6 +1939,51 @@
             }
         },
 
+        /**
+         * wipeMarkersForProject: BUIDA les copies de marcadors de TOTS els .SRT
+         * d'un projecte que viuen FORA de la carpeta del projecte.
+         *
+         * (2026-10-21) El RESET GENERAL esborra la carpeta del bloc, pero
+         * l'editor SRT desa una COPIA de seguretat a `C:/temp`
+         * (`fastpass_srt_markers_<srt>.json`) quan la carpeta del projecte no es
+         * pot escriure. Aqueixa copia sobreviu a l'esborrat i `_restoreMarkers`
+         * la pot re-injectar al projecte nou: nomes comprova projectKey + nom +
+         * empremta, i el projectKey es exactament la MATEIXA carpeta. Aqui es
+         * buiden totes les copies el projectKey de les quals siga la carpeta
+         * indicada, abans que el flux NOU torne a carregar cap .srt.
+         * @param {string} projectFolder - Carpeta del projecte (la que s'esborra)
+         * @returns {number} Nombre de fitxers de marcadors buidats
+         */
+        wipeMarkersForProject: function (projectFolder) {
+            var n = 0;
+            try {
+                var key = String(projectFolder || '').replace(/\//g, '\\').replace(/\\+$/, '').toLowerCase();
+                if (!key) return 0;
+                var fs = window.cep && window.cep.fs;
+                if (!fs || typeof fs.readdir !== 'function') return 0;
+                var ls = fs.readdir('C:/temp');
+                if (!ls || ls.err !== 0 || !ls.data) return 0;
+                for (var i = 0; i < ls.data.length; i++) {
+                    var nm = String(ls.data[i] || '');
+                    if (nm.indexOf('fastpass_srt_markers_') !== 0) continue;
+                    var full = 'C:/temp/' + nm;
+                    var rd = null;
+                    try { rd = fs.readFile(full); } catch (eR) { rd = null; }
+                    if (!rd || rd.err !== 0 || !rd.data) continue;
+                    var parsed = null;
+                    try { parsed = JSON.parse(rd.data); } catch (eP) { parsed = null; }
+                    if (!parsed || !parsed.projectKey) continue;
+                    var pk = String(parsed.projectKey).replace(/\//g, '\\').replace(/\\+$/, '').toLowerCase();
+                    if (pk !== key) continue;
+                    try { fs.writeFile(full, ''); n++; } catch (eW) { }
+                }
+                log("SRT_EDIT: copies de marcadors de C:/temp buidades per al projecte: " + n);
+            } catch (e) {
+                log("SRT_EDIT: error buidant els marcadors del projecte: " + e.message);
+            }
+            return n;
+        },
+
         _persistMarkers: function () {
             try {
                 try { window.cep.fs.makedir("C:/temp"); } catch (e1) { }

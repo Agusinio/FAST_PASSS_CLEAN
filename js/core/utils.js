@@ -1204,35 +1204,109 @@
         },
 
         /**
+         * _fsWipe: modul PUR d'esborrat d'arbres (js/logic/19_Fs_Wipe.js).
+         * @returns {Object|null} FsWipe o null si no s'ha carregat
+         */
+        _fsWipe: function() {
+            return (window.FASTPASS_UI && window.FASTPASS_UI.Logic && window.FASTPASS_UI.Logic.FsWipe) || null;
+        },
+
+        /**
+         * isInsideFolder: cert NOMES si `child` es DINS de `base` (mai igual ni germa).
+         * (2026-10-21 · RESET absolut) Guarda de seguretat ABANS d'esborrar: el
+         * RESET nomes pot tocar la carpeta del bloc, no la de la data, la del
+         * programa ni l'arrel de projectes.
+         * @param {string} child
+         * @param {string} base
+         * @returns {boolean}
+         */
+        isInsideFolder: function(child, base) {
+            var mod = this._fsWipe();
+            if (mod) return mod.isInside(child, base);
+            var c = String(child || '').replace(/\//g, '\\').replace(/\\+$/, '').toLowerCase();
+            var b = String(base || '').replace(/\//g, '\\').replace(/\\+$/, '').toLowerCase();
+            if (!c || !b || c === b) return false;
+            return c.indexOf(b + '\\') === 0;
+        },
+
+        /**
+         * wipeFolder: ESBORRAT ABSOLUT i VERIFICAT d'una carpeta (recursiu).
+         *
+         * (2026-10-21) Substitueix el vell `deleteFolder` per a operacions que NO
+         * poden deixar restes (RESET GENERAL). Diferencies:
+         *   · Esborra ENTRADA per ENTRADA tolerant errors (un fitxer bloquejat no
+         *     atura la resta) i reintenta l'arbre fins a 4 vegades: Premiere
+         *     allibera el .prproj i l'Auto-Save un instant despres de tancar.
+         *   · VERIFICA al final: `ok` nomes es true si la carpeta ja no hi es.
+         *   · Retorna un informe amb `leftovers` per poder avisar l'usuari i
+         *     AVORTAR en lloc de crear el projecte nou sobre les restes.
+         * @param {string} path - Carpeta a esborrar
+         * @param {Object} [opts] - {maxAttempts, waitMs, fs} (fs = doble de prova)
+         * @returns {Promise<{ok:boolean, path:string, attempts:number, removed:number,
+         *                    files:number, dirs:number, failed:Array, leftovers:string[],
+         *                    reason:string}>}
+         */
+        wipeFolder: async function(path, opts) {
+            var o = opts || {};
+            var fs = o.fs || this._nodeFs();
+            var mod = this._fsWipe();
+            var self = this;
+            if (!mod) {
+                this.log('❌ [FS] FsWipe no carregat (js/logic/19_Fs_Wipe.js): esborrat avortat', 'ERROR');
+                return { ok: false, path: String(path || ''), attempts: 0, removed: 0, files: 0, dirs: 0, failed: [], leftovers: [], reason: 'SENSE-MODUL' };
+            }
+            var rep = await mod.wipe(fs, path, {
+                maxAttempts: o.maxAttempts,
+                waitMs: o.waitMs,
+                delay: function(ms) { return self.delay(ms); }
+            });
+            if (rep.reason === 'SENSE-NODE') {
+                this.log('❌ [FS] Node fs no disponible: no es pot esborrar ' + rep.path, 'ERROR');
+                return rep;
+            }
+            if (rep.ok) {
+                if (rep.reason === 'ESBORRADA') {
+                    this.log('🗑️ [FS] Carpeta esborrada (' + rep.files + ' fitxers, ' + rep.dirs + ' carpetes; intent ' + rep.attempts + '): ' + rep.path, 'DEBUG');
+                }
+            } else if (rep.reason === 'RESTES') {
+                this.log("❌ [FS] NO s'ha pogut esborrar del tot (" + rep.attempts + ' intents, ' + rep.failed.length + ' errors): ' + rep.path, 'ERROR');
+                for (var i = 0; i < rep.leftovers.length && i < 20; i++) {
+                    this.log('   · resta: ' + rep.leftovers[i], 'ERROR');
+                }
+            }
+            return rep;
+        },
+
+        /**
          * deleteFolder: Esborra una carpeta sencera (recursiu) del NAS/local.
-         * (2026-10-07) Feature RESET: usa Node fs (rmSync/rmdirSync recursiu), l'única
-         * via robusta per esborrar arbres de directoris des de CEP (cep.fs no té rmdir).
-         * No llança: retorna false si no s'ha pogut (manca de Node, lock, xarxa...).
+         * (2026-10-07, revisat 2026-10-21) Usa el modul FsWipe: esborrat entrada
+         * per entrada, tolerant errors. Per a operacions que NO poden deixar
+         * restes cal usar `wipeFolder` (verifica i informa).
+         * No llança: retorna false si queda alguna resta (lock, xarxa...).
          * @param {string} path - Ruta completa de la carpeta a esborrar
          * @returns {boolean} true si s'ha esborrat (o ja no existia)
          */
         deleteFolder: function(path) {
-            if (!path) return false;
-            var norm = path.replace(/\//g, '\\').replace(/[\\]+$/, '');
-            var fs = this._nodeFs();
-            if (fs) {
-                try {
-                    if (typeof fs.rmSync === 'function') {
-                        fs.rmSync(norm, { recursive: true, force: true });
-                        this.log('🗑️ [FS] Carpeta eliminada (rmSync): ' + norm, 'DEBUG');
-                        return true;
-                    }
-                    if (typeof fs.rmdirSync === 'function') {
-                        fs.rmdirSync(norm, { recursive: true });
-                        this.log('🗑️ [FS] Carpeta eliminada (rmdirSync): ' + norm, 'DEBUG');
-                        return true;
-                    }
-                } catch (e) {
-                    this.log("⚠️ [FS] No s'ha pogut esborrar la carpeta " + norm + ': ' + e.message, 'WARN');
-                    return false;
-                }
+            var mod = this._fsWipe();
+            if (!mod) {
+                this.log('⚠️ [FS] FsWipe no carregat: no es pot esborrar la carpeta ' + path, 'WARN');
+                return false;
             }
-            this.log('⚠️ [FS] Node fs no disponible: no es pot esborrar la carpeta ' + norm, 'WARN');
+            var norm = mod.norm(path);
+            if (!norm) return false;
+            var fs = this._nodeFs();
+            if (!mod.canRemove(fs)) {
+                this.log('⚠️ [FS] Node fs no disponible: no es pot esborrar la carpeta ' + norm, 'WARN');
+                return false;
+            }
+            if (!mod.exists(fs, norm)) return true;
+            var acc = { removed: 0, files: 0, dirs: 0, failed: [] };
+            mod.removeTree(fs, norm, acc);
+            if (!mod.exists(fs, norm)) {
+                this.log('🗑️ [FS] Carpeta eliminada (' + acc.files + ' fitxers, ' + acc.dirs + ' carpetes): ' + norm, 'DEBUG');
+                return true;
+            }
+            this.log("⚠️ [FS] No s'ha pogut esborrar del tot la carpeta " + norm + ' (' + acc.failed.length + ' errors, queden restes)', 'WARN');
             return false;
         }
 

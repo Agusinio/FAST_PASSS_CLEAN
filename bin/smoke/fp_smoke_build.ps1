@@ -49,6 +49,9 @@ $files = @(
     # (2026-10-21 · BUG #174) PORTADA: finestra de captura (pre-roll + cua). Càlcul PUR
     # que MAI mou el frame triat; el prova la part E de la prova 19-portada.
     (Join-Path $repo 'js\logic\18_Portada_Window.js'),
+    # (2026-10-21 · RESET absolut) Esborrat d'arbres entrada per entrada amb
+    # verificacio i reintents; el prova la prova 20-reset amb un disc SIMULAT.
+    (Join-Path $repo 'js\logic\19_Fs_Wipe.js'),
     (Resolve-Harness 'fp_probe_f45.js'),
     # (2026-10-16 · BUG #167) Rètol de localització del directe → ítem IPD/directe.
     (Resolve-Harness 'fp_probe_ipd_chyron.js'),
@@ -59,6 +62,9 @@ $files = @(
     # (2026-10-16 · BUG #172) PORTADA: el frame capturat ha de ser el DEMANAT (Out/àrea de
     # treball) + CONTRACTE DEL PONT (`callJSX('Espai.metode()')` → jsx/main.jsx).
     (Resolve-Harness 'fp_probe_portada.js'),
+    # (2026-10-21 · RESET absolut) Motor FsWipe (disc simulat: fitxer nomes lectura,
+    # bloquejat i lock transitori) + guardes de runReset i cache-busts.
+    (Resolve-Harness 'fp_probe_reset.js'),
     (Resolve-Harness 'fp_smoke_runner.js')
 )
 
