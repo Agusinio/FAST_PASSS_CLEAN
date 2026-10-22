@@ -171,9 +171,9 @@
             ok('#F3/24 index: botons 🗑 i 🧩 a la fila SUBTÍTOLS',
                 /id="btnSrtDel"/.test(html) && /id="btnSrtFill"/.test(html) &&
                 /Ctrl\+clic = SUBTÍTOLS SINTÈTICS/.test(html));
-            ok('#F3/25 index: cache-busts F3 (srt_editor 79, flow_srt 12, main 86, Scanner 15, Srt_Logic 17, Config 40)',
+            ok('#F3/25 index: cache-busts F3 (srt_editor 79, flow_srt 12, main 86, Scanner 16, Srt_Logic 17, Config 40)',
                 /srt_editor\.js\?v=79/.test(html) && /flow_srt\.js\?v=12/.test(html) &&
-                /main\.js\?v=86/.test(html) && /Scanner\.js\?v=15/.test(html) &&
+                /main\.js\?v=86/.test(html) && /Scanner\.js\?v=16/.test(html) &&
                 /10_Srt_Logic\.js\?v=17/.test(html) && /11_Configuracio\.js\?v=40/.test(html));
 
             var cfg = noComments(await readRepo('js/core/11_Configuracio.js'));

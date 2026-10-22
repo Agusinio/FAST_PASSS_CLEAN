@@ -1,0 +1,86 @@
+FASTPASS · timing d'arrencada del panell
+Inici: 08:57:33  (ms = des de l'inici · Δ = des de la marca anterior)
++      1 ms  (Δ      1 ms)  main.js: arrencada
++      5 ms  (Δ      4 ms)  ruta de l'extensió resolta
++     13 ms  (Δ      8 ms)  [ER:IO] llistat escaletes (5 ms, 125 fitxers, via cep)
++     17 ms  (Δ      4 ms)  escaletes: llistat engegat en paral·lel
++     29 ms  (Δ     12 ms)  DIAG P1 ping motor JSX (10 ms)
++     42 ms  (Δ     13 ms)  DIAG P2 $.writeln del motor (9 ms)
++     95 ms  (Δ     53 ms)  DIAG P3 bootstrap · cua motor=2 ms | execucio=44 ms | tornada=3 ms
++     98 ms  (Δ      3 ms)  motor JSX a punt (jsx_BOOTSTRAP)
++    118 ms  (Δ     20 ms)  comprovació de frescor JSX (18 ms)
++    121 ms  (Δ      3 ms)  [Context] init · selectors PROG/BLOC (0 ms)
++    128 ms  (Δ      7 ms)  [Context] checkContext · readFolder NAS (3 ms, 0 fitxers)
++    133 ms  (Δ      5 ms)  [Context] checkContext · escaleta local (1 ms)
++   1530 ms  (Δ   1397 ms)  DIAG HB 1 viu a +1511 ms
++   3020 ms  (Δ   1490 ms)  DIAG HB 2 viu a +3001 ms
++   4520 ms  (Δ   1500 ms)  DIAG HB 3 viu a +4501 ms
++   6020 ms  (Δ   1500 ms)  DIAG HB 4 viu a +6001 ms
++   7520 ms  (Δ   1500 ms)  DIAG HB 5 viu a +7501 ms
++   9020 ms  (Δ   1500 ms)  DIAG HB 6 viu a +9001 ms
++  10530 ms  (Δ   1510 ms)  DIAG HB 7 viu a +10511 ms
++  12020 ms  (Δ   1490 ms)  DIAG HB 8 viu a +12001 ms
++  13530 ms  (Δ   1510 ms)  DIAG HB 9 viu a +13511 ms
++  15020 ms  (Δ   1490 ms)  DIAG HB 10 viu a +15001 ms
++  16521 ms  (Δ   1501 ms)  DIAG HB 11 viu a +16502 ms
++  18030 ms  (Δ   1509 ms)  DIAG HB 12 viu a +18011 ms
++  19520 ms  (Δ   1490 ms)  DIAG HB 13 viu a +19501 ms
++  21030 ms  (Δ   1510 ms)  DIAG HB 14 viu a +21011 ms
++  22540 ms  (Δ   1510 ms)  DIAG HB 15 viu a +22521 ms
++  24020 ms  (Δ   1480 ms)  DIAG HB 16 viu a +24001 ms
++  25540 ms  (Δ   1520 ms)  DIAG HB 17 viu a +25521 ms
++  27030 ms  (Δ   1490 ms)  DIAG HB 18 viu a +27011 ms
++  28540 ms  (Δ   1510 ms)  DIAG HB 19 viu a +28521 ms
++  30020 ms  (Δ   1480 ms)  DIAG HB 20 viu a +30001 ms
++  31522 ms  (Δ   1502 ms)  DIAG HB 21 viu a +31503 ms
++  33027 ms  (Δ   1505 ms)  DIAG HB 22 viu a +33008 ms
++  34534 ms  (Δ   1507 ms)  DIAG HB 23 viu a +34515 ms
++  36022 ms  (Δ   1488 ms)  DIAG HB 24 viu a +36003 ms
++  37526 ms  (Δ   1504 ms)  DIAG HB 25 viu a +37507 ms
++  39028 ms  (Δ   1502 ms)  DIAG HB 26 viu a +39009 ms
++  40527 ms  (Δ   1499 ms)  DIAG HB 27 viu a +40508 ms
++  42020 ms  (Δ   1493 ms)  DIAG HB 28 viu a +42001 ms
++  43529 ms  (Δ   1509 ms)  DIAG HB 29 viu a +43510 ms
++  45030 ms  (Δ   1501 ms)  DIAG HB 30 viu a +45011 ms
++  46535 ms  (Δ   1505 ms)  DIAG HB 31 viu a +46516 ms
++  48022 ms  (Δ   1487 ms)  DIAG HB 32 viu a +48003 ms
++  49526 ms  (Δ   1504 ms)  DIAG HB 33 viu a +49507 ms
++  51028 ms  (Δ   1502 ms)  DIAG HB 34 viu a +51009 ms
++  52527 ms  (Δ   1499 ms)  DIAG HB 35 viu a +52508 ms
++  54027 ms  (Δ   1500 ms)  DIAG HB 36 viu a +54008 ms
++  55528 ms  (Δ   1501 ms)  DIAG HB 37 viu a +55509 ms
++  57028 ms  (Δ   1500 ms)  DIAG HB 38 viu a +57009 ms
++  58532 ms  (Δ   1504 ms)  DIAG HB 39 viu a +58513 ms
++  60036 ms  (Δ   1504 ms)  DIAG HB 40 viu a +60017 ms
++  61527 ms  (Δ   1491 ms)  DIAG HB 41 viu a +61508 ms
++  63022 ms  (Δ   1495 ms)  DIAG HB 42 viu a +63003 ms
++  64536 ms  (Δ   1514 ms)  DIAG HB 43 viu a +64517 ms
++  66037 ms  (Δ   1501 ms)  DIAG HB 44 viu a +66018 ms
++  67540 ms  (Δ   1503 ms)  DIAG HB 45 viu a +67521 ms
++  69032 ms  (Δ   1492 ms)  DIAG HB 46 viu a +69013 ms
++  70529 ms  (Δ   1497 ms)  DIAG HB 47 viu a +70510 ms
++  72029 ms  (Δ   1500 ms)  DIAG HB 48 viu a +72010 ms
++  73527 ms  (Δ   1498 ms)  DIAG HB 49 viu a +73508 ms
++  75036 ms  (Δ   1509 ms)  DIAG HB 50 viu a +75017 ms
++  76529 ms  (Δ   1493 ms)  DIAG HB 51 viu a +76510 ms
++  78022 ms  (Δ   1493 ms)  DIAG HB 52 viu a +78003 ms
++  79532 ms  (Δ   1510 ms)  DIAG HB 53 viu a +79513 ms
++  81035 ms  (Δ   1503 ms)  DIAG HB 54 viu a +81016 ms
++  82523 ms  (Δ   1488 ms)  DIAG HB 55 viu a +82504 ms
++  84027 ms  (Δ   1504 ms)  DIAG HB 56 viu a +84008 ms
++  84073 ms  (Δ     46 ms)  [Context] checkContext · readFolder NAS (72.1 s, 0 fitxers)
++  84078 ms  (Δ      5 ms)  [Context] checkContext · readFolder NAS (69.1 s, 0 fitxers)
++  85528 ms  (Δ   1450 ms)  DIAG HB 57 viu a +85509 ms
++  87035 ms  (Δ   1507 ms)  DIAG HB 58 viu a +87016 ms
++  88527 ms  (Δ   1492 ms)  DIAG HB 59 viu a +88508 ms
++  90026 ms  (Δ   1499 ms)  DIAG HB 60 viu a +90007 ms
++  92684 ms  (Δ   2658 ms)  [Context] checkContext · MASSA D'HORA (sense MP4 origen ni wotts)
++  92689 ms  (Δ      5 ms)  [Context] checkContext · TOTAL (92.6 s) → MASSA [early]
++  92692 ms  (Δ      3 ms)  [Context] init · checkContext (92.6 s)
++  92694 ms  (Δ      2 ms)  [Context] syncConductorUI · inici (programa=TN Comarques, defaults=1)
++  92702 ms  (Δ      8 ms)  [Context] syncConductorUI · NAS conductors (4 ms, 25 noms)
++  92705 ms  (Δ      3 ms)  [Context] init · syncConductorUI/COND (11 ms)
++  92707 ms  (Δ      2 ms)  [Context] init · TOTAL (92.6 s)
++  92709 ms  (Δ      2 ms)  Context.init (config + 1r checkContext) (92588 ms)
++  92712 ms  (Δ      3 ms)  ARRENCADA COMPLETA
++  92714 ms  (Δ      2 ms)  ⚠️ arrencada lenta (92.7 s ≥ 15 s) → s'obre _boot_timing.log

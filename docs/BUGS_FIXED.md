@@ -1227,9 +1227,70 @@ Ordre cronologic pel numero d incident. 105 entrades.
 | ID | Estat | Data | Simptoma |
 |----|-------|------|----------|
 | `#111` | investigating | 2026-09-29 | Els ítems d'escaleta FLOTANTS (`flotant:true`) no reben cap marcador; segons la regla de l'usuari haurien de portar marcador VERMELL (cas real `03` «+++ IPD MEDIACIÓ MARI [...] |
-| `#113` | fet_parcial | 2026-09-30 | ARRENCADA LENTA (14,1 s) a la primera obertura del dia: el 99% del temps és NAS fred dins de checkContext, amb treball duplicat i un scan innecessari |
+| `#113` | **REOBERT** 2026-10-22 | 2026-09-30 → 2026-10-22 | ARRENCADA LENTA en fred: 14,1 s el 30/09 i **92,7 s el 22/10** amb l'ordinador tot just engegat. Cap de les dos coses no era un sol `getStatus` lent: hi havia **tres `checkContext` alhora** (init + poll de 15 s + Registry) i les sondes de wotts/MP4 anaven **sense espera màxima** sobre un SMB fred. Detall davall la taula |
 | `#116` | notejada_pendent | 2026-09-30 | MARCADOR VERMELL DE CUA (TNC V2, 131,64 s · 2a passada 131,52 s) que no hauria d'existir: el filtre de vermells el descarta correctament i tot seguit la vàlvula de segure [...] |
 | `#117` | notejada_pendent | 2026-09-30 | SEMÀFORS del cas SENSE projecte trencats per un ReferenceError: 'mediaN is not defined' a checkContext → quan l'escaleta porta mediaStop+blockOut es perden els semàfors S [...] |
 | `#152` | implementat_pendent_test | 2026-10-13 | El JSON d'anàlisi del bloc (analisis_estructura/DD_MM_PROG_BLOC.json: ítems del bloc + ítems de CONTEXT prevVideoItem/nextVideoItem + trimBounds + fases crudo/cocinado/us [...] |
 | `#153` | pendent_implementacio | 2026-10-13 | Unificar el JSON d'anàlisi del bloc (analisis_estructura/DD_MM_PROG_BLOC.json) en una sola peça amb 4 blocs: (1) BLOC — prog/bloc/data/escaletaFile/seqName/projectFile +  [...] |
+
+
+### #113 · REOBERT el 2026-10-22 — arrencada en fred de 92,7 s
+
+**SIMPTOMA (mesura real, `_boot_timing.log` del 22/10 a les 08:57:33, ordinador
+tot just engegat)**: `ARRENCADA COMPLETA` a **92,7 s**, i el log s'obre tot sol
+(llindar 15 s). Fites:
+
+```
++     128 ms  [Context] checkContext · readFolder NAS (3 ms, 0 fitxers)
++     133 ms  [Context] checkContext · escaleta local (1 ms)
++  84.073 ms  [Context] checkContext · readFolder NAS (72,1 s, 0 fitxers)   ← 2a execució
++  84.078 ms  [Context] checkContext · readFolder NAS (69,1 s, 0 fitxers)   ← 3a execució
++  92.684 ms  [Context] checkContext · MASSA D'HORA
++  92.712 ms  ARRENCADA COMPLETA
+```
+
+Els batecs de 1,5 s (`DIAG HB 1…56`) **no s'aturen mai** → el fil de la UI és viu:
+el temps es consumeix esperant lectures del NAS, no en un bucle de JS.
+
+**CAUSA ARREL (dos factors que es multiplicaven)**: (1) `checkContext` era
+**reentrant** —`init()`, el `callContextAudit()` del final d'`initPanel`, el poll
+de 15 s de `main.js` i `Registry._onProjectChange` podien llançar-lo alhora— i
+cada execució feia el SEU `readFolder(workFolder)` + les SEUES sondes, tot
+encuat darrere la primera lectura d'un SMB **fred**; (2) les sondes
+`wottsToday`/`mp4Today` no tenien **espera màxima** i la caché de dates
+(`_wottDateCache`, `birthtime` de cada candidat) vivia **només a memòria**: cada
+recàrrega del panell tornava a datar-ho tot. Amb el NAS calent eren ~1,5 ms per
+fitxer; en fred, desenes de segons.
+
+**SOLUCIO (2026-10-22, mateixa jornada)**:
+1. `js/core/4_Context.js`: **single-flight** — `checkContext()` és la porta única i
+   el cos passa a `_runCheckContext()`; si ja n'hi ha una en vol, la crida s'hi
+   enganxa i com a molt es programa **un** recàlcul (`_ccInFlight`/`_ccAgain`).
+2. `js/core/4_Context.js`: les dos sondes van amb `_withTimeout(…, PROBE_TIMEOUT_MS
+   = 8000)` i en **paral·lel** (`Promise.all`). Si el NAS no respon → `ok:false` →
+   el botó queda en **ESPERA** (mai `MASSA D'HORA` per error) i el poll de 15 s ho
+   reintenta. La sonda NO es cancel·la: segueix en segon pla.
+3. `js/logic/Scanner.js`: **dedupe** de sondes (`_probeInflight`/`_probeKey`) —
+   una sola lectura per clau encara que la demanen tres crides.
+4. `js/logic/Scanner.js`: **caché de dates persistent** a `localStorage`
+   (`fp_wott_dates_v1`, sostre de 3000 noms) → una recàrrega del panell no torna a
+   fer `stat` de res ja datat.
+5. Instrumentació: marques `[SCAN]` (`wotts · llistat`, `wotts · datació`,
+   `MP4 · llistat`, `MP4 · datació`) i `[Context] … sonda wotts / sonda MP4` al
+   `_boot_timing.log`. Anàlisi completa: `docs/perf/ARRANCADA_2026-10-22_COLD.md`
+   (log cru: `docs/perf/arrancada_2026-10-22_cold.log`).
+6. Cache-busts: `Scanner.js?v=16`, `4_Context.js?v=28`.
+
+**VALIDACIO**: `bin/check_js_v8.ps1` → 61/61 OK · `bin/smoke/fp_smoke_build.ps1`
+→ **PASS 369 / FAIL 0** amb 5 proves noves (`#WOTT/25` tres sondes simultànies =
+1 lectura; `#WOTT/26` caché persistida = 0 stats; `#WOTT/27` single-flight;
+`#WOTT/28` timeout + paral·lel; `#WOTT/29` marques `[SCAN]`) ·
+`bin/smoke/fp_probe_setup_ui.ps1` → 24/24.
+
+**PENDENT DE VALIDAR EN VIU**: reiniciar l'ordinador i obrir el panell en fred.
+Criteris: `ARRENCADA COMPLETA` **≤ ~10 s**, **una sola** línia
+`checkContext · readFolder NAS`, i `sonda wotts`/`sonda MP4` amb valor (o
+`TIMEOUT/ERROR (8 s)` → el botó queda en ESPERA i el poll el resol). Si la datació
+per `birthtime` encara es menja desenes de segons amb el NAS fred, el següent pas
+(ja apuntat al document de perf) és no datar en calent.
 

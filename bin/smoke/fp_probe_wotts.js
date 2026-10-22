@@ -282,12 +282,98 @@
                 /if \(placeEnd !== null && \(placeEnd - slot\.start\) > REV_FRAME \+ 0\.001\) \{/.test(chySrc) &&
                 /placeEnd = gridDown\(placeEnd - REV_FRAME\);/.test(chySrc));
             var idxW = await readRepo('index.html');
-            ok('#WOTT/24 cache-bust del #177 (4_Context 27, flow_chyrons 82, Scanner 15)',
-                /4_Context\.js\?v=27/.test(idxW) && /flow_chyrons\.js\?v=82/.test(idxW) &&
-                /Scanner\.js\?v=15/.test(idxW),
+            ok('#WOTT/24 cache-bust del #177 (4_Context 28, flow_chyrons 82, Scanner 16)',
+                /4_Context\.js\?v=28/.test(idxW) && /flow_chyrons\.js\?v=82/.test(idxW) &&
+                /Scanner\.js\?v=16/.test(idxW),
                 (idxW.match(/4_Context\.js\?v=\d+/) || '') + ' ' +
                 (idxW.match(/flow_chyrons\.js\?v=\d+/) || '') + ' ' +
                 (idxW.match(/Scanner\.js\?v=\d+/) || ''));
+            // ── L. ARRENCADA EN FRED (2026-10-22 · #113, reobert) ──────────────
+            // Log real de l'ordinador engegat en fred (22/10 08:57): 92,7 s, amb
+            // TRES `readFolder NAS` (72,1 s / 69,1 s) perquè `checkContext` es va
+            // executar tres vegades alhora i cada còpia tornava a llegir el NAS.
+            // Ara: una sola execució (single-flight) + una sola sonda per clau +
+            // espera limitada + caché de dates persistida.
+            files = {};
+            files[F_TODAY1] = localMs(2026, 10, 21, 12);
+            files[F_TODAY2] = localMs(2026, 10, 21, 13);
+            reset(true);
+            var fastFs = UI.Utils._nodeFs;
+            UI.Utils._nodeFs = function () {
+                return {
+                    promises: {
+                        readdir: function () {
+                            readdirCalls++;
+                            return new Promise(function (res) {
+                                setTimeout(function () { res(Object.keys(files)); }, 25);
+                            });
+                        },
+                        stat: function (p) {
+                            statCalls++;
+                            var n = String(p).split(BS).pop();
+                            return Promise.resolve({ birthtime: new Date(files[n] || 0) });
+                        }
+                    }
+                };
+            };
+            var tri = await Promise.all([Scan.wottsToday(ctxBase), Scan.wottsToday(ctxBase), Scan.wottsToday(ctxBase)]);
+            UI.Utils._nodeFs = fastFs;
+            ok('#WOTT/25 tres sondes simultànies comparteixen UNA lectura del NAS (#113)',
+                tri[0].found === true && tri[1].found === true && tri[2].found === true && readdirCalls === 1 && statCalls === 2,
+                'readdir=' + readdirCalls + ' stats=' + statCalls +
+                ' found=' + tri.map(function (r) { return r.found ? 1 : 0; }).join(''));
+
+            // Caché de dates PERSISTENT: `birthtime` no canvia mai, així que es
+            // desa a localStorage i una recàrrega del panell no torna a fer stats.
+            var store = {};
+            var lsOk = false;
+            try {
+                Object.defineProperty(window, 'localStorage', {
+                    configurable: true,
+                    value: {
+                        getItem: function (k) { return (k in store) ? store[k] : null; },
+                        setItem: function (k, v) { store[k] = String(v); },
+                        removeItem: function (k) { delete store[k]; }
+                    }
+                });
+                lsOk = true;
+            } catch (eLS) { lsOk = false; }
+            var savedKey = 'fp_wott_dates_v1';
+            reset(true);
+            Scan._dateCacheLoaded = false;
+            var rSave = await Scan.wottsToday(ctxBase);     // data els 2 wotts i DESA
+            var savedRaw = (lsOk && store[savedKey]) ? String(store[savedKey]) : '';
+            var savedOk = savedRaw.indexOf('20261021') !== -1;
+            // Panell NOU: caché de memòria buida + es recupera del disc.
+            reset(false);
+            Scan._dateCacheLoaded = false;
+            Scan._loadDateCache();
+            var recovered = Scan._wottDateCache[String(F_TODAY1).toUpperCase()] === '20261021';
+            var rNew = await Scan.wottsToday(ctxBase);      // cap stat: ja està datat
+            ok('#WOTT/26 caché de dates persistida a localStorage (#113): si ja està datat, 0 stats',
+                savedOk && recovered && rSave.count === 2 && rNew.count === 2 && statCalls === 0,
+                'desada=' + savedOk + ' recuperada=' + recovered + ' count=' + rNew.count +
+                ' stats=' + statCalls + (lsOk ? '' : ' (localStorage no manipulable en aquest entorn)'));
+
+            // Guardes de codi: single-flight + sondes amb espera limitada.
+            ok('#WOTT/27 checkContext: single-flight (_ccInFlight + _runCheckContext)',
+                ctxSrc.indexOf('_ccInFlight') > 0 && /async _runCheckContext\(/.test(ctxSrc) &&
+                /if \(_ccInFlight\) \{/.test(ctxSrc) &&
+                /if \(_opts && _opts\.force\) _ccAgain = true;/.test(ctxSrc) &&
+                ctxSrc.indexOf('return await _ccInFlight;') > 0);
+            ok('#WOTT/28 sondes del NAS: espera limitada (PROBE_TIMEOUT_MS) i en PARAL·LEL',
+                /PROBE_TIMEOUT_MS: 8000/.test(ctxSrc) &&
+                /this\._withTimeout\(sc\.wottsToday\(ctx\), this\.PROBE_TIMEOUT_MS/.test(ctxSrc) &&
+                /this\._withTimeout\(sc\.mp4Today\(ctx\), this\.PROBE_TIMEOUT_MS/.test(ctxSrc) &&
+                /Promise\.all\(\[this\._wottsToday\(ctx\), this\._mediaToday\(ctx\)\]\)/.test(ctxSrc) &&
+                ctxSrc.indexOf('const mp4 = await this._mediaToday(ctx)') === -1);
+            var scanSrc = await readRepo('js/logic/Scanner.js');
+            ok('#WOTT/29 Scanner: dedupe (_probeInflight/_probeKey) i marques [SCAN] a l arrencada',
+                /_probeKey: function \(ctx, kind\)/.test(scanSrc) &&
+                /_probeInflight\[key\] = p;/.test(scanSrc) &&
+                scanSrc.indexOf("_bm('wotts · llistat (") > 0 &&
+                scanSrc.indexOf("_bm('MP4 · datació (") > 0 &&
+                scanSrc.indexOf("_bm('wotts · datació (") > 0);
         } finally {
             UI.Utils._nodeFs = realNodeFs;
             UI.Utils.readFolder = realReadFolder;

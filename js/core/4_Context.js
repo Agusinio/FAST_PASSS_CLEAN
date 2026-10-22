@@ -13,6 +13,19 @@
 
     let _lastCheckAt = 0; // Guard de debounce
 
+    // ── SINGLE-FLIGHT de checkContext (2026-10-22 · #113) ──────────────────
+    // El sintetitzador es podia executar DUES o TRES vegades alhora: la crida
+    // d'`init()` (que espera el resultat), el `callContextAudit()` del final de
+    // `initPanel`, el poll de 15 s de main.js i `Registry._onProjectChange`.
+    // Cada execució fa el SEU `readFolder(workFolder)` i la SEUA sonda de
+    // wotts/MP4 al NAS. Amb el NAS FRED (primera obertura del dia) això no és
+    // només treball duplicat: les lectures s'encuen darrere la primera i el
+    // log del 22/10 va mostrar TRES llistats de 70 s i una arrencada de 92,7 s.
+    // Ara només hi ha UNA execució en vol; les peticions que arriben mentrestant
+    // s'hi enganxen i, si cal recalcular, es fa UN sol recàlcul en acabar.
+    let _ccInFlight = null;
+    let _ccAgain = false;
+
     // ── TIMING D'ARRENCADA (2026-09-29) ─────────────────────────────────────
     // Marca fites al _boot_timing.log (infraestructura a main.js → FASTPASS_UI.Boot)
     // per saber QUINA fase de la càrrega inicial es menja el temps (escaneig NAS,
@@ -211,14 +224,27 @@
          * _wottsToday (2026-10-21): sonda de wotts del BLOC d'avui, sense mai llançar.
          * Delega a Scan.wottsToday (Node `birthtime` + caché per nom). `ok:false`
          * vol dir que no s'ha pogut llegir → NO s'ha de canviar d'estat.
+         *
+         * ⏱️ (2026-10-22 · #113) ESPERA LIMITADA. Amb el NAS FRED la primera
+         * lectura del dia pot quedar-se 70-90 s (log real del 22/10: 84 s) i
+         * arrossegava TOTA l'arrencada. La sonda NO es cancel·la: segueix corrent
+         * en segon pla (Scanner en deduplica l'execució i va omplint la caché),
+         * però el panell deixa d'esperar-la i el poll de 15 s en recull el
+         * resultat quan estiga. Mentrestant l'estat cau a ESPERA (mai MASSA).
          */
+        PROBE_TIMEOUT_MS: 8000,
         _wottsToday: async function (ctx) {
             const sc = (window.FASTPASS_UI && window.FASTPASS_UI.Logic) ? window.FASTPASS_UI.Logic.Scan : null;
             if (!sc || typeof sc.wottsToday !== 'function') return { ok: false, found: false, count: 0 };
+            const _tW = Date.now();
             try {
-                return await sc.wottsToday(ctx);
+                const res = await this._withTimeout(sc.wottsToday(ctx), this.PROBE_TIMEOUT_MS, 'sonda wotts');
+                _bmark('checkContext · sonda wotts (' + _bsec(Date.now() - _tW) + ')');
+                return res;
             } catch (e) {
-                getUtils().log('⚠️ [checkContext] wottsToday: ' + e.message, 'WARN');
+                _bmark('checkContext · sonda wotts TIMEOUT/ERROR (' + _bsec(Date.now() - _tW) + ')');
+                getUtils().log('⚠️ [checkContext] wottsToday: ' + e.message +
+                    ' → no es bloqueja el botó (el poll ho reintenta)', 'WARN');
                 return { ok: false, found: false, count: 0 };
             }
         },
@@ -228,19 +254,54 @@
          * Delega a Scan.mp4Today (noms per Node + birthtime només dels candidats),
          * mai a `Scan.mediaAssets` (escaneig ExtendScript de tota la carpeta en UNC).
          * `ok:false` vol dir que no s'ha pogut llegir → no es pot afirmar res.
+         * ⏱️ (2026-10-22 · #113) Mateixa espera limitada que la sonda de wotts.
          */
         _mediaToday: async function (ctx) {
             const sc = (window.FASTPASS_UI && window.FASTPASS_UI.Logic) ? window.FASTPASS_UI.Logic.Scan : null;
             if (!sc || typeof sc.mp4Today !== 'function') return { ok: false, found: false };
+            const _tM = Date.now();
             try {
-                return await sc.mp4Today(ctx);
+                const res = await this._withTimeout(sc.mp4Today(ctx), this.PROBE_TIMEOUT_MS, 'sonda MP4');
+                _bmark('checkContext · sonda MP4 (' + _bsec(Date.now() - _tM) + ')');
+                return res;
             } catch (e) {
-                getUtils().log('⚠️ [checkContext] mp4Today: ' + e.message, 'WARN');
+                _bmark('checkContext · sonda MP4 TIMEOUT/ERROR (' + _bsec(Date.now() - _tM) + ')');
+                getUtils().log('⚠️ [checkContext] mp4Today: ' + e.message +
+                    ' → no es pot afirmar MASSA D\'HORA (el poll ho reintenta)', 'WARN');
                 return { ok: false, found: false };
             }
         },
 
-        async checkContext() {
+        /**
+         * checkContext: porta d'entrada ÚNICA al sintetitzador (single-flight).
+         * Vegeu `_ccInFlight` a dalt: les crides simultànies comparteixen UNA
+         * execució i, com a molt, se'n programa UNA de nova en acabar.
+         */
+        async checkContext(_opts) {
+            if (!getUtils().isJsxReady) return;
+            if (_ccInFlight) {
+                // Només un recàlcul EXPLÍCIT (force) justifica repetir l'escaneig
+                // en acabar; una crida passiva (poll) ja queda servida per
+                // l'execució en curs, que llegeix l'estat fresc igualment.
+                if (_opts && _opts.force) _ccAgain = true;
+                getUtils().log('⏳ [checkContext] Ja hi ha un escaneig en curs: la crida s\'hi enganxa ' +
+                    '(no se\'n llança cap altre)', 'DEBUG');
+                return await _ccInFlight;
+            }
+            _ccInFlight = this._runCheckContext(_opts);
+            try {
+                return await _ccInFlight;
+            } finally {
+                _ccInFlight = null;
+                if (_ccAgain) {
+                    _ccAgain = false;
+                    const self = this;
+                    setTimeout(function () { try { self.checkContext({ force: true }); } catch (eC) { } }, 0);
+                }
+            }
+        },
+
+        async _runCheckContext(_opts) {
             if (!getUtils().isJsxReady) return; 
         
             // 📍 Capturamos los elementos del DOM al inicio
@@ -249,7 +310,6 @@
         
             // 📍 DEBOUNCE
             const now = Date.now();
-            const _opts = (arguments && arguments.length) ? arguments[0] : null;
             if (!(_opts && _opts.force) && now - _lastCheckAt < 1000) return;
             _lastCheckAt = now;
         
@@ -373,12 +433,17 @@
                     // ── 2. MATERIAL DEL BLOC D'AVUI: wotts + MP4 origen ───────────
                     // Fets FÍSICS (els wotts es generen en acabar l'emissió i el MP4
                     // origen es publica amb el bloc), mai un horari.
-                    const wots = await this._wottsToday(ctx);
+                    // (2026-10-22 · #113) Les dos sondes són INDEPENDENTS i es fan en
+                    // paral·lel: amb el NAS fred cadascuna pot costar segons i en
+                    // sèrie l'espera es doblava. Cap de les dos llança (retornen
+                    // `ok:false`), així que el Promise.all no pot fallar.
+                    const probe = await Promise.all([this._wottsToday(ctx), this._mediaToday(ctx)]);
+                    const wots = probe[0] || { ok: false, found: false, count: 0 };
+                    const mp4 = probe[1] || { ok: false, found: false };
                     if (wots.ok) {
                         semaforoData.wot = wots.found ? 'blink' : 'pending';
                         semaforoData.wotDetail = String(wots.count);
                     }
-                    const mp4 = await this._mediaToday(ctx);
                     if (mp4 && mp4.ok) semaforoData.mp4 = mp4.found ? 'blink' : 'error';
 
                     const escFound = !!(semaforoData.esc && semaforoData.esc.found);

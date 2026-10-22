@@ -12,6 +12,20 @@
         readFolder: (p) => (FASTPASS_UI.Utils) ? FASTPASS_UI.Utils.readFolder(p) : []
     };
 
+    // ── MARQUES D'ARRENCADA (2026-10-22 · #113) ────────────────────────────
+    // Les sondes de wotts/MP4 són les úniques que toquen el NAS abans que el
+    // panell estiga a punt. Amb el NAS FRED el cost real no és el readdir sinó
+    // el `stat` de cada candidat (log 22/10: 84 s dins del checkContext).
+    // Aquestes marques (`[SCAN]`) van al `_boot_timing.log` i diuen QUINA part
+    // de la sonda es menja el temps, per poder-ho ajustar amb dades.
+    const _bm = (lbl) => {
+        try {
+            const B = window.FASTPASS_UI && window.FASTPASS_UI.Boot;
+            if (B && typeof B.mark === 'function') B.mark('[SCAN] ' + lbl);
+        } catch (eBM) { }
+    };
+    const _ms = (t0) => (Date.now() - t0) + ' ms';
+
     FASTPASS_UI.Logic.Scan = {
 
         _discardOld: function (files, guardaHours) {
@@ -351,6 +365,59 @@
         WOTT_PROBE_TTL_MS: 5000,
         _mp4ProbeCache: null,    // { clau: { at, res } } · TTL 5 s (MP4 origen)
         MP4_PROBE_TTL_MS: 5000,
+        _probeInflight: null,    // { clau: Promise } · sonda en curs (dedupe)
+
+        /** _probeKey: clau d'una sonda (tipus + carpeta + bloc + dia de treball). */
+        _probeKey: function (ctx, kind) {
+            const r = (ctx && ctx.config && ctx.config.rutas) ? ctx.config.rutas : {};
+            const folder = (kind === 'mp4') ? (r.verticalitzacio || '') : (r.chyrons || '');
+            return kind + '|' + folder + '|' + ((ctx && ctx.bloque) || '') + '|' + ((ctx && ctx.dateDir) || '');
+        },
+
+        // ── CACHÉ DE DATES PERSISTENT (2026-10-22 · #113) ──────────────────
+        // El `birthtime` d'un fitxer no canvia mai, però la caché vivia només a
+        // memòria: cada recàrrega del panell tornava a fer `stat` de TOTS els
+        // candidats del bloc. Amb el NAS fred això són desenes de segons (cada
+        // stat espera l'SMB). Ara es desa a localStorage (`fp_wott_dates_v1`) i
+        // sobreviu a recàrregues i reinicis: només es daten els NOMS NOUS.
+        DATE_CACHE_KEY: 'fp_wott_dates_v1',
+        _dateCacheLoaded: false,
+        _dateCacheDirty: false,
+
+        _loadDateCache: function () {
+            if (this._dateCacheLoaded) return;
+            this._dateCacheLoaded = true;
+            if (!this._wottDateCache) this._wottDateCache = {};
+            try {
+                const raw = window.localStorage ? window.localStorage.getItem(this.DATE_CACHE_KEY) : null;
+                if (!raw) return;
+                const obj = JSON.parse(raw);
+                let n = 0;
+                for (const k in obj) {
+                    if (!obj.hasOwnProperty(k)) continue;
+                    if (!this._wottDateCache[k]) { this._wottDateCache[k] = obj[k]; n++; }
+                }
+                if (n > 0) utils.log('🗓️ [SCAN] caché de dates recuperada (' + n + ' fitxers ja datats)', 'DEBUG');
+            } catch (eLC) { /* caché corrupta: es regenera */ }
+        },
+
+        _saveDateCache: function () {
+            if (!this._dateCacheDirty) return;
+            try {
+                if (!window.localStorage) return;
+                // Sostre de seguretat: la caché creix amb cada fitxer vist al NAS.
+                // Per damunt de 3000 noms no es desa (la de memòria segueix valent).
+                if (Object.keys(this._wottDateCache || {}).length > 3000) {
+                    this._dateCacheDirty = false;
+                    return;
+                }
+                window.localStorage.setItem(this.DATE_CACHE_KEY, JSON.stringify(this._wottDateCache || {}));
+                this._dateCacheDirty = false;
+            } catch (eSC) {
+                // Quota plena o localStorage bloquejat: la caché de memòria segueix
+                // valent per a aquesta sessió (pitjor cas: es torna a datar).
+            }
+        },
 
         /** _localDate: Date|ms → 'YYYYMMDD' amb components LOCALS. null si no és datable. */
         _localDate: function (d) {
@@ -370,6 +437,25 @@
          *          `ok:false` = no s'ha pogut llegir → NO s'ha de canviar d'estat.
          */
         wottsToday: async function (ctx) {
+            // ── DEDUPE DE SONDES (2026-10-22 · #113) ───────────────────────────
+            // checkContext es rellança des de diversos llocs (poll de 15 s,
+            // Registry, triggers d'INICI). Amb el NAS FRED cada crida tornava a
+            // pagar el MATEIX readdir + stats i s'encuaven unes darrere les
+            // altres (log 22/10: 3 llistats de ~70 s). Ara la sonda en curs es
+            // COMPARTEIX: una sola lectura per clau encara que la demanen 3 cops.
+            const key = this._probeKey(ctx, 'wotts');
+            if (!this._probeInflight) this._probeInflight = {};
+            if (this._probeInflight[key]) {
+                utils.log('⏳ [SCAN:wottsToday] sonda en curs reaprofitada (' + key + ')', 'DEBUG');
+                return await this._probeInflight[key];
+            }
+            const p = this._wottsTodayRun(ctx);
+            this._probeInflight[key] = p;
+            try { return await p; }
+            finally { delete this._probeInflight[key]; }
+        },
+
+        _wottsTodayRun: async function (ctx) {
             const out = { ok: false, found: false, count: 0, names: [], via: '' };
             if (!ctx || !ctx.config || !ctx.config.rutas) return out;
             const folder = ctx.config.rutas.chyrons;
@@ -378,6 +464,8 @@
             const bloc = ctx.bloque ? String(ctx.bloque).toUpperCase() : '';
             if (!folder || !dateTarget || !prog || !bloc) return out;
             const prefix = prog + '_' + bloc + '_';   // Wott_TNV_v1_... → 'TNV_V1_'
+            this._loadDateCache();      // #113: dates ja conegudes (sobreviuen a reinicis)
+            const _t0 = Date.now();
 
             // Memòria curta: el poll de 15 s, el repintat manual i el semàfor
             // comparteixen el mateix veredicte dins de la finestra.
@@ -418,8 +506,12 @@
                         if (!this._wottDateCache) this._wottDateCache = {};
                         for (let i = 0; i < all.length; i++) {
                             const d0 = this._fileDateYYYYMMDD(all[i]);
-                            if (d0) this._wottDateCache[String(all[i].name).toUpperCase()] = d0;
+                            if (d0) {
+                                this._wottDateCache[String(all[i].name).toUpperCase()] = d0;
+                                this._dateCacheDirty = true;
+                            }
                         }
+                        this._saveDateCache();
                         names = all.map(function (f) { return f.name; });
                         out.via = 'jsx';
                     }
@@ -429,6 +521,7 @@
                 utils.log('❌ [SCAN:wottsToday] No s\'ha pogut llistar ' + folder + ' → es conserva l\'estat anterior', 'ERROR');
                 return out;   // ok:false
             }
+            _bm('wotts · llistat (' + _ms(_t0) + ', ' + names.length + ' noms, via ' + (out.via || '?') + ')');
 
             const cands = names.filter(function (n) {
                 const u = String(n || '').toUpperCase();
@@ -444,7 +537,9 @@
             if (!this._wottDateCache) this._wottDateCache = {};
             const dates = this._wottDateCache;
             const pending = cands.filter(function (n) { return !dates[String(n).toUpperCase()]; });
+            const _tD = Date.now();
             if (pending.length > 0) await this._dateWotts(folder, pending);
+            if (pending.length > 0) _bm('wotts · datació (' + _ms(_tD) + ', ' + pending.length + ' fitxer(s) nous)');
 
             const todays = cands.filter(function (n) { return dates[String(n).toUpperCase()] === dateTarget; });
             out.found = todays.length > 0;
@@ -476,6 +571,20 @@
          *          `ok:false` = no s'ha pogut llistar → no es pot afirmar res.
          */
         mp4Today: async function (ctx) {
+            // Mateix dedupe que `wottsToday` (2026-10-22 · #113).
+            const key = this._probeKey(ctx, 'mp4');
+            if (!this._probeInflight) this._probeInflight = {};
+            if (this._probeInflight[key]) {
+                utils.log('⏳ [SCAN:mp4Today] sonda en curs reaprofitada (' + key + ')', 'DEBUG');
+                return await this._probeInflight[key];
+            }
+            const p = this._mp4TodayRun(ctx);
+            this._probeInflight[key] = p;
+            try { return await p; }
+            finally { delete this._probeInflight[key]; }
+        },
+
+        _mp4TodayRun: async function (ctx) {
             const out = { ok: false, found: false, name: '', via: '' };
             if (!ctx || !ctx.config || !ctx.config.rutas) return out;
             const folder = ctx.config.rutas.verticalitzacio;
@@ -484,6 +593,8 @@
             const bloc = ctx.bloque ? String(ctx.bloque).toUpperCase() : '';
             if (!folder || !dateTarget || !prog || !bloc) return out;
             const prefix = prog + '_' + bloc + '_';
+            this._loadDateCache();      // #113: dates ja conegudes (sobreviuen a reinicis)
+            const _t0 = Date.now();
 
             const cacheKey = folder + '|' + prefix + '|' + dateTarget;
             if (!this._mp4ProbeCache) this._mp4ProbeCache = {};
@@ -529,6 +640,7 @@
                 utils.log('❌ [SCAN:mp4Today] No s\'ha pogut llistar ' + folder + ' → estat del MP4 desconegut', 'ERROR');
                 return out;   // ok:false
             }
+            _bm('MP4 · llistat (' + _ms(_t0) + ', ' + names.length + ' noms, via ' + (out.via || '?') + ')');
 
             const cands = names.filter(function (n) {
                 const u = String(n || '').toUpperCase();
@@ -554,7 +666,9 @@
             if (pending.length > 0) {
                 // Mateixa caché de dates que els wotts: clau = NOM SENCER (els .MP4 i
                 // els .MOV no col·lideixen) i cada fitxer es data una sola vegada.
+                const _tD = Date.now();
                 await this._dateWotts(folder, pending);
+                _bm('MP4 · datació (' + _ms(_tD) + ', ' + pending.length + ' fitxer(s) nous)');
                 const cache = this._wottDateCache || {};
                 for (let p = 0; p < pending.length; p++) {
                     const d8p = cache[String(pending[p]).toUpperCase()];
@@ -578,12 +692,21 @@
          * @param {Array<string>} names
          */
         _dateWotts: async function (folder, names) {
+            this._loadDateCache();                 // #113: partir de les dates persistides
             if (!this._wottDateCache) this._wottDateCache = {};
             const dates = this._wottDateCache;
             const base = String(folder).replace(/[\\/]+$/, '') + '\\';
             const self = this;
             const left = function (arr) {
                 return arr.filter(function (n) { return !dates[String(n).toUpperCase()]; });
+            };
+            // `put`: única via d'escriptura a la caché (marca que cal desar-la).
+            const put = function (n, d8) {
+                if (!d8) return;
+                const k = String(n).toUpperCase();
+                if (dates[k] === d8) return;
+                dates[k] = d8;
+                self._dateCacheDirty = true;
             };
 
             // ── 1. NODE · birthtime (l'única data fiable: el mtime el mou el procés nocturn)
@@ -599,12 +722,11 @@
                         }, function () { return { n: n, t: 0 }; });
                     }));
                     for (let j = 0; j < res.length; j++) {
-                        const d8 = self._localDate(res[j].t);
-                        if (d8) dates[String(res[j].n).toUpperCase()] = d8;
+                        put(res[j].n, self._localDate(res[j].t));
                     }
                 }
                 names = left(names);
-                if (names.length === 0) return;
+                if (names.length === 0) { this._saveDateCache(); return; }
             }
 
             // ── 2. CEP · creationTime (en UNC sol venir buit, però és gratis provar-ho)
@@ -613,13 +735,12 @@
                     try {
                         const st = window.cep.fs.stat(base + names[k]);
                         if (st && st.err === 0 && st.data) {
-                            const d8c = self._localDate(st.data.creationTime);
-                            if (d8c) dates[String(names[k]).toUpperCase()] = d8c;
+                            put(names[k], self._localDate(st.data.creationTime));
                         }
                     } catch (eS) { }
                 }
                 names = left(names);
-                if (names.length === 0) return;
+                if (names.length === 0) { this._saveDateCache(); return; }
             }
 
             // ── 3. JSX · File.created (una lectura cara, però queda cachejada per sempre)
@@ -630,12 +751,12 @@
                     if (map) {
                         for (let m = 0; m < names.length; m++) {
                             const it = map[names[m]];
-                            const d8j = it ? self._fileDateYYYYMMDD({ name: names[m], created: it.created }) : null;
-                            if (d8j) dates[String(names[m]).toUpperCase()] = d8j;
+                            put(names[m], it ? self._fileDateYYYYMMDD({ name: names[m], created: it.created }) : null);
                         }
                     }
                 }
             } catch (eM) { }
+            this._saveDateCache();
         },
 
         /**
