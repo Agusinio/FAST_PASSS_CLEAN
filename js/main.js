@@ -319,6 +319,19 @@ function applySliderLimits() {
         };
     } catch (eBootApi) { }
     _bootMarkSafe('main.js: arrencada');
+    // ── CAPACITATS DEL CEP PER AL DIÀLEG DE CARPETES (2026-10-22 · #178b 3a) ──
+    // Queda al log de sessió (`FASTPASS.log` / `_keyframe_trace.log`) encara que
+    // ningú no arribe a clicar 📁: el 22/10 es va perdre una vesprada perquè el
+    // manifest NO declara `--enable-nodejs` i el transport `child_process` no
+    // arrancava mai, sense cap rastre. `cep.process` és el que sí que hi és.
+    try {
+        var _U = window.FASTPASS_UI.Utils;
+        var _capNode = !!(window.cep_node && window.cep_node.require);
+        var _capCp = !!_U._nodeReq('child_process');
+        var _capProc = !!(window.cep && window.cep.process && typeof window.cep.process.createProcess === 'function');
+        _U.forceLog('🧰 [CAP] Node=' + _capNode + ' · child_process=' + _capCp +
+            ' · cep.process=' + _capProc + ' · escriptura=' + (_U._fsKind || '?'));
+    } catch (eCap) { }
     // ── ESTAT D'ESPERA DEL BOTÓ MAIN ─────────────────────────────────────────
     // Mentre el motor JSX i el primer checkContext no acabin, el botó MAIN no ha de
     // mostrar "NOU" ni acceptar clics: es posa en estat BUSY. Es desactiva sol quan

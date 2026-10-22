@@ -193,9 +193,9 @@
             return await r.text();
         }
         var idx = await readRepo('index.html');
-        ok('#BOOT/14 cache-busts al dia (escaleta_io v19 + main v86)',
+        ok('#BOOT/14 cache-busts al dia (escaleta_io v19 + main v87)',
             /\?v=19/.test(idx.match(/escaleta_io\.js\?v=\d+/) || '') &&
-            /\?v=86/.test(idx.match(/main\.js\?v=\d+/) || ''),
+            /\?v=87/.test(idx.match(/main\.js\?v=\d+/) || ''),
             (idx.match(/escaleta_io\.js\?v=\d+/) || '') + ' ' + (idx.match(/main\.js\?v=\d+/) || ''));
 
         var mainSrc = await readRepo('js/main.js');

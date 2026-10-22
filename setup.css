@@ -217,11 +217,19 @@ code {
 .fp-picker-list::-webkit-scrollbar-thumb,
 .fp-picker-quick::-webkit-scrollbar-thumb { background: #333; border-radius: 10px; }
 
-/* ── SELECTOR DE CARPETES (2026-10-21) ────────────────────────────────────
-   El diàleg del sistema que obri `cep.fs.showOpenDialog` no porta els accessos
-   ràpids de l'Explorador ni deixa enganxar una ruta UNC. Este selector és HTML
-   i viu damunt del dashboard: accessos ràpids, camp per ENGANXAR la ruta i
+/* ── SELECTOR DE CARPETES (2026-10-21 · revisat #178b 2026-10-22) ──────────
+   El botó 📁 obri el diàleg MODERN de l'Explorador de Windows (script
+   `scripts/pick_folder.ps1`: IFileOpenDialog + FOS_PICKFOLDERS), que sí que
+   porta l'Accés ràpid/favorits i la barra d'adreces per a rutes UNC.
+   Este selector HTML queda com a ÚLTIMA xarxa de seguretat (si Node o el
+   script no estan disponibles): accessos ràpids, camp per ENGANXAR la ruta i
    navegació per carpetes. */
+
+/* (2026-10-22) Mentres arrenca el diàleg de l'Explorador (PowerShell + C#
+   tarda ~0,7-1 s la primera volta) el cursor passa a «espera»: si no, el clic
+   sembla que no ha fet res. La classe la posa `fpPickFolderNative`. */
+body.fp-picking, body.fp-picking * { cursor: progress !important; }
+
 .fp-picker-backdrop {
     display: none; position: fixed; inset: 0; background: rgba(0, 0, 0, .65);
     z-index: 999; align-items: center; justify-content: center;

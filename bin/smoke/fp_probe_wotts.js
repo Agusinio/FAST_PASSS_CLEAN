@@ -175,7 +175,7 @@
             var iFin = ctxSrc.indexOf('} finally {', iYest);
             ok('#WOTT/11 Ctrl+clic (AHIR): mateix camí amb dateDir i retorn a HOY dins de finally',
                 iYest > 0 && iToday > iYest && iFin > iYest && iFin < iToday &&
-                ctxSrc.indexOf('runMainAction(actA, dataA)') > iYest,
+                ctxSrc.indexOf('runMainAction(plan.action, dataA)') > iYest,
                 'yest=' + iYest + ' finally=' + iFin + ' today=' + iToday);
             // ── I. DURADES DE WOTT ALINEADES A FRAMES (2026-10-21) ───────────
             // Les durades que no cauen a la graella (les estimades per mida) feien
@@ -282,9 +282,9 @@
                 /if \(placeEnd !== null && \(placeEnd - slot\.start\) > REV_FRAME \+ 0\.001\) \{/.test(chySrc) &&
                 /placeEnd = gridDown\(placeEnd - REV_FRAME\);/.test(chySrc));
             var idxW = await readRepo('index.html');
-            ok('#WOTT/24 cache-bust del #177 (4_Context 28, flow_chyrons 82, Scanner 16)',
-                /4_Context\.js\?v=28/.test(idxW) && /flow_chyrons\.js\?v=82/.test(idxW) &&
-                /Scanner\.js\?v=16/.test(idxW),
+            ok('#WOTT/24 cache-bust del #177/#182c/#183 (4_Context 30, flow_chyrons 84, Scanner 17)',
+                /4_Context\.js\?v=30/.test(idxW) && /flow_chyrons\.js\?v=84/.test(idxW) &&
+                /Scanner\.js\?v=17/.test(idxW),
                 (idxW.match(/4_Context\.js\?v=\d+/) || '') + ' ' +
                 (idxW.match(/flow_chyrons\.js\?v=\d+/) || '') + ' ' +
                 (idxW.match(/Scanner\.js\?v=\d+/) || ''));
@@ -374,6 +374,314 @@
                 scanSrc.indexOf("_bm('wotts · llistat (") > 0 &&
                 scanSrc.indexOf("_bm('MP4 · datació (") > 0 &&
                 scanSrc.indexOf("_bm('wotts · datació (") > 0);
+
+            // ── M. Ctrl+clic (AHIR) QUE «NO FEIA RES» (2026-10-22 · #181) ────────
+            // Log real (22/10 13:05): «Ctrl+clic → mode correcció (AHIR)» i, mig segon
+            // després, «Ja hi ha un escaneig en curs: la crida s hi enganxa» → l estat
+            // lligut era el de HOY (MASSA) → «AHIR sense material útil» i cap acció.
+            ok('#WOTT/30 checkContext: `fresh` espera el torn i llança un escaneig propi',
+                /const _fresh = !!\(_opts && _opts\.fresh\)/.test(ctxSrc) &&
+                /while \(_ccInFlight && _waits < 8\)/.test(ctxSrc) &&
+                ctxSrc.indexOf('checkContext({ force: true, fresh: true })') > 0,
+                'fresh=' + /_opts\.fresh/.test(ctxSrc) +
+                ' espera=' + /while \(_ccInFlight && _waits < 8\)/.test(ctxSrc));
+
+            /**
+             * srcMethods: extreu metodes REALS de 4_Context.js i els avalua aillats
+             * (el harness no carrega 4_Context.js: es un modul d estat, amb DOM).
+             * `getUtils` queda en el scope de l eval perque els metodes el criden.
+             */
+            var getUtils = function () { return UI.Utils; };
+            function srcMethods(src, names) {
+                var out = {};
+                for (var i = 0; i < names.length; i++) {
+                    var at = src.indexOf('\n        ' + names[i] + ': ');
+                    if (at < 0) { continue; }
+                    var from = at + 9;
+                    var open = src.indexOf('{', from);
+                    if (open < 0) { continue; }
+                    var depth = 0, end = -1;
+                    for (var p = open; p < src.length; p++) {
+                        var ch = src.charAt(p);
+                        if (ch === '{') { depth++; }
+                        else if (ch === '}') { depth--; if (depth === 0) { end = p; break; } }
+                    }
+                    if (end < 0) { continue; }
+                    try {
+                        var one = eval('({' + src.substring(from, end + 1) + '})');
+                        out[names[i]] = one[names[i]];
+                    } catch (eEv) { }
+                }
+                return out;
+            }
+            var cM = srcMethods(ctxSrc, ['_correctionAction', '_awaitTargetScan']);
+
+            var cases = [
+                ['NEW', true, 'NEW', 'material'],
+                ['UPDATE', true, 'UPDATE', 'material'],
+                ['GO', true, 'GO', 'material'],
+                ['LOAD', true, 'LOAD', 'material'],
+                ['MASSA', true, 'NEW', 'sense-material'],
+                ['ESPERANT', true, 'NEW', 'sense-material'],
+                ['MASSA', false, 'NEW', 'sense-escaneig-del-dia'],
+                ['DISABLED', true, null, 'estat-DISABLED']
+            ];
+            var badCase = '';
+            for (var ci = 0; ci < cases.length; ci++) {
+                var cs = cases[ci];
+                var got = cM._correctionAction ? cM._correctionAction(cs[0], cs[1]) : null;
+                if (!got || got.action !== cs[2] || got.reason !== cs[3]) {
+                    badCase = cs[0] + '/' + cs[1] + ' -> ' + JSON.stringify(got) +
+                        ' (esperat ' + cs[2] + '/' + cs[3] + ')';
+                    break;
+                }
+            }
+            ok('#WOTT/31 _correctionAction: AHIR amb MASSA/ESPERA o sense escaneig del dia -> CREA',
+                !!cM._correctionAction && badCase === '' &&
+                ctxSrc.indexOf('this._correctionAction(stA, scanY.ok)') > 0,
+                badCase === '' ? '8 casos OK' : badCase);
+
+            var calls = 0, freshOk = true;
+            var fakeCtx = {
+                _lastConclusion: null,
+                _lastButtonData: null,
+                checkContext: async function (o) {
+                    calls++;
+                    if (!o || o.fresh !== true) freshOk = false;
+                    // Dues passades amb la data d AVUI (poll) i la tercera amb AHIR.
+                    if (calls < 3) {
+                        this._lastConclusion = 'MASSA';
+                        this._lastButtonData = { dateDir: '2026_10_22' };
+                    } else {
+                        this._lastConclusion = 'NEW';
+                        this._lastButtonData = { dateDir: '2026_10_21' };
+                    }
+                }
+            };
+            var rSc = (cM._awaitTargetScan)
+                ? await cM._awaitTargetScan.call(fakeCtx, '2026_10_21', 3)
+                : null;
+            ok('#WOTT/32 _awaitTargetScan: reintenta fins que l estat es de la data demanada',
+                !!rSc && rSc.ok === true && rSc.attempts === 3 && rSc.state === 'NEW' &&
+                calls === 3 && freshOk && rSc.data && rSc.data.dateDir === '2026_10_21',
+                'ok=' + (rSc && rSc.ok) + ' intents=' + (rSc && rSc.attempts) +
+                ' calls=' + calls + ' fresh=' + freshOk);
+
+            var callsKo = 0;
+            var fakeKo = {
+                _lastConclusion: null,
+                _lastButtonData: null,
+                checkContext: async function () {
+                    callsKo++;
+                    this._lastConclusion = 'MASSA';
+                    this._lastButtonData = { dateDir: '2026_10_22' };
+                }
+            };
+            var rKo = (cM._awaitTargetScan)
+                ? await cM._awaitTargetScan.call(fakeKo, '2026_10_21', 2)
+                : null;
+            ok('#WOTT/33 _awaitTargetScan: si la data no arriba, ok=false (es crea igualment)',
+                !!rKo && rKo.ok === false && rKo.attempts === 2 && callsKo === 2 &&
+                ctxSrc.indexOf('sense-escaneig-del-dia') > 0,
+                'ok=' + (rKo && rKo.ok) + ' intents=' + (rKo && rKo.attempts) + ' calls=' + callsKo);
+
+            ok('#WOTT/34 _onMainClick: la data del flux es la DEMANADA (St.dateDir abans de crear)',
+                ctxSrc.indexOf('const targetY = this._targetDateDir();') > 0 &&
+                ctxSrc.indexOf('await this._awaitTargetScan(targetY, 3)') > 0 &&
+                /St\.dateDir = targetY;/.test(ctxSrc) &&
+                ctxSrc.indexOf('workTarget = _resetTarget') > 0,
+                'target=' + (ctxSrc.indexOf('const targetY = this._targetDateDir();') > 0) +
+                ' scan=' + (ctxSrc.indexOf('await this._awaitTargetScan(targetY, 3)') > 0) +
+                ' date=' + /St\.dateDir = targetY;/.test(ctxSrc) +
+                ' reset=' + (ctxSrc.indexOf('workTarget = _resetTarget') > 0));
+
+            // ── N. SENSE NODE I SENSE created (2026-10-22 · #182) ────────────────
+            // Equip real (log 22/10 14:02): «[CAP] Node=false» i, en UNC, ni
+            // `cep.fs.stat().creationTime` ni `File.created` donen res → la sonda
+            // deia «0/43 wotts del dia» tenint els 43 wotts al NAS, i el botó es
+            // quedava a MASSA D'HORA amb l'escaleta ja baixada per FOTO.
+            // Ara: mtime amb REGLA NOCTURNA com a últim recurs, i una escaleta
+            // local completa desbloqueja CREA sense dependre de la sonda.
+            var mtAvui = Scan._mtimeDateYYYYMMDD(new Date(2026, 9, 22, 13, 57, 0).getTime());
+            var mtNit  = Scan._mtimeDateYYYYMMDD(new Date(2026, 9, 22, 2, 31, 0).getTime());
+            var mtZero = Scan._mtimeDateYYYYMMDD(0);
+            ok('#WOTT/35 _mtimeDateYYYYMMDD: regla nocturna (13:57→avui · 02:31→ahir · 0→null)',
+                mtAvui === '20261022' && mtNit === '20261021' && mtZero === null,
+                mtAvui + ' / ' + mtNit + ' / ' + (mtZero === null ? 'null' : mtZero));
+
+            var fdNom = Scan._fileDateYYYYMMDD({ name: 'TN_COMARQUES_V1_20261022_x.MP4', created: 0, mtime: 0 });
+            var fdMtm = Scan._fileDateYYYYMMDD({ name: F_TODAY1, created: 0, mtime: new Date(2026, 9, 22, 13, 57, 0).getTime() });
+            var fdCre = Scan._fileDateYYYYMMDD({ name: F_TODAY1, created: new Date(2026, 9, 21, 12, 0, 0).getTime(), mtime: new Date(2026, 9, 22, 13, 57, 0).getTime() });
+            ok('#WOTT/36 _fileDateYYYYMMDD: nom → created → mtime (created=0 en UNC no tomba el filtre)',
+                fdNom === '20261022' && fdMtm === '20261022' && fdCre === '20261021',
+                fdNom + ' / ' + fdMtm + ' / ' + fdCre);
+
+            // Sonda completa pel camí REAL de l'equip: sense Node, CEP llista i
+            // `stat` només dóna mtime (creationTime=0).
+            var cepTimes = {};
+            cepTimes[F_TODAY1] = new Date(2026, 9, 21, 13, 57, 0).getTime();
+            cepTimes[F_TODAY2] = new Date(2026, 9, 21, 14, 2, 0).getTime();
+            cepTimes[F_AHIR]   = new Date(2026, 9, 21, 2, 31, 0).getTime();   // mtime nocturn → 20/10
+            UI.Utils._nodeFs = function () { return null; };
+            UI.Utils.readFolder = function () { return Promise.resolve(null); };
+            try {
+                window.cep = {
+                    fs: {
+                        readdir: function () { return { err: 0, data: Object.keys(cepTimes) }; },
+                        stat: function (p) {
+                            var n = String(p).split(BS).pop();
+                            if (!(n in cepTimes)) return { err: 2 };
+                            return { err: 0, data: { creationTime: 0, mtime: cepTimes[n] } };
+                        }
+                    }
+                };
+            } catch (eCep2) { }
+            reset(true);
+            var rNoNode = await Scan.wottsToday(ctxBase);
+            ok('#WOTT/37 sense Node i creationTime=0: data pel mtime (CEP) → 2 wotts del dia',
+                rNoNode.ok === true && rNoNode.found === true && rNoNode.count === 2 &&
+                rNoNode.via === 'cep' && rNoNode.dated === 3,
+                'ok=' + rNoNode.ok + ' found=' + rNoNode.found + ' count=' + rNoNode.count +
+                ' via=' + rNoNode.via + ' datats=' + rNoNode.dated + '/' + rNoNode.pendingDates);
+            UI.Utils._nodeFs = realNodeFs;
+            UI.Utils.readFolder = realReadFolder;
+            try { window.cep = realCep; } catch (eRc2) { }
+
+            ok('#WOTT/38 checkContext: escaleta local COMPLETA (FOTO) desbloqueja CREA (#182)',
+                ctxSrc.indexOf('const escReady = !!(escFound && semaforoData.esc.local && semaforoData.esc.ready);') > 0 &&
+                /else if \(escReady\) \{/.test(ctxSrc) &&
+                ctxSrc.indexOf('CREA: escaleta local') > 0);
+
+            ok('#WOTT/39 cache-bust del #182 (4_Context 30 · Scanner 17)',
+                /4_Context\.js\?v=30/.test(idxW) && /Scanner\.js\?v=17/.test(idxW),
+                (idxW.match(/4_Context\.js\?v=\d+/) || '') + ' ' + (idxW.match(/Scanner\.js\?v=\d+/) || ''));
+
+            // (2026-10-22 · #182) TESTIMONI al log: si el stat d'UNC no dóna cap data,
+            // volem vore creationTime/mtime en compte de quedar-nos a cegues.
+            ok('#WOTT/40 _dateWotts: testimoni del stat quan CEP no data (creationTime/mtime)',
+                scanSrc.indexOf("' (creationTime=' + sample.c + ' · mtime=' + sample.m + ')'") > 0 &&
+                scanSrc.indexOf('[SCAN:dates] CEP no ha datat ') > 0 &&
+                scanSrc.indexOf('sense data fiable (ni created ni mtime)') > 0);
+
+            // ── N. WOTTS SENCERS: 1 FRAME MENYS (2026-10-22 · #182c) ───────────
+            // Queixa: «quan es col·loca el clip SENCER ix 1 frame més llarg que el
+            // mèdia real». La durada estimada per mida NO és prou fiable (pot errar
+            // 2-3 frames): es LLIG el clip que ha deixat l'INSERT i es fixa el final
+            // 1 frame abans, amb verificació i 2a passada si `endCoherent` hi torna
+            // a afegir el frame inclusiu.
+            ok('#WOTT/41 flow_chyrons: el wott SENCER es MESURA al timeline i es retalla 1 frame',
+                /vaSencer = \(placeEnd === null\)/.test(chySrc) &&
+                /getClipsLogic\(\)\._clipAtTime\(slot\.track, st, 'video'\)/.test(chySrc) &&
+                /dWant = Math\.max\(REV_FRAME, dIns - REV_FRAME\)/.test(chySrc) &&
+                /sencerFet = true/.test(chySrc) &&
+                /if \(placeEnd !== null && !sencerFet\)/.test(chySrc),
+                'vaSencer=' + /vaSencer = \(placeEnd === null\)/.test(chySrc) +
+                ' mesura=' + /_clipAtTime\(slot\.track, st, 'video'\)/.test(chySrc) +
+                ' guarda=' + /!sencerFet/.test(chySrc));
+            var FR = 0.04;
+            var gDown = function (v) { return Math.floor(Number(v) / FR + 1e-6) * FR; };
+            var fN = function (s) { return Math.round(Number(s) / FR); };
+            // Rèplica EXACTA del bloc de flow_chyrons (`afig` = 1 frame que hi afig
+            // Premiere en fixar el final: és el pitjor cas, el que abans es colava).
+            var retallSencer = function (start, dIns, afig) {
+                if (!(dIns > 2 * FR)) return null;
+                var dWant = Math.max(FR, dIns - FR), dFin = dIns;
+                for (var pas = 0; pas < 2 && dFin > dWant + 0.5 * FR; pas++) {
+                    var wantE = gDown(start + dWant - pas * FR);
+                    if (!(wantE > start + 0.5 * FR)) break;
+                    dFin = (wantE - start) + (afig ? FR : 0);
+                }
+                return (dFin > 0 && dFin < dIns - 0.5 * FR) ? dFin : null;
+            };
+            var rA = retallSencer(100.00, 156 * FR, false);
+            var rB = retallSencer(100.00, 156 * FR, true);
+            ok('#WOTT/42 retall del clip sencer: 156 → 155 frames (amb i sense el frame inclusiu)',
+                rA !== null && fN(rA) === 155 && rB !== null && fN(rB) === 155,
+                'sense=' + (rA === null ? 'n/d' : fN(rA)) + ' amb=' + (rB === null ? 'n/d' : fN(rB)));
+            var rC = retallSencer(100.00, 2 * FR, false);
+            var rD = retallSencer(100.00, 3 * FR, false);
+            ok('#WOTT/43 retall del clip sencer: 3 → 2 frames i un de 2 frames NO es toca (mai <1)',
+                rC === null && rD !== null && fN(rD) === 2,
+                '2f=' + (rC === null ? 'intacte' : fN(rC)) + ' 3f=' + (rD === null ? 'n/d' : fN(rD)));
+            ok('#WOTT/44 el retall del sencer deixa traça (✂️ CLIP SENCER) i cache-bust flow_chyrons 84',
+                chySrc.indexOf('✂️ [') > 0 && chySrc.indexOf('CLIP SENCER') > 0 &&
+                /flow_chyrons\.js\?v=84/.test(idxW),
+                (idxW.match(/flow_chyrons\.js\?v=\d+/) || ''));
+
+            // ── O. CONGELAT DEL TITOLET: MAI CAPTURAR SOBRE EL VÍDEO (2026-10-22 · #183) ──
+            // Queixa: «el congelat del titullet ha congelat el clip de V1». El PNG del
+            // congelat s'exporta del PROGRAMA COMPOST: si el TC de captura té vídeo a sota,
+            // el PNG és opac, se n'endú el clip i tapa el programa. El defecte venia de
+            // `_emptyProgramTC`, que quan NO podia llegir les pistes tornava **600 s** (dins
+            // del bloc) com si fóra una zona buida.
+            var CHY = UI.Workflows.Chyrons;
+            ok('#WOTT/45 motor: Chyrons._freezeZone existeix i _emptyProgramTC hi delega',
+                !!(CHY && typeof CHY._freezeZone === 'function') &&
+                /_emptyProgramTC: async function \(needSec\) \{\s*const z = await this\._freezeZone/.test(chySrc),
+                'CHY=' + !!CHY + ' freezeZone=' + typeof (CHY && CHY._freezeZone));
+
+            if (!CHY || typeof CHY._freezeZone !== 'function') { return; }
+            var TLZ = {};            // pista → [{start,end}]
+            var CNT_ERR = {};        // pista → error de Clips.count
+            var NTR = 0;             // nombre de pistes de vídeo que "existeixen"
+            var TRK_ERR = false;
+            var savedCJZ = UI.Utils.callJSX;
+            UI.Utils.callJSX = async function (expr) {
+                var s = String(expr), m;
+                if (/^Tracks\.count\('video'\)$/.test(s)) return TRK_ERR ? 'ERR:boom' : String(NTR);
+                if ((m = /^Clips\.count\((\d+), 'video'\)$/.exec(s))) {
+                    var t = Number(m[1]);
+                    if (CNT_ERR[t]) return CNT_ERR[t];
+                    return String((TLZ[t] || []).length);
+                }
+                if ((m = /^Clips\.get\((\d+), (\d+), 'video'\)$/.exec(s))) {
+                    var arr = TLZ[Number(m[1])] || [], c = arr[Number(m[2])];
+                    return c ? JSON.stringify({ index: Number(m[2]), name: 'x', start: c.start, end: c.end }) : 'null';
+                }
+                return 'OK';
+            };
+            try {
+                // 45 · pistas il·legibles → NO es pot garantir cap zona (mai 600 a cegues)
+                TLZ = {}; CNT_ERR = {}; NTR = 0; TRK_ERR = true;
+                var z45 = await CHY._freezeZone(12);
+                TRK_ERR = false;
+                TLZ = { 1: [{ start: 0, end: 100 }] }; CNT_ERR = { 6: 'ERR:boom' }; NTR = 6;
+                var z45b = await CHY._freezeZone(12, 3000);
+                ok('#WOTT/45 _freezeZone: sense llegir les pistes NO torna 600 (ok:false) — ni amb un TC preferit',
+                    z45.ok === false && z45.tc === 0 && z45.via === 'illegible' &&
+                    z45b.ok === false && z45b.tc === 0,
+                    'Tracks KO=' + JSON.stringify(z45) + ' · pista KO=' + JSON.stringify(z45b));
+
+                // 46 · V1 ple fins a 2700 s: el 600 del titullet és dins del vídeo → es recalcula
+                TLZ = { 1: [{ start: 0, end: 2700 }] }; CNT_ERR = {}; NTR = 1;
+                var z46 = await CHY._freezeZone(12, 600);
+                var z46b = await CHY._freezeZone(12);
+                ok('#WOTT/46 _freezeZone: un TC preferit damunt de V1 es REBUTJA i la zona passa darrere del vídeo (2705 s)',
+                    z46.ok === true && z46.via === 'recalculat' && Math.abs(z46.tc - 2705) < 0.05 &&
+                    z46b.ok === true && Math.abs(z46b.tc - 2705) < 0.05,
+                    'pref=' + JSON.stringify(z46) + ' · lliure=' + JSON.stringify(z46b));
+
+                // 47 · zona preferida lliure de veritat → s'accepta sense recalcular
+                TLZ = { 1: [{ start: 0, end: 100 }], 6: [] }; CNT_ERR = {}; NTR = 6;
+                var z47 = await CHY._freezeZone(12, 3000);
+                ok('#WOTT/47 _freezeZone: si el TC preferit PROVA que és buit, es reutilitza (via preferit)',
+                    z47.ok === true && z47.via === 'preferit' && Math.abs(z47.tc - 3000) < 0.001,
+                    JSON.stringify(z47));
+
+                // 48 · el congelat no pot capturar-se si el clip temporal no cobrix l'instant
+                ok('#WOTT/48 _freezeTemaTitol: guarda de COBERTURA abans de capturar (covOk/readCover) i abandonament net',
+                    /const covOk = \(c\)/.test(chySrc) &&
+                    /Number\(c\.end\) > snapTC \+ 0\.005/.test(chySrc) &&
+                    /cov = await readCover\(snapTC\)/.test(chySrc) &&
+                    /Cap clip temporal cobrint l'instant de captura/.test(chySrc) &&
+                    chySrc.indexOf('Cap clip temporal cobrint') < chySrc.indexOf('_capturePng(snapPath') &&
+                    /alpha: true,\s*zoneOk: true/.test(chySrc) &&
+                    /alpha: true, zoneOk: zone\.ok/.test(chySrc),
+                    'guarda=' + /const covOk = \(c\)/.test(chySrc) +
+                    ' alpha=' + /alpha: true/.test(chySrc));
+            } finally {
+                UI.Utils.callJSX = savedCJZ;
+            }
         } finally {
             UI.Utils._nodeFs = realNodeFs;
             UI.Utils.readFolder = realReadFolder;

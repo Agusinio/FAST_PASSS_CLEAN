@@ -1,9 +1,9 @@
 # Registre de bugs i funcionalitats
 
-Projecte **FAST >>> PASS** - versio **2.9.5 (LIPO-PRO)** - cataleg actualitzat: 2026-10-16
+Projecte **FAST >>> PASS** - versio **2.9.5 (LIPO-PRO)** - cataleg actualitzat: 2026-10-22
 
 Aquest fitxer es genera automaticament des del cataleg viu del projecte (`features.json`).
-Total: 114 entrades - **108 resoltes/tancades** - 6 en curs o pendents.
+Total: 117 entrades - **111 resoltes/tancades** - 6 en curs o pendents.
 
 ---
 
@@ -17,7 +17,7 @@ Total: 114 entrades - **108 resoltes/tancades** - 6 en curs o pendents.
 | `RIBBON_EDITING` | Edición Rápida de Vídeo | active | high | IN (Ripple Trim), OUT (cierre con limpieza de pistas), navegación ◀/▶ entre clips, Slider posición X para reframing 9:16. |
 | `WOTT_PLACEMENT` | Colocación de Rètols (Wotts) | active | high | Parseo de .mov en CHYRONS: [PROGRAMA]_[DATA]_[BLOC]_[ID]_[TIPUS]_[TEXT]. Colocación por timestamp: V4 (Nomcarrec/Firma/Tema-Titol), V6 (LlocData). Snap a cortes. |
 | `SUBTITLES` | Gestión de Subtítulos (SRT) | active | high | Editor SRT (visor + waveform + marcadors). CARREGAR ⬇️: blocs de 15 min i, si no n'hi ha, FALLBACK al .SRT de la carpeta de verticalització (Scan.srtFallback, relaxació de filtres per nivells). Ctrl+clic = fallback direc [...] |
-| `RENDER` | Render y Exportación | active | high | VÍDEO: exportAsMediaDirect DIRECTAMENT a la carpeta de publicació `rutas.render1` (EXPORTS PROVISIONALS del NAS public.ad-ccrtv.local) amb el preset VERTIKAL .epr; en acabar, `_publishVideo` COPIA el MP4 a `rutas.render2 [...] |
+| `RENDER` | Render y Exportación | active | high | VÍDEO: exportAsMediaDirect DIRECTAMENT a la carpeta de publicació `rutas.render1` (EXPORTS PROVISIONALS del NAS public.ad-ccrtv.local) amb el preset VERTIKAL .epr; en acabar, `_publishVideo` COPIA el MP4 a `rutas.render2 [...] **VALIDAT EN VIU 2026-10-22**: l'exportació de vídeo funciona i el fitxer es desa a la ruta seleccionada. |
 | `CONTEXT_SYSTEM` | Sistema de Contexto (Semáforos) | active | high | Síntesis de estado: NEW/UPDATE/GO/LOAD. 4 semáforos visuales (JSON, MP4, Rètols, Subtítols). Inspectors: SourceAssets, App, Session. |
 | `KEYFRAMES` | Motor de Keyframes e Interpolación | active | medium | Auto-reframe inteligente 16:9→9:16. Interpolación: LINEAR, BEZIER, HOLD. Escala base 47%, offset vertical automático. |
 | `FFMPEG` | Integración FFmpeg | active | medium | Procesamiento de vídeo externo vía FFmpeg. Render limpio, clean-swap de clips. |
@@ -30,7 +30,7 @@ Total: 114 entrades - **108 resoltes/tancades** - 6 en curs o pendents.
 
 ## 2. Bugs resolts (detall)
 
-Ordre cronologic pel numero d incident. 105 entrades.
+Ordre cronologic pel numero d incident. 106 entrades.
 
 ### #8 - resolt (2026-05-28)
 
@@ -1148,7 +1148,7 @@ Ordre cronologic pel numero d incident. 105 entrades.
 
 **FITXERS**: `jsx/main.jsx`, `bin/smoke/fp_probe_portada.js` (nou), `bin/smoke/fp_smoke_build.ps1`, `bin/smoke/fp_smoke_runner.js`
 
-**VALIDACIO**: `bin/smoke/fp_smoke_build.ps1`: **PASS 224 FAIL 0** — assercions «cap crida `callJSX` a un mètode INEXISTENT del pont (540 crides revisades)» i «el pont exposa els àtoms que el #172 necessitava (`Timeline.out` + `Render.exportRange`)» · pendent el test a Premiere.
+**VALIDACIO**: `bin/smoke/fp_smoke_build.ps1`: **PASS 224 FAIL 0** — assercions «cap crida `callJSX` a un mètode INEXISTENT del pont (540 crides revisades)» i «el pont exposa els àtoms que el #172 necessitava (`Timeline.out` + `Render.exportRange`)» · **VALIDAT EN VIU el 2026-10-22**: l'exportació de vídeo (RENDER 📹) funciona i el fitxer es desa a la ruta seleccionada → es tanca la validació que quedava pendent d'este bug.
 
 **NOTA**: Aquesta prova (part A) hauria caçat els DOS defectes el primer dia. Regla per al futur: si s'afig un mètode nou a un mòdul `jsx/`, cal exposar-lo també a `main.jsx`, o la crida fallarà EN SILENCI (`callJSX` retorna `'ERR:...'` i el flux cau al seu fallback com si el mètode no existira).
 
@@ -1220,7 +1220,306 @@ Ordre cronologic pel numero d incident. 105 entrades.
 
 **NOTA**: la prova ara apunta el `<link>` de la copia de %TEMP% al `setup.css` REAL del repo; si es queda sense full, `getComputedStyle` torna valors per defecte i `#SETUP/7` (6 columnes) cau — així el CSS no pot quedar desconnectat sense que la prova ho diga.
 
+### #178b - fet_parcial (2026-10-22)
+
+**SIMPTOMA**: El botó 📁 de CONFIG (RUTES DE XARXA) obria el diàleg **ANTIC** de carpetes del Windows: arbre de discs a l'esquerra, sense **Accés ràpid**/favorits, sense **Ús recent** i amb la barra d'adreces no editable → **no es podia enganxar una ruta UNC** (`\\public.ad-ccrtv.local\Public\…`) ni saltar a una carpeta fixa. En un equip de muntatge això és cada dia: el #177b va afegir un selector HTML propi (`#fp-picker`) amb accessos ràpids, però el **primer clic** encara anava al diàleg vell (el selector només eixia si `cep.fs.showOpenDialog` no hi era).
+
+**CAUSA ARREL**: `cep.fs.showOpenDialog(false, true, …)` amb `chooseDirectory = true` està cablejat a **`SHBrowseForFolder`** (el diàleg de l'Explorador de Windows XP/7), NO a l'`IFileOpenDialog` modern. CEP/CEF no exposava cap altra API de diàleg i l'extensió no tenia cap selector propi de carpetes: la cascada del #177b (`pickNative` → `pickerOpen`) mai no arribava al segon esglaó perquè el primer sempre «funcionava».
+
+**SOLUCIO**: (1) `scripts/pick_folder.ps1` (nou) obri l'**`IFileOpenDialog`** de debò (el de l'Explorador de Windows 10/11, amb `FOS_PICKFOLDERS`) fent P/Invoke del shell amb `Add-Type` (C# d'interop incrustat): `-Title`/`-Initial` o les variables d'entorn `FP_PICK_TITLE`/`FP_PICK_INITIAL` (variables i no arguments perquè el `cmd` trenca els accents, els espais i les barres de `\\srv\share`), stdout en **UTF-8** amb la ruta triada i codis de sortida **0** (ruta) / **3** (cancel·lat) / **4** (error, motiu per stderr); el tipus C# es compila una volta i es desa a `%TEMP%\fp_pick_folder_v1.dll` (~1 s en fred, ~0,3 s calent) amb recaiguda a compilació **en memòria** si `%TEMP%` no s'hi pot escriure; la finestra pare és la de **Premiere** (el diàleg no se'n va darrere); `-CompileOnly` per a smoke; la ruta inicial la valida el C# en un **procés a banda** → si la xarxa no respon, el panell NO es penja (es tanca sol i cau al pla B). (2) `setup.html` → `window.fpPickFolderNative(id, initial)` (asíncrona: `child_process.execFile('powershell.exe', ['-NoProfile','-STA','-ExecutionPolicy','Bypass','-File', script])`, amb l'entorn copiat i l'`stdout` posat al camp; cancel·lar **no** obri res més) i `browseFolder` passa a cascada de **tres** esglaons: **modern** → `pickNative` (CEP, quinze anys enrere però funciona) → `pickerOpen` (selector HTML); cursor d'espera `body.fp-picking` mentres arrenca el procés i `_fpPickBusy` per a no encuar dos diàlegs. `browseFile` (plantilla `.prproj`) **no** es toca: per a fitxers `showOpenDialog` SÍ que és el modern (`GetOpenFileName`).
+
+**FITXERS**: `scripts/pick_folder.ps1` (nou), `setup.html` (`fpNodeReq`/`fpPickScript`/`fpPickCursor`/`fpPickFolderNative`/`browseFolder`, `setup.css?v=3`), `setup.css` (`body.fp-picking`), `js/workflows/flow_config.js` (`setup.html?v=7`), `bin/smoke/fp_probe_setup_ui.ps1`, `docs/BUGS_FIXED.md`, `docs/CHANGELOG.md`, `docs/HANDOFF_2026-10-22.md`
+
+**VALIDACIO**: `bin/smoke/fp_probe_setup_ui.ps1` → **29/29 OK** amb les proves noves `#SETUP/2e` (el botó crida `fpPickFolderNative` i `scripts\pick_folder.ps1` existix), `#SETUP/2f` (el C# d'`IFileOpenDialog` **COMPILA**: `-CompileOnly` → `COMPILE_OK`), `#SETUP/14` (el 1r clic invoca el diàleg MODERN i li passa la ruta que hi ha al camp, sense passar pel de CEP ni pel selector HTML), `#SETUP/14b` (sense Node ni script cau al diàleg de CEP amb `chooseDir=true`), `#SETUP/13c`/`#SETUP/13d` (cap promesa rebutjada ni cap error JS en carregar la finestra — el bloc DOM s'executava buit i ningú no s'assabentava) · `bin/check_js_v8.ps1` 61/61 · `bin/smoke/fp_smoke_build.ps1` PASS 369 / FAIL 0.
+
+**NOTA**: la vista del diàleg (última carpeta, grandària) la recorda l'Explorador; `-Initial` només hi apunta. Si `powershell.exe` està bloquejat per política, la cascada seguix caient al diàleg de CEP i al selector HTML: la funció no pot deixar l'usuari sense triar carpeta.
+
+**2a VOLTA (2026-10-22 · EN CURS)**: la prova en viu al panell **DIST** (`com.fastpass.dist`) va ensenyar el diàleg **VELL** un altre colp, i sense cap error: el fallback era silenciós i `%TEMP%\CEP12-PPRO.log` no servix de res (`LogLevel : 1`, sense fitxer `.debug`), així que no se sabia si fallaven `child_process`, la ruta del `.ps1` o el propi script. Canvis (només `setup.html` + caché; `jsx/` **intacte**): (1) `fpNodeReq` prova la cascada també a **`parent`/`top`** — `setup.html` viu dins d'un `<iframe>` i en CEP el mòdul de Node pot estar exposat **només** al marc principal, que és la causa més probable d'un `code = -1`; (2) `-Title`/`-Initial` viatgen **també per arguments** (`execFile` no passa per cap `cmd`, així que espais, accents i `\\srv\share` hi arriben intactes) i l'entorn del fill només es construïx si el marc té `process` — abans, si no en tenia, `powershell.exe` arrancava sense `PATH`/`SystemRoot`; (3) cada clic deixa traça a `<extensió>\_pick_debug.log` via `fs.appendFileSync` (URL carregada, `obre`, `OK`/`KO exit=N` + `stderr`, o `sense Node`) — amb eixa línia el diagnòstic deixa de ser a cegues; (4) `setup.html?v=8` a `flow_config.js` i `flow_config.js?v=10` a `index.html`. **VALIDACIO**: `bin/check_all.ps1 -Only setup,js,smoke` → `ALL GREEN | setup 29/29 | js 61/61 | smoke 369/369 | jsx intacte` (exit 0). **PENDENT**: repetir la prova en viu (reobrir el **panell**, no només CONFIG, perquè `index.html` torne a demanar `flow_config.js`) i, si torna a eixir el vell, mirar `_pick_debug.log`.
+**3a VOLTA (2026-10-22 · CAUSA ARREL)**: `_pick_debug.log` NO existia, i això ja ho deia tot: la traça de la 2a volta anava amb `fs.appendFileSync` de Node, i eixa mateixa peça és la que necessitava el diàleg. **CAUSA ARREL**: `CSXS/manifest.xml` no té cap `<CEFCommandLine>` amb `--enable-nodejs`, i des de CEP 9 Node NO s'injecta si no es demana → dins del panell no hi ha ni `require` ni `cep_node` (per això `_boot_timing.log` s'escriu amb `cep.fs` i `utils.js` cau a la branca «cep.fs(sync)»). Conseqüència: `fpPickViaNode` no s'arrancava MAI, `fpPickScript()` deia `''` (`fs.existsSync`) i la traça no s'escrivia: el fallback cap al diàleg vell era totalment cec. **SOLUCIÓ**: (1) transport nou `fpPickViaCep` amb **`cep.process.createProcess`** (API nativa de CEP 10+, comprovada al motor de PPRO 25.3 / CEP 12: `createProcess`, `stdout`, `stderr`, `onquit`, `isRunning`, `waitfor`), que arranca `C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -WindowStyle Hidden -File scripts\pick_folder.ps1 -Title … -Initial … -OutFile <ext>\_pick_result.tmp`, espera amb `onquit` + sondeig de 250 ms (màx. 30 min, sense bloquejar la UI) i llig el desenllaç del fitxer: `OK <base64-utf8>` / `CANCEL` / `ERR <base64-utf8>` — base64 perquè el nom pot portar accents i no volem dependre de com `cep.fs.readFile` decodifica; (2) `scripts/pick_folder.ps1` guanya `-OutFile` i hi deixa SEMPRE el desenllaç (també en error, perquè `cep.process` no dóna codi d'eixida); (3) `fpPickScript()`/`fpExists()` ja no necessiten Node (`cep.fs.readdir`) i `cepFs()`/`fpNodeReq` fan la cascada window→parent→top passant per `Utils._nodeReq`; (4) **OBSERVABILITAT**: `fpDiag()` escriu cada pas amb `FASTPASS_UI.Utils.forceLog` (→ `FASTPASS.log` del projecte o `<ext>\_keyframe_trace.log`; sense Node i sense `cep.fs.writeFile`, que el probe compta) i la primera línia retrata l'entorn (`Node=`, `child_process=`, `cep.process=`, `escriptura=`, URL, carpeta de l'extensió). `setup.html?v=9` + `flow_config.js?v=11`. **FITXERS**: `setup.html` (`fpFrames`, `fpDiag`, `fpEnvTxt`, `fpCepProc`, `fpPickOutFile`, `fpFromB64`, `fpPickOutcome`, `fpPickViaCep`, `fpPickViaNode`, `fpPickScript`, `fpExists`), `scripts/pick_folder.ps1` (`-OutFile`), `js/workflows/flow_config.js` (`?v=9`), `index.html` (`flow_config.js?v=11`), `bin/smoke/fp_probe_setup_ui.ps1` (`#SETUP/2g`, `#SETUP/2h`, `#SETUP/14c`, `#SETUP/14d`). **VALIDACIO**: `bin/check_all.ps1` → `ALL GREEN | setup 33/33 | js 61/61 | smoke 369/369 | dead 0 | jsx intacte` (exit 0), amb `#SETUP/2g` (traça per `forceLog` i cap `fs.appendFileSync`), `#SETUP/2h` (`.process.createProcess` + `[string]$OutFile`), `#SETUP/14c` (amb `cep.process` simulat: arranca `powershell.exe` amb `-OutFile` i `-Initial \\\\srv\\share` i NO cau al diàleg de CEP) i `#SETUP/14d` (el `OK <base64>` del .ps1 es descodifica amb els accents intactes: `C:\VERTICALITZACIÓ\PROVA`). També es va provar el protocol `-OutFile` de debò des de PowerShell (escriu `OK <b64>` i .NET el torna a `D:\VERTICALITZACIÓ\TN MIGDIA\2026_10_22`). **PENDENT**: prova en viu al panell **DIST**.
+
+
+
+### #179 - resolt (2026-10-22)
+
+**SIMPTOMA**: en clicar **GUARDAR CONFIG [Profile.json]** al dashboard de configuració, el perfil es desava (i eixia l'avís «Configuració desada a Profile.json»), però la finestra **continuava oberta** damunt del panell: l'usuari havia de clicar «TANCAR SENSE DESAR» per a tornar a l'extensió. El guardat funcionava; el que fallava era la tornada.
+
+**CAUSA ARREL**: `salvarTodo()` feia, en orde:
+
+1. `csInterface.dispatchEvent(new CSXSEvent('FASTPASS_CONFIG_UPDATED', 'APPLICATION'));`
+2. `window.parent.FASTPASS_UI.Workflows.Config.toggleSetup(false);`
+
+i el `js/lib/CSInterface.js` del repo **NO definix `CSXSEvent`** (només `dispatchEvent`): la línia 1 llançava `ReferenceError: CSXSEvent is not defined` i la 2 **no s'executava mai**. `window.parent…` era correcte (el botó «TANCAR SENSE DESAR» feia exactament eixa crida i sí que tancava) — el que matava el flux era l'excepció intermèdia.
+
+**PER QUÈ LA PROVA NO HO VEIA**: `bin/smoke/fp_probe_setup_ui.ps1` injectava `window.CSXSEvent = function(n, s){…}` al stub de CEP. Amb eixa class de mentida el desat arribava fins al final i `S closed=true` passava en verd, mentre el CEP de debò petava. La prova era còmplice del bug.
+
+**SOLUCIO**:
+
+(a) `notifyConfigUpdated()` a `setup.html`: la notificació va dins `if (typeof CSXSEvent === 'function')` i, si no hi és, s'omet amb traça (`fpDiag('event FASTPASS_CONFIG_UPDATED omès …')`); qualsevol excepció es captura. El desat ja no pot quedar-se a mitges per una class que no existix.
+
+(b) `closeSetup([reload])` a `setup.html`, amb **cascada** sobre `fpFrames()` (window → parent → top): `Workflows.Config.closeSetup()` → `toggleSetup(false)` → i, si cap de les dos, llevar `.active` a `#setup-overlay` directament (xarxa de seguretat). Cada via va en `try/catch` i el resultat (`OK`/`KO`) va al log del panell.
+
+(c) `Config.closeSetup()` nou a `js/workflows/flow_config.js` = punt ÚNIC de tancament. A més de cridar `toggleSetup(false)`, **refresca el perfil en memòria** amb `FASTPASS_UI.Config.loadProfile()`: el panell llig `Profile.json` a l'arrencada (`11_Configuracio.js::_loadProfile`), així que sense este refresc les rutes/programes acabats de desar no entraven en vigor fins a reiniciar l'extensió.
+
+(d) «TANCAR SENSE DESAR» passa per `closeSetup(false)` (sense refresc: no s'ha desat res) en lloc de la crida en línia a `window.parent…`.
+
+(e) Cache-busts: `setup.html?v=10` (`flow_config.js`) i `flow_config.js?v=12` (`index.html`), que és el que fa que Premiere agafe el codi nou.
+
+**FITXERS**: `setup.html`, `js/workflows/flow_config.js`, `index.html`, `bin/smoke/fp_probe_setup_ui.ps1`, `docs/BUGS_FIXED.md`, `docs/CHANGELOG.md`. `jsx/**` intacte.
+
+**VALIDACIO**: `bin/smoke/fp_probe_setup_ui.ps1` → **35/35 OK**. Canvis a la prova: (1) **s'elimina** el stub `window.CSXSEvent` (ara el DOM es prova com el CEP de debò, sense eixa class) — `#SETUP/18` (`S closed=true`) i `#SETUP/19` (cap `EXCEPCIO2`) fallen si el tancament torna a dependre de `CSXSEvent`; (2) `#SETUP/2i` estàtica: hi ha d'haver `notifyConfigUpdated`, `closeSetup`, la cascada `typeof C.closeSetup === 'function'`, el recanvi sobre `#setup-overlay` i `new CSXSEvent(` NOMÉS una vegada i DESPRÉS de la guarda; (3) `#SETUP/2j`: `setup.html?v>=10` i `flow_config.js?v>=12`; (4) la lectura del `--dump-dom` reintenta (20 intents, 250 ms) perquè Edge podia deixar el fitxer bloquejat i matava la prova amb `IOException`. `bin/check_all.ps1` → `ALL GREEN | setup 35/35 | js 61/61 | smoke 369/369 | dead 0 | jsx intacte`.
+
+**NOTA**: el `FASTPASS_CONFIG_UPDATED` queda com a avís OPCIONAL (cap listener del panell el consumeix hui); el tancament i el refresc **no depenen** d'ell.
+
+
+### #180 - resolt (2026-10-22)
+
+**SIMPTOMA**: el botó **RESET** (reciclatge de la cantonada INICI) no tancava el projecte a Premiere ni esborrava el seu directori. El log real del NAS (`PROVES\FASTPASS.log`, 22/10 12:16) ho deixa clar:
+
+```
+♻️ [RESET] Petició de reset general del bloc seleccionat
+ℹ️ [RESET] El projecte obert no és el d'aquesta selecció; no es tanca.
+❌ [FS] Node fs no disponible: no es pot esborrar \\DSMEDIA07\...\02_COMARQUES_PROJECTES\2026_10_22\V1
+⛔ [RESET] Esborrat INCOMPLET: NO es crea cap projecte sobre les restes.
+```
+
+**CAUSA ARREL (dos defectes independents)**:
+
+1. **No hi ha Node al panell.** `CSXS/manifest.xml` no declara `--enable-nodejs`, així que `Utils._nodeFs()` retorna `null`. `wipeFolder` només sabia esborrar amb `fs` de Node: responia `SENSE-NODE`, i el RESET s'aturava **sense esborrar ni un fitxer**. Les proves del #175 no ho veien perquè passaven un `fs` simulat com a paràmetre (`FW.wipe(vfs(...))`): el motor era correcte, però al CEP de debò no tenia motor.
+2. **El RESET calculava una carpeta diferent de la del projecte.** `runReset` feia servir `Core.Context._targetDateDir()` (sempre **HOY**), mentre `_runNew` treballa amb `State.dateDir` (que pot estar ancorat al projecte obert). Amb el projecte del 21/10 obert, el RESET apuntava a `2026_10_22`: la comparació `normP.indexOf(normF) === 0` fallava → «el projecte obert no és el d'aquesta selecció» → **no es tancava**, i després `.prproj`/`Auto-Save` bloquejats. A més `Logic.Project.close()` **s'empassava els errors** (retornava `undefined`, el `catch` només escrivia al log) i esborrava el `.lock` **abans** de tancar, així que el RESET no podia saber si el projecte realment s'havia tancat.
+
+**SOLUCIO**:
+
+(a) `js/logic/19_Fs_Wipe.js`: **adaptador `FsWipe.cepFs()`** amb la mateixa forma que `fs` de Node (`readdirSync`/`lstatSync`/`unlinkSync`/`rmdirSync`/`existsSync`) però sobre `cep.fs` (natiu de CEP, sempre present). Aprofita que CEP 10+ retorna `{name, isDir}` a `readdir` per no fer un `stat` per entrada; si no, `stat`/sonda. Els errors porten `code` (`CEP-13`, `CEP-2`…) al mateix informe `failed[]`. **Correcció important (2a volta)**: `cep.fs` de CEP 11/12 **NO té `unlink` ni `rmdir`**; té `deleteFile` (només fitxers) i `chmod`. L'adaptador fa servir `deleteFile` i, si no hi ha `rmdir`, llança `CEP-NO-RMDIR` (codi esperat, no reintentable) en lloc d'inventar-se'l.
+
+(b) `js/core/utils.js`: `_wipeFs()` tria motor (`node` → `cep.fs` → `cap`) i el fan servir `wipeFolder` (registra `motor node|cep.fs`) i `deleteFolder`. Sense Node ja **s'esborra de debò**. Com que `cep.fs` no pot llevar carpetes, `wipeFolder` intenta **primer** la via **JS pura** `_rmTreeProc()`: `cep.process.createProcess()` (API nativa del CEP 10+, la mateixa que ja usa `setup.html` per a `pick_folder.ps1`) llança `powershell.exe` amb `-EncodedCommand` (base64 UTF-16LE, així ni espais ni accents ni cometes de les rutes UNC poden trencar la comanda) i un `Remove-Item -LiteralPath … -Recurse -Force` precedit d'`attrib -R -S -H` (lleva només-lectura/ocult/sistema). No bloqueja la UI i **no toca JSX**. L'èxit es **VERIFICA** amb `_waitGone()` (sondeig de `cep.fs` fins a 30 s, `procWaitMs`); si deixa restes, es fa la passada ENTRADA per ENTRADA amb `cep.fs` i es torna a verificar. L'informe porta `via` (`proc` | `cep.fs` | `node` | `prova`).
+
+
+(c) `js/logic/3_Project_Logic.js`: `close(opts)` **retorna informe** `{ok, path, closed, error}`, reintenta (`attempts=2`) i **VERIFICA** amb `FASTPASS.Project.path()` que el projecte ja no està obert; el `.lock` (`_removeLock`) s'esborra **després** de tancar; `refreshContext:false` permet al RESET estalviar-se un `checkContext` complet (lectures del NAS) just abans d'esborrar.
+
+(d) `js/workflows/flow_mainButton.js`: `runReset` resol el context amb **`_setupContext()`** (el mateix que CREAR/ACTUALITZAR), i si el projecte obert és del **mateix programa+bloc** (`_sameProgramBloc`) —encara que siga d'una altra data— treballa sobre **la seua carpeta** (`_parentFolder`), que és la que l'usuari vol esborrar i la que cal alliberar; el diàleg de confirmació mostra eixa ruta i la data real (`_folderDateSegment`). Si `Logic.Project.close()` no aconseguix tancar el projecte, el RESET **s'atura abans d'esborrar** amb un avís clar. L'esborrat va amb `maxAttempts: 6, waitMs: 500` (xarxa) i, després de `State.reset()`, `State.dateDir` s'alinea amb la carpeta resetejada perquè `_runNew` la torne a crear **al mateix lloc**.
+
+(e) Cache-busts: `utils.js?v=28`, `3_Project_Logic.js?v=31`, `19_Fs_Wipe.js?v=2`, `flow_mainButton.js?v=36`.
+
+**FITXERS**: `js/logic/19_Fs_Wipe.js`, `js/core/utils.js`, `js/logic/3_Project_Logic.js`, `js/workflows/flow_mainButton.js`, `index.html`, `bin/smoke/fp_probe_reset.js`, `docs/BUGS_FIXED.md`, `docs/CHANGELOG.md`. `jsx/**` intacte (cap canvi al motor ExtendScript).
+
+**VALIDACIO**: `bin/smoke/fp_probe_reset.js` amb **27 assercions** (`#180/1`…`#180/27`): motor `cep.fs` amb disc simulat (esborra l'arbre sencer: 7 fitxers/4 carpetes; un fitxer bloquejat → `ok:false` + `RESTES` + codi `CEP-13`; sense `window.cep` l'adaptador torna `null`; amb el **`cep.fs` real** —`deleteFile`, sense `rmdir`— lleva els 7 fitxers i **no diu `ok`** perquè queden les 4 carpetes), `close()` amb pont simulat (tanca i verifica → `ok/closed`; no tanca → `ok:false` + `error` i **cap** `IO.remove` del lock; sense projecte → `ok`), i la **via JS pura d'esborrat**: `_rmTreeProc` amb `cep.process` (`powershell.exe` + `-EncodedCommand` amb la ruta i `Remove-Item`, sense cap crida a JSX), `_b64utf16` UTF-16LE exacte (espais/accents), sense `cep.process` → `started:false`, `wipeFolder` amb `fs` de prova **no llança processos**, via nativa verificada al disc (`via=proc`) i reintent per entrades (`via=cep.fs`) si el procés deixa restes; més guardes estàtiques (`_wipeFs`, `.lock` després de tancar, `_setupContext`, `_folderDateSegment`, `refreshContext:false`, cache-busts). `bin/check_all.ps1` → `ALL GREEN | setup 35/35 | js 61/61 | smoke 395/395 | dead 0 | jsx intacte`.
+
+**PENDENT DE VALIDAR EN VIU**: amb un projecte obert, clicar RESET → el projecte es tanca a Premiere, la carpeta `<base>\<prog>\<data>\<bloc>` desapareix del NAS (log `🧹 [FS] PowerShell esborrant l'arbre (pid N)` i `🗑️ [FS] Carpeta esborrada (motor cep.process/PowerShell)`) i el flux NOU torna a crear el projecte al mateix directori. Si queda alguna resta, el log dirà `⚠️ [FS] El procés de esborrat ha deixat restes…` i després `motor cep.fs` + el codi `CEP-n` (o `CEP-NO-RMDIR` si eixa via tampoc pot llevar carpetes).
+
+
+### #181 - resolt (2026-10-22)
+
+**SIMPTOMA**: **Ctrl+clic al botó MAIN** (mode correcció) per crear/reprendre el projecte
+del dia anterior «no feia res»: ni projecte, ni missatge clar, ni cap canvi al panell
+(seleccionats programa i bloc als desplegables). Log real del panell
+(`_keyframe_trace.log`, 22/10 13:05:43-46):
+
+```
+🔄 [MAIN] Ctrl+clic → mode correcció (AHIR).
+⏳ [checkContext] Ja hi ha un escaneig en curs: la crida s'hi enganxa (no se'n llança cap altre)
+🗓️ [SCAN:wottsToday] TNC_V1_ 20261022: 0/36 wotts del dia … → encara no
+⏳ [checkContext] MASSA D'HORA: MP4 origen=no · wotts=0
+⚠️ [MAIN] Mode correcció: AHIR sense material útil (estat MASSA)
+```
+
+**CAUSA ARREL (dos defectes independents)**:
+
+1. **Carrera de dates al `checkContext` single-flight** (#113). En mode correcció es fa
+   `St.workTarget = 'yesterday'` i tot seguit `checkContext({ force: true })`. Si el poll
+   de 15 s de `main.js` tenia un escaneig **en curs** (fet amb `dateDir = HOY`, 4-8 s de
+   durada sobre 15 s de cicle → passa sovint), la crida **s'hi enganxava** i tornava
+   l'estat de **HOY**; el mode correcció llegia «MASSA D'HORA» d'avui, que no és cap estat
+   aprofitable, i avortava amb `AHIR: sense material per corregir`.
+2. **El gate d'arrencada s'aplicava també al dia anterior**. L'estat CREA/ESPERA/MASSA
+   decidix si es pot crear mirant si hi ha wotts/MP4 **del dia de treball**. Per a AHIR
+   eixa sonda pot no veure res (el NAS no conserva eixos fitxers, sondes KO, bloc sense
+   wotts…) i el flux quedava bloquejat igualment, tot i que **demanar AHIR amb Ctrl és una
+   ordre explícita** de l'usuari.
+
+**SOLUCIO**:
+
+1. `js/core/4_Context.js` · `checkContext(_opts)` accepta **`fresh: true`**: si hi ha un
+   escaneig en curs **no s'hi enganxa** (no cancel·la res: el resultat en curs seguix sent
+   vàlid per al poll), espera el torn i en llança **un de propi**, que ja llegix
+   `State.workTarget`.
+2. `js/core/4_Context.js` · nou **`_awaitTargetScan(targetDate, attempts)`**: demana
+   `checkContext({force:true, fresh:true})`, comprova que
+   `_lastButtonData.dateDir === targetDate` i **reintenta** (3 voltes) — el poll pot haver
+   tornat a arrancar. Retorna `{ok, state, data, attempts}`.
+3. `js/core/4_Context.js` · nou **`_correctionAction(state, targetOk)`** (funció **pura**,
+   provada aïllada): `NEW` → CREA; `UPDATE/GO/LOAD` → eixa acció; **`MASSA`/`ESPERANT` →
+   CREA igualment** (`reason:'sense-material'`); **sense escaneig de la data demanada →
+   CREA igualment** (`reason:'sense-escaneig-del-dia'`); `DISABLED`/`WAITING` → cap acció.
+4. `js/core/4_Context.js` · `_onMainClick` (branca Ctrl): captura **`targetY =
+   _targetDateDir()`** una sola vegada, usa els dos helpers, fixa **`St.dateDir =
+   targetY`** abans de `runMainAction` (perquè `_runNew` → `_setupContext` treballe eixa
+   data) i seguix restaurant `workTarget='today'` al `finally`.
+5. `js/core/4_Context.js` · `_runCheckContext`: el reset per **canvi de programa/bloc**
+   conserva el mode correcció (`workTarget = _resetTarget`, derivat de `_keepYest`) — abans
+   el posava a `'today'` i un canvi de desplegable just abans del Ctrl+clic convertia el
+   flux en HOY.
+6. `index.html`: `4_Context.js?v=29`.
+
+**FITXERS**: `js/core/4_Context.js`, `index.html`, `bin/smoke/fp_probe_wotts.js`,
+`docs/BUGS_FIXED.md`, `docs/CHANGELOG.md`.
+
+**VALIDACIO**: `bin/check_js_v8.ps1` → 61/61 OK · `bin/smoke/fp_smoke_build.ps1` →
+**PASS 400 / FAIL 0**, amb 5 proves noves: `#WOTT/30` (`fresh` espera el torn i llança un
+escaneig propi), `#WOTT/31` (`_correctionAction`, 8 casos reals extrets del font:
+NEW/UPDATE/GO/LOAD/MASSA/ESPERANT/sense-escaneig/DISABLED), `#WOTT/32`
+(`_awaitTargetScan` reintenta i acaba en la data demanada —2 passades amb HOY + 1 amb
+AHIR, amb `fresh:true` en totes—), `#WOTT/33` (si la data no arriba → `ok:false` i es crea
+igualment), `#WOTT/34` (`St.dateDir = targetY` i `_resetTarget`). `#WOTT/11` i `#WOTT/24`
+actualitzats al codi nou (`runMainAction(plan.action, dataA)`, `4_Context.js?v=29`).
+
+**PENDENT DE VALIDAR EN VIU**: amb el projecte de HOY obert (o sense projecte) i el bloc
+seleccionat, **Ctrl+clic a MAIN** → ha d'eixir `🔁 [checkContext] Escaneig PROPI (fresh)…`
+(no `s'hi enganxa`) i, o bé `🔄 [MAIN] Correcció <data> → NEW|UPDATE|GO|LOAD`, o bé
+`Correcció <data>: MASSA → es crea igualment` seguit de la creació del projecte a
+`<base>\<prog>-PROJECTES\<data d'AHIR>\<bloc>`. Si la FOTO no pot donar escaleta, ha
+d'avortar amb el motiu de l'API (no quedar-se mut).
+
+
+### #182c - resolt (2026-10-22) · VALIDAT EN VIU el 2026-10-22
+
+**SIMPTOMA**: Quan el wott es col·loca SENCER (no l'acurta cap pla de V1 ni el final
+del seu ítem) el clip del timeline ix **1 FRAME més llarg que el mèdia real**. Peticio
+de l'usuari (22/10): «quan es col·loca tot el clip, per algun error, si s'ha de col·locar
+enter perque no hi ha un tall de pla en V1 que el limite, es col·loca un clip que és
+1 frame més llarg que la media real. S'ha de canviar perque col·loque 1 frame menys que
+actualment i no es generen errors secundaris per eixa diferencia».
+
+**CAUSA ARREL**: l'INSERT cru (overwriteClip del project item) deixa el clip amb
+end - start = out - in + 1 frame, perque el rang in/out del project item és INCLUSIU i
+Premiere hi afig el frame del outPoint. En el cas ACURTAT (manda el pla de V1 o el
+marcador següent) no passa perque el final es fixa amb Clips.endCoherent; en el cas
+SENCER el final venia de durInfo.dur, que NO és la durada real: el DOM no dóna
+projectItem.duration («Bin CHY: 19 fitxers, 0 amb durada del DOM», mesurat al #177) i
+_resolveWottDur l'ESTIMA pel tamany del fitxer (bytesPerSec) => errors de 1-3 frames.
+
+**SOLUCIO**: js/workflows/flow_chyrons.js · _placeChyronsByType, DESPRES de
+Clips.insert i ABANS del retall generic: (1) es calcula vaSencer = (placeEnd === null)
+o be (placeEnd - slot.start >= durInfo.dur - 1,5 frames); (2) es LLIG el clip REAL que
+ha deixat Premiere (Clips._clipAtTime) i es pren dIns = end - start; (3) dWant =
+dIns - 1 frame (mai per davall d'1 frame de clip) i es fixa el final amb
+Clips.endCoherent a la graella (gridDown); (4) es TORNA A LLEGIR el clip: si encara
+queda per davall del desitjat (Premiere hi ha tornat a afegir el frame inclusiu) es fa
+una 2a passada 1 frame més avall; (5) si s'ha aplicat, sencerFet = true i el retall
+generic NO es repeteix (evita el doble descompte); placeEnd i endRec passen a ser el
+final REAL, aixi el manifest (chyrons.placed) i _addPlaced queden alineats amb la
+timeline. Traça al log: «CLIP SENCER nom: N -> N-1 frames (-1 frame(s) sobre el media;
+Vx @ Xs) [OK:...]». index.html: flow_chyrons.js?v=83.
+
+**VALIDAT EN VIU (2026-10-22)**: l'usuari confirma, després de col·locar els wotts al
+TNC V3 del dia, que «els wotts llargs ja es col·loquen bé» → el clip sencer ja no passa
+del mèdia del bin. Queda **tancat**.
+
+**FITXERS**: js/workflows/flow_chyrons.js, index.html, bin/smoke/fp_probe_wotts.js,
+docs/BUGS_FIXED.md, docs/CHANGELOG.md.
+
+**VALIDACIO**: bin/check_all.ps1 -Only js,smoke => ALL GREEN | js 61/61 | smoke 410/410
+| jsx intacte. Proves noves: #WOTT/41 (wiring: vaSencer, mesura amb _clipAtTime,
+dWant = dIns - 1 frame i guarda !sencerFet), #WOTT/42 (aritmetica: 156 -> 155 frames
+amb i sense el frame inclusiu de Premiere), #WOTT/43 (3 -> 2 frames i un clip de
+2 frames NO es toca), #WOTT/44 (traça al log i cache-bust; ara 84). #WOTT/24 actualitzat.
+
+**COMPROVACIO EN VIU (feta per l'usuari)**: al timeline, el clip SENCER acaba dins del
+mèdia del bin (ja no el passa d'1 frame) i al log ix la traça
+«✂️ CLIP SENCER … N → N-1 frames».
+
+
+### #183 - implementat_pendent_test (2026-10-22)
+
+**SIMPTOMA**: en un TNC V3 del 22/10, el **congelat del titullet** (la targeta que va
+just abans del Tema-Títol, a V6) en compte de congelar el titullet **va congelar el CLIP
+de V1**: al timeline hi havia un PNG opac amb el vídeo del programa, i el rètol
+desapareixia. No passa sempre («he vist que això passa en algunes ocasions»).
+
+**CAUSA ARREL (dos defectes encadenats)**:
+
+1. **`_emptyProgramTC` podia tornar `600 s` sense cap prova.** La captura del congelat
+   (`_capturePng` → `Render.snapshot` → QE `exportFramePNG`) exporta el frame **COMPOST
+   del programa**: per a un rètol amb ALPHA (TITULET) el TC de captura ha de caure on **no
+   hi ha cap clip de vídeo a cap pista**, o el PNG ix opac i se n'endú el vídeo. El helper
+   llegia les pistes amb `getTrackClips`, que fa `parseInt('ERR:…')` → `NaN` → bucle buit
+   → **`[]`**: una pista IL·LEGIBLE semblava BUIDA. Amb `maxEnd = 0` (o `Tracks.count`
+   no llegible) el TC «lliure» era el **600 s clàssic**, que en un cleanFeed de 2700 s cau
+   **damunt del bloc** amb V1 a sota → PNG amb el clip de V1. Per això era intermitent:
+   només quan aquella lectura fallava (Premiere ocupat, pista nova, etc.).
+2. **Ningú comprovava que el clip temporal cobrira l'instant de captura.** `snapTC` es
+   calculava amb `tmpDur` (que ve del `end` del DOM, amb el **frame inclusiu** de Premiere,
+   vegeu #182c): si el mèdia és més curt que la durada estimada, el 60 % pot caure **fora**
+   del clip temporal i QE exporta el programa (sense rètol).
+
+**SOLUCIO** (tot JS; `jsx/**` intacte):
+
+(a) `js/workflows/flow_chyrons.js` · **`_freezeZone(needSec, preferredTC)`** nou, substitueix
+el càlcul cec: llig `Tracks.count('video')` i després **`Clips.count` de cada pista** (i
+exigeix que siga un número, no un `ERR:`); si alguna pista no s'ha pogut llegir →
+`{ok:false}` i **cap zona es dona per bona**. Si el `preferredTC` del cridador està lliure a
+TOTES les pistes es reutilitza (`via:'preferit'`); si no, es recalcula a `maxEnd + 5`
+(`via:'recalculat'`). `maxEnd === 0` amb totes les pistes llegides = timeline buit → 600 s
+segueix sent vàlid. `_emptyProgramTC` queda com a envoltorio i **retorna 0** (desconegut) en
+compte de 600 quan no es pot garantir.
+
+(b) `_freezeTemaTitol`: resol la zona amb `_freezeZone` (o accepta la del cridador amb
+`zoneOk`) **abans** d'inserir el clip temporal; si no es pot garantir, `needFreeze = false`
+→ es col·loca **només el clip viu** amb avís
+(`⚠️ [_freeze] «…» SENSE congelat: la zona del programa on capturar el PNG no es pot garantir`),
+mai un congelat amb el vídeo a dins. El **Tema-Títol** conserva la via `_v6FreeTC` (captura
+**sobre vídeo a propòsit**: és opac i un frame sense programa eixiria transparent).
+
+(c) `_freezeTemaTitol` · **guarda de COBERTURA** abans de capturar: `Clips.at(T_THEME, snapTC)`
+ha de tornar el clip temporal (`start ≈ TEMP_TC` i `end > snapTC`); si no, s'ancora a la
+meitat del temporal i, si tampoc, s'esborra el temporal i es col·loca només el clip viu
+(`❌ [_freeze] Cap clip temporal cobrint l'instant de captura … congelat ABANDONAT`).
+
+(d) `_placeTitoletChain`: la zona es calcula amb `_freezeZone`; si la cadena planificada
+arriba més enllà de l'últim clip del timeline, el TC candidat (`maxEndTl + 5`) es
+**REVALIDA** (`_freezeZone(need, tailCeil)`) en compte de confiar-hi. Sense zona garantible,
+les targetes es col·loquen amb `freezeSec: 0` i la part viva s'estira fins al `span`.
+
+(e) `_placeTradSlot` (traduccions / Repartir): si el cridador marca `zoneOk` no repetix la
+lectura (rendiment: un sol càlcul per grup); si no, valida el `tempTC` amb `_freezeZone`; i
+si no n'hi ha cap de garantible, col·loca el clip **estirat** amb avís en compte de capturar
+sobre el vídeo. Traducció i Repartir calculen ara la zona amb `_freezeZone` (i revaliden el
+seu TC candidat `refStart + clipDur + 5` / `limit + 5` si va més enllà de la provada).
+
+(f) `index.html`: `flow_chyrons.js?v=83 → ?v=84`.
+
+**OBERT / SEGONA CAUSA CANDIDATA (no tocada)**: `jsx/modules/9_Render.jsx::exportFrameQE`
+captura amb `qe.project.getActiveSequence()` (el **projecte ACTIU** de Premiere), mentre els
+inserts, el cabezal i l'Out van a la **seqüència de treball** (`Context.getWorkSequence()` =
+`FASTPASS_WorkProject.activeSequence`, vegeu `11_Context.jsx:127`). Amb **dos projectes
+oberts** i el focus a l'altre, el PNG eixiria de l'altra seqüència (mateix símptoma). No s'ha
+tocat perquè `jsx/**` és intocable sense permís exprés; el blindatge seria una línia:
+comparar `qeSeq.name` amb el nom de la seqüència de treball i tornar `ERR_SEQ_MISMATCH`
+(en compte d'exportar un frame alié) — i, al panell, un `Context.workSeq()` per poder
+comparar-ho des de JS.
+
+**FITXERS**: `js/workflows/flow_chyrons.js`, `index.html`, `bin/smoke/fp_probe_wotts.js`,
+`docs/BUGS_FIXED.md`, `docs/CHANGELOG.md`. `jsx/**` intacte.
+
+**VALIDACIO**: `bin/check_all.ps1 -Only js,smoke` → **ALL GREEN | js 61/61 | smoke 415/415
+| jsx intacte**. Proves noves: `#WOTT/45` (`_freezeZone` existeix, `_emptyProgramTC` hi
+delega i, sense llegir les pistes, **no** torna 600 → `ok:false`), `#WOTT/46` (V1 ple fins a
+2700 s: el TC preferit 600 es **rebutja** i la zona passa a 2705 s), `#WOTT/47` (un TC
+preferit que prova buit es reutilitza), `#WOTT/48` (guarda de cobertura `covOk`/`readCover`
+**abans** de `_capturePng`, abandonament net i `alpha`/`zoneOk` als dos cridadors).
+`#WOTT/24` i `#WOTT/44` actualitzats al cache-bust 84.
+
+**PENDENT DE VALIDAR EN VIU**: recarregar el panell (v=84), crear un TNC i col·locar
+(F3/F4). Al log s'ha de veure `🧭 [_freezeZone] zona … VALIDADA` (o
+`programa buit a …s`), **mai** `programa buit a 600.00s` amb el bloc ple; si la zona no es
+pot garantir: `⚠️ [_freezeZone] zona temporal NO garantible` + `⚠️ [_freeze] … SENSE
+congelat`. Al timeline, el congelat del titullet ha de contindre **el rètol** (i el vídeo
+de V1 s'ha de veure per davall, no congelat dins del PNG).
+
+
+
 ## 3. Bugs en curs / pendents
+
+
 
 
 
@@ -1232,6 +1531,10 @@ Ordre cronologic pel numero d incident. 105 entrades.
 | `#117` | notejada_pendent | 2026-09-30 | SEMÀFORS del cas SENSE projecte trencats per un ReferenceError: 'mediaN is not defined' a checkContext → quan l'escaleta porta mediaStop+blockOut es perden els semàfors S [...] |
 | `#152` | implementat_pendent_test | 2026-10-13 | El JSON d'anàlisi del bloc (analisis_estructura/DD_MM_PROG_BLOC.json: ítems del bloc + ítems de CONTEXT prevVideoItem/nextVideoItem + trimBounds + fases crudo/cocinado/us [...] |
 | `#153` | pendent_implementacio | 2026-10-13 | Unificar el JSON d'anàlisi del bloc (analisis_estructura/DD_MM_PROG_BLOC.json) en una sola peça amb 4 blocs: (1) BLOC — prog/bloc/data/escaletaFile/seqName/projectFile +  [...] |
+| `#178b` | **fet_parcial** 2026-10-22 | 2026-10-22 | El botó 📁 de CONFIG (RUTES DE XARXA) obria el diàleg **ANTIC** de carpetes (arbre de discs, sense Accés ràpid ni barra d'adreces editable → no es podia enganxar una ruta UNC). 1a passada: `scripts/pick_folder.ps1` + `IFileOpenDialog`, 29/29 al probe… però **la prova en viu al panell DIST va tornar a traure el vell**; 2a volta: cascada de Node a `parent`/`top` perquè `setup.html` viu en un `<iframe>`. **3a volta**: causa arrel trobada — el manifest NO té `--enable-nodejs`, així que Node no existix dins del CEP i el transport `child_process` no arrancava mai; ara el `.ps1` es llança amb **`cep.process`** (API nativa, sense Node) amb `-OutFile`, i cada pas deixa traça a `_keyframe_trace.log`/`FASTPASS.log`. Detall a §2 |
+| `#183` | implementat_pendent_test | 2026-10-22 | CONGELAT DEL TITOLET que «congela el clip de V1»: el PNG del congelat s'exporta del PROGRAMA COMPOST i `_emptyProgramTC` podia tornar el TC clàssic **600 s** (dins del bloc, amb V1 a sota) quan la lectura de les pistes fallava (`getTrackClips` convertix `ERR:…` en `[]`); a més ningú comprovava que el clip temporal cobrira l'instant de captura. Ara `_freezeZone` valida la zona llegint TOTES les pistes (i `ok:false` si alguna és il·legible), `_freezeTemaTitol` verifica la cobertura amb `Clips.at` i, sense garanties, col·loca només el clip viu. Detall a §2 |
+
+
 
 
 ### #113 · REOBERT el 2026-10-22 — arrencada en fred de 92,7 s

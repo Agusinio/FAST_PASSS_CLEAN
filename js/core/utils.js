@@ -1212,6 +1212,26 @@
         },
 
         /**
+         * _wipeFs: tria el MOTOR d'esborrat disponible.
+         *
+         * (2026-10-22 · #180) En aquest equip el panell NO te Node.js: el manifest
+         * no declara `--enable-nodejs`, aixi que `_nodeFs()` retorna null i
+         * `wipeFolder` responia SENSE-NODE → el RESET no esborrava RES (només ho
+         * escrivia al log) i s'aturava abans de recrear el projecte. `cep.fs` és
+         * natiu de CEP i sempre hi és, aixi que s'usa com a motor alternatiu amb
+         * la MATEIXA semantica (readdirSync/lstatSync/unlinkSync/rmdirSync).
+         * @returns {{fs:Object|null, kind:string}} kind: 'node' | 'cep.fs' | 'cap'
+         */
+        _wipeFs: function() {
+            var fs = this._nodeFs();
+            if (fs) return { fs: fs, kind: 'node' };
+            var mod = this._fsWipe();
+            var alt = (mod && typeof mod.cepFs === 'function') ? mod.cepFs() : null;
+            if (alt) return { fs: alt, kind: 'cep.fs' };
+            return { fs: null, kind: 'cap' };
+        },
+
+        /**
          * isInsideFolder: cert NOMES si `child` es DINS de `base` (mai igual ni germa).
          * (2026-10-21 · RESET absolut) Guarda de seguretat ABANS d'esborrar: el
          * RESET nomes pot tocar la carpeta del bloc, no la de la data, la del
@@ -1230,6 +1250,98 @@
         },
 
         /**
+         * _b64utf16: codifica un text com a base64 de UTF-16LE.
+         *
+         * PER QUE (2026-10-22 · #180): `cep.process` no passa per cap shell i no
+         * garanteix com s'entrecomillen els arguments, i les rutes d'este flux
+         * porten espais, accents i prefix UNC (`\\srv\share\...`). Amb
+         * `-EncodedCommand` el guio viatja com a base64 (sense espais ni
+         * cometes), aixi que el transport no pot trencar la comanda.
+         * @param {string} s
+         * @returns {string} '' si el navegador no te `btoa`
+         */
+        _b64utf16: function(s) {
+            var txt = String(s == null ? '' : s);
+            if (typeof window.btoa !== 'function') return '';
+            var bin = '';
+            for (var i = 0; i < txt.length; i++) {
+                var c = txt.charCodeAt(i);
+                bin += String.fromCharCode(c & 0xFF) + String.fromCharCode((c >> 8) & 0xFF);
+            }
+            try { return window.btoa(bin); } catch (e) { return ''; }
+        },
+
+        /**
+         * _rmTreeProc: esborra un ARBRE de carpetes des de la capa JS, sense JSX.
+         *
+         * PER QUE (2026-10-22 · #180): `cep.fs` no te `rmdir` (nomes `deleteFile`),
+         * aixi que per si sol no pot llevar carpetes; i el manifest no porta
+         * `--enable-nodejs`, aixi que tampoc hi ha `fs.rmSync`. Pero `cep.process`
+         * es l'API NATIVA de CEP (CEP 10+, sense Node) i el projecte ja la fa
+         * servir per a `pick_folder.ps1` (setup.html) i `manage_prproj.ps1`
+         * (10_Srt_Logic.js). Amb ella llancem PowerShell, que si que esborra
+         * arbres sencers (`Remove-Item -Recurse -Force` inclou fitxers de nomes
+         * lectura, ocults i de sistema) i NO bloqueja la UI del panell.
+         *
+         * @param {string} path - ruta completa (es normalitza abans)
+         * @returns {Promise<{started:boolean, pid:number, why:string}>}
+         */
+        _rmTreeProc: async function(path) {
+            var p = String(path == null ? '' : path);
+            if (!p) return { started: false, pid: 0, why: 'ruta buida' };
+            var cep = window.cep || window.__adobe_cep__ || null;
+            if (!cep || !cep.process || typeof cep.process.createProcess !== 'function') {
+                return { started: false, pid: 0, why: 'sense cep.process' };
+            }
+            var psExe = 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe';
+            // Comilla simple de PowerShell: es redobla.
+            var q = p.replace(/['\u2019]/g, "''");
+            // `attrib` lleva els atributs que faria fallar Remove-Item (nomes
+            // lectura / ocult / sistema) i despres s'esborra l'arbre sencer.
+            var script = "$ErrorActionPreference='SilentlyContinue';" +
+                "$p='" + q + "';" +
+                "if(Test-Path -LiteralPath $p){" +
+                "attrib -R -S -H ($p+'\\*.*') /S /D | Out-Null;" +
+                "Remove-Item -LiteralPath $p -Recurse -Force" +
+                "}";
+            var enc = this._b64utf16(script);
+            if (!enc) return { started: false, pid: 0, why: 'sense btoa' };
+            var r = null;
+            try {
+                r = cep.process.createProcess(psExe,
+                    '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
+                    '-WindowStyle', 'Hidden', '-EncodedCommand', enc);
+            } catch (e) {
+                return { started: false, pid: 0, why: String((e && e.message) || e) };
+            }
+            if (!r || typeof r.data !== 'number' || r.data <= 0) {
+                return { started: false, pid: 0, why: 'createProcess err=' + ((r && r.err) != null ? r.err : '?') };
+            }
+            this.log('🧹 [FS] PowerShell esborrant l\'arbre (pid ' + r.data + '): ' + p, 'DEBUG');
+            return { started: true, pid: r.data, why: '' };
+        },
+
+        /**
+         * _waitGone: espera (sense bloquejar) que `path` desaparega del disc.
+         * Es la VERIFICACIO de la via `_rmTreeProc`: `cep.process` no dona codi
+         * d'eixida, aixi que l'exit es comprova al sistema de fitxers.
+         * @param {Object} mod - FsWipe
+         * @param {Object} fs - motor (cep.fs / Node)
+         * @param {string} path
+         * @param {number} ms - temps maxim d'espera
+         * @returns {Promise<boolean>} true si ja no hi es
+         */
+        _waitGone: async function(mod, fs, path, ms) {
+            var limit = Math.max(0, Number(ms) || 0);
+            var t0 = Date.now();
+            for (;;) {
+                try { if (!mod.exists(fs, path)) return true; } catch (e) { /* reintenta */ }
+                if (Date.now() - t0 >= limit) return false;
+                await this.delay(250);
+            }
+        },
+
+        /**
          * wipeFolder: ESBORRAT ABSOLUT i VERIFICAT d'una carpeta (recursiu).
          *
          * (2026-10-21) Substitueix el vell `deleteFolder` per a operacions que NO
@@ -1240,36 +1352,66 @@
          *   · VERIFICA al final: `ok` nomes es true si la carpeta ja no hi es.
          *   · Retorna un informe amb `leftovers` per poder avisar l'usuari i
          *     AVORTAR en lloc de crear el projecte nou sobre les restes.
+         * (2026-10-22 · #180) PRIMER la via nativa `cep.process` (PowerShell,
+         * sense Node i SENSE JSX): un sol procés lleva l'arbre sencer, tambe les
+         * carpetes (que `cep.fs` no pot llevar: no te `rmdir`) i els fitxers de
+         * nomes lectura. Si no arranca o deixa restes, es fa la passada ENTRADA
+         * per ENTRADA amb `cep.fs` (o Node) i es torna a verificar.
          * @param {string} path - Carpeta a esborrar
-         * @param {Object} [opts] - {maxAttempts, waitMs, fs} (fs = doble de prova)
+         * @param {Object} [opts] - {maxAttempts, waitMs, fs, procWaitMs} (fs = doble de prova)
          * @returns {Promise<{ok:boolean, path:string, attempts:number, removed:number,
          *                    files:number, dirs:number, failed:Array, leftovers:string[],
-         *                    reason:string}>}
+         *                    reason:string, via:string}>}
          */
         wipeFolder: async function(path, opts) {
             var o = opts || {};
-            var fs = o.fs || this._nodeFs();
+            var pick = o.fs ? { fs: o.fs, kind: 'prova' } : this._wipeFs();
+            var fs = pick.fs;
             var mod = this._fsWipe();
             var self = this;
             if (!mod) {
                 this.log('❌ [FS] FsWipe no carregat (js/logic/19_Fs_Wipe.js): esborrat avortat', 'ERROR');
-                return { ok: false, path: String(path || ''), attempts: 0, removed: 0, files: 0, dirs: 0, failed: [], leftovers: [], reason: 'SENSE-MODUL' };
+                return { ok: false, path: String(path || ''), attempts: 0, removed: 0, files: 0, dirs: 0, failed: [], leftovers: [], reason: 'SENSE-MODUL', via: '' };
             }
+            var norm = mod.norm(path);
+            // ── 1) VIA NATIVA (JS pur): `cep.process` + PowerShell ─────────────
+            // Un doble de prova (`o.fs`) NO ha de llançar processos: els tests han
+            // de ser deterministes i no tocar el disc de debò.
+            if (!o.fs && norm && mod.canRemove(fs) && mod.exists(fs, norm)) {
+                var pr = await this._rmTreeProc(norm);
+                if (pr.started) {
+                    var gone = await this._waitGone(mod, fs, norm, (o.procWaitMs != null ? o.procWaitMs : 30000));
+                    if (gone) {
+                        this.log('🗑️ [FS] Carpeta esborrada (motor cep.process/PowerShell): ' + norm, 'DEBUG');
+                        return {
+                            ok: true, path: norm, attempts: 1, removed: 0, files: 0, dirs: 0,
+                            failed: [], leftovers: [], reason: 'ESBORRADA', via: 'proc'
+                        };
+                    }
+                    this.log('⚠️ [FS] El procés de esborrat ha deixat restes: es reintenta entrada per entrada (' + norm + ')', 'WARN');
+                } else if (pr.why) {
+                    this.log('ℹ️ [FS] Via nativa no disponible (' + pr.why + '): esborrat amb ' + pick.kind, 'DEBUG');
+                }
+            }
+            // ── 2) PASADA ENTRADA per ENTRADA (cep.fs / Node) + reintents ──────
             var rep = await mod.wipe(fs, path, {
                 maxAttempts: o.maxAttempts,
                 waitMs: o.waitMs,
                 delay: function(ms) { return self.delay(ms); }
             });
+            rep.via = pick.kind;
             if (rep.reason === 'SENSE-NODE') {
-                this.log('❌ [FS] Node fs no disponible: no es pot esborrar ' + rep.path, 'ERROR');
+                this.log("❌ [FS] Cap motor d'esborrat (Node fs ni cep.fs): no es pot esborrar " + rep.path, 'ERROR');
                 return rep;
             }
             if (rep.ok) {
                 if (rep.reason === 'ESBORRADA') {
-                    this.log('🗑️ [FS] Carpeta esborrada (' + rep.files + ' fitxers, ' + rep.dirs + ' carpetes; intent ' + rep.attempts + '): ' + rep.path, 'DEBUG');
+                    this.log('🗑️ [FS] Carpeta esborrada (' + rep.files + ' fitxers, ' + rep.dirs + ' carpetes; intent ' + rep.attempts +
+                        '; motor ' + pick.kind + '): ' + rep.path, 'DEBUG');
                 }
             } else if (rep.reason === 'RESTES') {
-                this.log("❌ [FS] NO s'ha pogut esborrar del tot (" + rep.attempts + ' intents, ' + rep.failed.length + ' errors): ' + rep.path, 'ERROR');
+                this.log("❌ [FS] NO s'ha pogut esborrar del tot (" + rep.attempts + ' intents, ' + rep.failed.length +
+                    ' errors; motor ' + pick.kind + '): ' + rep.path, 'ERROR');
                 for (var i = 0; i < rep.leftovers.length && i < 20; i++) {
                     this.log('   · resta: ' + rep.leftovers[i], 'ERROR');
                 }
@@ -1282,6 +1424,8 @@
          * (2026-10-07, revisat 2026-10-21) Usa el modul FsWipe: esborrat entrada
          * per entrada, tolerant errors. Per a operacions que NO poden deixar
          * restes cal usar `wipeFolder` (verifica i informa).
+         * (2026-10-22 · #180) Motor: Node `fs` si hi és i, si no, l'adaptador
+         * `cep.fs` — abans, sense Node, ací no s'esborrava res.
          * No llança: retorna false si queda alguna resta (lock, xarxa...).
          * @param {string} path - Ruta completa de la carpeta a esborrar
          * @returns {boolean} true si s'ha esborrat (o ja no existia)
@@ -1294,9 +1438,10 @@
             }
             var norm = mod.norm(path);
             if (!norm) return false;
-            var fs = this._nodeFs();
+            var pick = this._wipeFs();
+            var fs = pick.fs;
             if (!mod.canRemove(fs)) {
-                this.log('⚠️ [FS] Node fs no disponible: no es pot esborrar la carpeta ' + norm, 'WARN');
+                this.log("⚠️ [FS] Cap motor d'esborrat (Node fs ni cep.fs): no es pot esborrar la carpeta " + norm, 'WARN');
                 return false;
             }
             if (!mod.exists(fs, norm)) return true;

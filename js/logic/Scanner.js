@@ -57,8 +57,13 @@
          * _fileDateYYYYMMDD: Data d'un fitxer (YYYYMMDD) per datar-lo.
          * FILTRAT PER DATA DE CREACIÓ (2026-09-07): es fa servir NOMÉS la data de
          * creació real (el mtime del NAS pot estar desplaçat per processos nocturns).
-         * Ordre: nom del fitxer → created. Si no es pot datar → null.
-         * @param {Object} f - { name, created }
+         * Ordre: nom del fitxer → created → mtime (2026-10-22 · #182).
+         *
+         * PER QUÈ HI HA EL MTIME AL FINAL: en este equip el panell no té Node i, en
+         * UNC, `File.created` arriba a 0 → tot es descartava com a «no datable» i
+         * `Scan.wotts` no importava cap retol. El mtime amb la regla nocturna
+         * (`_mtimeDateYYYYMMDD`) recupera la data sense falsos positius.
+         * @param {Object} f - { name, created, mtime }
          */
         _fileDateYYYYMMDD: function (f) {
             if (!f) return null;
@@ -67,12 +72,14 @@
             if (f.created) {
                 var cd = new Date(f.created);
                 if (!isNaN(cd.getTime())) {
-                    return '' + cd.getFullYear() +
+                    var d8 = '' + cd.getFullYear() +
                         ('0' + (cd.getMonth() + 1)).slice(-2) +
                         ('0' + cd.getDate()).slice(-2);
+                    if (this._validDate8(d8)) return d8;
                 }
             }
-            return null;
+            // (2026-10-22 · #182) Últim recurs: mtime (regla nocturna).
+            return this._mtimeDateYYYYMMDD(f.mtime);
         },
 
         /**
@@ -395,7 +402,12 @@
                 let n = 0;
                 for (const k in obj) {
                     if (!obj.hasOwnProperty(k)) continue;
-                    if (!this._wottDateCache[k]) { this._wottDateCache[k] = obj[k]; n++; }
+                    // (2026-10-22 · #182) Descarta dates impossibles ('19700101' que
+                    // deixava `File.created=0` en UNC): si es conservaven, eixe nom
+                    // no es tornava a datar MAI i la sonda deia 0 per sempre.
+                    const d8 = this._validDate8(obj[k]);
+                    if (!d8) continue;
+                    if (!this._wottDateCache[k]) { this._wottDateCache[k] = d8; n++; }
                 }
                 if (n > 0) utils.log('🗓️ [SCAN] caché de dates recuperada (' + n + ' fitxers ja datats)', 'DEBUG');
             } catch (eLC) { /* caché corrupta: es regenera */ }
@@ -429,6 +441,40 @@
                 ('0' + (dd.getMonth() + 1)).slice(-2) +
                 ('0' + dd.getDate()).slice(-2);
         },
+
+        /** _validDate8 (2026-10-22 · #182): 'YYYYMMDD' plausible (≥ 2000) o null. */
+        _validDate8: function (d8) {
+            var s = (d8 === null || d8 === undefined) ? '' : String(d8);
+            return (/^\d{8}$/.test(s) && s >= '20000101') ? s : null;
+        },
+
+        /**
+         * _mtimeDateYYYYMMDD (2026-10-22 · #182): data DEDUÏDA del `mtime` quan el
+         * fitxer no té ni `birthtime` (Node) ni `created` (CEP/JSX).
+         *
+         * PER QUÈ CAL: en este equip el panell NO té Node (`_nodeFs()` → null) i, en
+         * UNC, ni `cep.fs.stat().creationTime` ni `File.created` tornen res → la
+         * sonda de wotts deia 0/43 tenint els 43 wotts del dia al NAS, i el botó es
+         * quedava a MASSA D'HORA amb l'escaleta ja baixada per FOTO.
+         *
+         * REGLA NOCTURNA: el procés de la nit reescriu el mtime dels wotts del dia
+         * anterior cap a les ~02:30 del dia següent (mesurat al NAS: creat 21/10
+         * 13:58 → modificat 22/10 02:31). Per tant un mtime entre 00:00 i
+         * NIGHT_SHIFT_END_HOUR és del DIA ANTERIOR; qualsevol altre, del seu dia.
+         * Només s'usa com a ÚLTIM recurs: mai per sobre de birthtime/created.
+         */
+        NIGHT_SHIFT_END_HOUR: 5,
+        _mtimeDateYYYYMMDD: function (t) {
+            if (!t) return null;
+            var ms = (t instanceof Date) ? t.getTime() : Number(t);
+            if (!ms || isNaN(ms) || ms < 946684800000) return null;   // < 2000 → soroll
+            var d = new Date(ms);
+            if (d.getHours() < this.NIGHT_SHIFT_END_HOUR) d = new Date(ms - 86400000);
+            return '' + d.getFullYear() +
+                ('0' + (d.getMonth() + 1)).slice(-2) +
+                ('0' + d.getDate()).slice(-2);
+        },
+
 
         /**
          * wottsToday: hi ha wotts del BLOC i del DIA de treball?
@@ -505,6 +551,8 @@
                     if (all) {
                         if (!this._wottDateCache) this._wottDateCache = {};
                         for (let i = 0; i < all.length; i++) {
+                            // (2026-10-22 · #182) created (File.created) → mtime amb
+                            // la regla nocturna quan `created` arriba buit/0 en UNC.
                             const d0 = this._fileDateYYYYMMDD(all[i]);
                             if (d0) {
                                 this._wottDateCache[String(all[i].name).toUpperCase()] = d0;
@@ -536,18 +584,27 @@
             // ── 2. DATACIÓ per birthtime (caché per NOM: cada fitxer, una vegada)
             if (!this._wottDateCache) this._wottDateCache = {};
             const dates = this._wottDateCache;
-            const pending = cands.filter(function (n) { return !dates[String(n).toUpperCase()]; });
+            // (2026-10-22 · #182) una data invàlida ('19700101') NO compta com a datada.
+            const pending = cands.filter(n => !this._validDate8(dates[String(n).toUpperCase()]));
             const _tD = Date.now();
-            if (pending.length > 0) await this._dateWotts(folder, pending);
-            if (pending.length > 0) _bm('wotts · datació (' + _ms(_tD) + ', ' + pending.length + ' fitxer(s) nous)');
+            let datedN = 0;
+            if (pending.length > 0) {
+                await this._dateWotts(folder, pending);
+                // (2026-10-22 · #182) quants s'han pogut datar DE BÉ (abans el log
+                // deia «datats nous: 43» encara que no se n'haguera datat cap).
+                datedN = pending.filter(n => this._validDate8(dates[String(n).toUpperCase()])).length;
+                _bm('wotts · datació (' + _ms(_tD) + ', ' + datedN + '/' + pending.length + ' fitxer(s) datats)');
+            }
 
             const todays = cands.filter(function (n) { return dates[String(n).toUpperCase()] === dateTarget; });
             out.found = todays.length > 0;
             out.count = todays.length;
             out.names = todays;
+            out.dated = datedN;
+            out.pendingDates = pending.length;
             this._wottProbeCache[cacheKey] = { at: Date.now(), res: out };
             utils.log('🗓️ [SCAN:wottsToday] ' + prefix + ' ' + dateTarget + ': ' + todays.length + '/' + cands.length +
-                ' wotts del dia (' + (out.via || '?') + ' · datats nous: ' + pending.length + ') → ' +
+                ' wotts del dia (' + (out.via || '?') + ' · datats: ' + datedN + '/' + pending.length + ') → ' +
                 (out.found ? 'CREAR permès' : 'encara no'), 'DEBUG');
             return out;
         },
@@ -698,14 +755,15 @@
             const base = String(folder).replace(/[\\/]+$/, '') + '\\';
             const self = this;
             const left = function (arr) {
-                return arr.filter(function (n) { return !dates[String(n).toUpperCase()]; });
+                return arr.filter(function (n) { return !self._validDate8(dates[String(n).toUpperCase()]); });
             };
             // `put`: única via d'escriptura a la caché (marca que cal desar-la).
             const put = function (n, d8) {
-                if (!d8) return;
+                const v8 = self._validDate8(d8);
+                if (!v8) return;
                 const k = String(n).toUpperCase();
-                if (dates[k] === d8) return;
-                dates[k] = d8;
+                if (dates[k] === v8) return;
+                dates[k] = v8;
                 self._dateCacheDirty = true;
             };
 
@@ -731,13 +789,29 @@
 
             // ── 2. CEP · creationTime (en UNC sol venir buit, però és gratis provar-ho)
             if (window.cep && window.cep.fs && window.cep.fs.stat) {
+                let undated = 0, sample = null;
                 for (let k = 0; k < names.length; k++) {
                     try {
                         const st = window.cep.fs.stat(base + names[k]);
                         if (st && st.err === 0 && st.data) {
-                            put(names[k], self._localDate(st.data.creationTime));
-                        }
+                            // (2026-10-22 · #182) creationTime buit en UNC → mtime amb
+                            // la regla nocturna (sense Node no hi ha birthtime).
+                            put(names[k], self._localDate(st.data.creationTime) ||
+                                self._mtimeDateYYYYMMDD(st.data.mtime));
+                            // TESTIMONI (#182): si TAMPOC el mtime no el data, volem vore
+                            // QUÈ torna el stat; si no, el proper pas (JSX) no es pot
+                            // diagnosticar des del log.
+                            if (!self._validDate8(dates[String(names[k]).toUpperCase()])) {
+                                undated++;
+                                if (!sample) sample = { c: st.data.creationTime, m: st.data.mtime };
+                            }
+                        } else { undated++; }
                     } catch (eS) { }
+                }
+                if (undated > 0) {
+                    utils.log('🗓️ [SCAN:dates] CEP no ha datat ' + undated + '/' + names.length + ' fitxer(s)' +
+                        (sample ? ' (creationTime=' + sample.c + ' · mtime=' + sample.m + ')' : ' (stat KO)') +
+                        ' → es prova File.created (JSX)', 'WARN');
                 }
                 names = left(names);
                 if (names.length === 0) { this._saveDateCache(); return; }
@@ -751,11 +825,25 @@
                     if (map) {
                         for (let m = 0; m < names.length; m++) {
                             const it = map[names[m]];
-                            put(names[m], it ? self._fileDateYYYYMMDD({ name: names[m], created: it.created }) : null);
+                            if (it) {
+                                // (2026-10-22 · #182) created (File.created) → mtime
+                                // amb la regla nocturna quan `created` arriba a 0.
+                                put(names[m], self._fileDateYYYYMMDD({ name: names[m], created: it.created, mtime: it.modified }));
+                            } else {
+                                put(names[m], null);
+                            }
                         }
                     }
                 }
             } catch (eM) { }
+            // (2026-10-22 · #182) Si després de File.created encara queden noms sense
+            // data, el nom no porta YYYYMMDD i el NAS no dóna cap data: s'avisa (una
+            // vegada per tanda) en compte de dir «datats» a tort.
+            const rest = left(names);
+            if (rest.length > 0) {
+                utils.log('⚠️ [SCAN:dates] ' + rest.length + ' fitxer(s) sense data fiable (ni created ni mtime): ' +
+                    rest.slice(0, 3).join(', ') + (rest.length > 3 ? ' …' : ''), 'WARN');
+            }
             this._saveDateCache();
         },
 

@@ -105,21 +105,43 @@
             }
             const btn = document.getElementById('btnReset');
             try {
-                // ── Context de treball (com _setupContext, però amb la DATA real de
-                //    treball HOY/AHIR via _targetDateDir) ──
-                const config = FASTPASS_UI.Config.get();
-                const idProg = document.getElementById('programa').value;
-                const progData = config.mapeoProgramas[idProg];
-                const bloque = document.getElementById('bloc').value;
-                const dateDir = (FASTPASS_UI.Core && FASTPASS_UI.Core.Context && FASTPASS_UI.Core.Context._targetDateDir)
-                    ? FASTPASS_UI.Core.Context._targetDateDir()
-                    : (await this._setupContext()).dateDir;
-                const ctx = { config: config, progData: progData, programa: idProg, bloque: bloque, dateDir: dateDir };
-                const folder = getUtils().workFolder(ctx);
-                if (!folder) {
+                // ── Context de treball: el MATEIX que la resta de fluxos ────────
+                // (2026-10-22 · #180) Ací es feia servir `_targetDateDir()` (sempre
+                // HOY) mentres `_runNew` treballa amb `State.dateDir`. Amb un
+                // projecte d'una ALTRA data obert, el RESET apuntava a una carpeta
+                // diferent de la del projecte: deia «el projecte obert no és el
+                // d'aquesta selecció», no el tancava i després no podia esborrar
+                // res (el .prproj i l'Auto-Save seguien bloquejats).
+                // Ara el context ix d'`_setupContext()`, com CREAR/ACTUALITZAR.
+                const ctx = await this._setupContext();
+                const config = ctx.config;
+                const progData = ctx.progData;
+                const idProg = ctx.programa;
+                const bloque = ctx.bloque;
+                const dateDir = ctx.dateDir;
+                const folderSel = getUtils().workFolder(ctx);
+                if (!folderSel) {
                     log("⚠️ [RESET] No s'ha pogut resoldre la carpeta del bloc.", 'WARN');
                     getUtils().status('RESET: no es pot resoldre la carpeta del bloc.', 'error');
                     return;
+                }
+
+                // ── 1. PROJECTE OBERT: mana la SEUA carpeta ─────────────────────
+                // Si el projecte obert és el d'aquest PROGRAMA+BLOC (encara que
+                // siga d'una altra data), el RESET treballa sobre la SEUA carpeta:
+                // és el directori que l'usuari vol esborrar i el que cal alliberar.
+                let openPath = '';
+                try {
+                    openPath = await callJSX("FASTPASS.Project.path()");
+                    if (openPath === '[]' || String(openPath).indexOf('ERR:') === 0) openPath = '';
+                } catch (eOpen) { openPath = ''; }
+                const openFolder = openPath ? this._parentFolder(openPath) : '';
+                const mateixProgBloc = !!(openFolder && this._sameProgramBloc(openFolder, folderSel));
+                const folder = mateixProgBloc ? openFolder : folderSel;
+                if (mateixProgBloc && this._normPath(openFolder) !== this._normPath(folderSel)) {
+                    log("ℹ️ [RESET] El projecte obert és d'una altra data: es reseteja la SEUA carpeta.", 'INFO');
+                    log('   · carpeta del projecte obert: ' + openFolder, 'INFO');
+                    log('   · carpeta de la selecció:     ' + folderSel, 'INFO');
                 }
 
                 // ── GUARDA DE SEGURETAT (2026-10-21) ──────────────────────────────
@@ -137,9 +159,10 @@
                     return;
                 }
                 const progNom = (progData && (progData.archivo || progData.nombre)) || idProg;
+                const dateSeg = this._folderDateSegment(folder) || dateDir;
                 const msg = 'RESET GENERAL\n\n' +
                     "S'esborrarà TOT el contingut de:\n" + folder + '\n\n' +
-                    '(projecte de ' + progNom + ' ' + bloque + ' del ' + dateDir + ')\n\n' +
+                    '(projecte de ' + progNom + ' ' + bloque + ' del ' + dateSeg + ')\n\n' +
                     'I es tornarà a crear de zero. Aquesta acció NO es pot desfer.\nContinua?';
                 if (!confirm(msg)) {
                     log("↩️ [RESET] Cancel·lat per l'usuari.", 'INFO');
@@ -148,31 +171,38 @@
                 if (btn) { btn.disabled = true; btn.innerText = '⏳'; }
                 getUtils().updateUIState('BUSY');
 
-                // ── 1. TANCAR el projecte del bloc (només si és el d'aquesta carpeta) ──
-                try {
-                    const currentPath = await callJSX("FASTPASS.Project.path()");
-                    if (currentPath && currentPath !== "") {
-                        const normP = currentPath.replace(/\\/g, '/').toLowerCase();
-                        const normF = folder.replace(/\\/g, '/').toLowerCase();
-                        if (normP.indexOf(normF) === 0) {
-                            log('🔒 [RESET] Tancant el projecte obert: ' + currentPath);
-                            await FASTPASS_UI.Logic.Project.close();
-                        } else {
-                            log("ℹ️ [RESET] El projecte obert no és el d'aquesta selecció; no es tanca.", 'INFO');
+                // ── 2. TANCAR el projecte (VERIFICAT) ─────────────────────────
+                // (2026-10-22 · #180) Abans es cridava `Logic.Project.close()` i no
+                // se sabia si havia funcionat (eixa funció s'empassava els errors):
+                // el RESET continuava, xocava amb els fitxers bloquejats i deia
+                // «Esborrat INCOMPLET» sense explicar el motiu real. Ara, si el
+                // projecte no es pot tancar, NO s'esborra res i s'avisa.
+                if (openPath) {
+                    if (this._pathInside(openPath, folder)) {
+                        log('🔒 [RESET] Tancant el projecte obert: ' + openPath);
+                        const closeRes = await FASTPASS_UI.Logic.Project.close({ refreshContext: false });
+                        if (!closeRes || !closeRes.ok) {
+                            const why = (closeRes && closeRes.error) ? closeRes.error : 'error desconegut';
+                            log("⛔ [RESET] No s'ha pogut tancar el projecte (" + why + "): no s'esborra res.", 'ERROR');
+                            getUtils().status("RESET aturat: no s'ha pogut tancar el projecte a Premiere. Tanca'l a mà i torna-ho a provar.", 'error');
+                            return;
                         }
+                        log('✅ [RESET] Projecte tancat i verificat.');
                     } else {
-                        log('ℹ️ [RESET] No hi ha cap projecte obert a Premiere.', 'INFO');
+                        log("ℹ️ [RESET] El projecte obert no és el d'aquesta selecció; no es tanca.", 'INFO');
                     }
-                } catch (eClose) {
-                    log('⚠️ [RESET] Error tancant el projecte: ' + eClose.message, 'WARN');
+                } else {
+                    log('ℹ️ [RESET] No hi ha cap projecte obert a Premiere.', 'INFO');
                 }
 
                 // Premiere allibera els handles una mica DESPRES de tancar: sense
                 // aquesta espera el primer intent xoca amb EPERM/EBUSY i deixa restes.
                 await getUtils().delay(700);
 
-                // ── 2. ESBORRAT ABSOLUT + VERIFICACIO ──────────────────────────
-                const wipe = await getUtils().wipeFolder(folder);
+                // ── 3. ESBORRAT ABSOLUT + VERIFICACIO ──────────────────────────
+                // Més intents que per defecte (6 x 500 ms): a la xarxa, Windows pot
+                // trigar un parell de segons a alliberar el .prproj i l'Auto-Save.
+                const wipe = await getUtils().wipeFolder(folder, { maxAttempts: 6, waitMs: 500 });
                 if (!wipe.ok) {
                     log('⛔ [RESET] Esborrat INCOMPLET: NO es crea cap projecte sobre les restes.', 'ERROR');
                     for (let i = 0; i < wipe.leftovers.length && i < 20; i++) {
@@ -211,7 +241,7 @@
                         FASTPASS_UI.State.reset();
                         FASTPASS_UI.State.workTarget = prevWorkTarget;
                     }
-                    if (window.FASTPASS_UI.State) window.FASTPASS_UI.State.dateDir = dateDir;
+                    if (window.FASTPASS_UI.State) window.FASTPASS_UI.State.dateDir = dateSeg;
                     if (window.SrtEditor && typeof window.SrtEditor.reset === 'function') {
                         window.SrtEditor.reset();
                     }
@@ -228,6 +258,74 @@
                 if (btn) { btn.disabled = false; btn.innerText = '🔄'; }
                 getUtils().updateUIState('READY');
             }
+        },
+
+        /**
+         * _normPath: ruta normalitzada per comparar (barres invertides, sense barra
+         * final). Usa `FsWipe.norm` (que conserva el prefix UNC) si és al bundle.
+         * @param {string} p
+         * @returns {string}
+         */
+        _normPath: function (p) {
+            var mod = window.FASTPASS_UI && window.FASTPASS_UI.Logic && window.FASTPASS_UI.Logic.FsWipe;
+            if (mod && typeof mod.norm === 'function') return mod.norm(p);
+            return String(p == null ? '' : p).replace(/\//g, '\\').replace(/\\+$/, '');
+        },
+
+        /**
+         * _parentFolder: carpeta que conté un fitxer (el .prproj obert).
+         * @param {string} filePath
+         * @returns {string} '' si no hi ha carpeta
+         */
+        _parentFolder: function (filePath) {
+            var p = this._normPath(filePath);
+            var i = p.lastIndexOf('\\');
+            return (i > 0) ? p.substring(0, i) : '';
+        },
+
+        /**
+         * _pathInside: cert si `filePath` està DINS de la carpeta `folder`.
+         * @param {string} filePath
+         * @param {string} folder
+         * @returns {boolean}
+         */
+        _pathInside: function (filePath, folder) {
+            var f = this._normPath(folder).toLowerCase();
+            var p = this._normPath(filePath).toLowerCase();
+            if (!f || !p) return false;
+            return p.indexOf(f + '\\') === 0;
+        },
+
+        /**
+         * _sameProgramBloc: cert si dos carpetes de projecte són del MATEIX
+         * programa i bloc (<base>/<programa>/<data>/<bloc>), encara que la DATA
+         * siga diferent. És el criteri per decidir que el projecte obert és "el
+         * de la selecció" (#180).
+         * @param {string} a
+         * @param {string} b
+         * @returns {boolean}
+         */
+        _sameProgramBloc: function (a, b) {
+            var segA = this._normPath(a).split('\\');
+            var segB = this._normPath(b).split('\\');
+            if (segA.length < 3 || segB.length < 3) return false;
+            var key = function (s) { return String(s || '').toUpperCase().replace(/\s+/g, ''); };
+            var blocA = key(segA[segA.length - 1]);
+            var blocB = key(segB[segB.length - 1]);
+            var progA = key(segA[segA.length - 3]);
+            var progB = key(segB[segB.length - 3]);
+            return !!blocA && blocA === blocB && !!progA && progA === progB;
+        },
+
+        /**
+         * _folderDateSegment: tram de DATA (YYYY_MM_DD) d'una carpeta de bloc.
+         * @param {string} folder - <base>/<programa>/<data>/<bloc>
+         * @returns {string} '' si el tram no té forma de data
+         */
+        _folderDateSegment: function (folder) {
+            var seg = this._normPath(folder).split('\\');
+            var d = (seg.length >= 2) ? String(seg[seg.length - 2]) : '';
+            return /^\d{4}_\d{2}_\d{2}$/.test(d) ? d : '';
         },
 
         /**

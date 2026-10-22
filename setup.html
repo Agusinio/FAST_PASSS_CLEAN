@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Dashboard Config - FAST >>> PASS</title>
     <script src="js/lib/CSInterface.js"></script>
-    <link rel="stylesheet" href="setup.css?v=2">
+    <link rel="stylesheet" href="setup.css?v=3">
 </head>
 <body>
     <header>
@@ -87,13 +87,15 @@
     <div id="User Defined" class="tab-content"></div>
 
     <footer>
-        <button class="secondary" onclick="window.parent.FASTPASS_UI.Workflows.Config.toggleSetup(false)">TANCAR SENSE DESAR</button>
+        <button class="secondary" onclick="closeSetup(false)">TANCAR SENSE DESAR</button>
         <button class="primary" onclick="salvarTodo()">GUARDAR CONFIG [Profile.json]</button>
     </footer>
 
-    <!-- (2026-10-21) SELECTOR DE CARPETES/FITXERS: accessos ràpids + ruta enganxable.
-         Substitueix `cep.fs.showOpenDialog` (el diàleg del sistema no porta els
-         accessos ràpids de l'Explorador); el diàleg natiu queda al botó SISTEMA… -->
+    <!-- (2026-10-21 · revisat 2026-10-22 #178b) SELECTOR DE CARPETES/FITXERS:
+         ÚLTIMA xarxa de seguretat (accessos ràpids + ruta enganxable + navegació).
+         El botó 📁 del dashboard obri ABANS el diàleg modern de l'Explorador
+         (`scripts/pick_folder.ps1`); este selector només apareix si Node o el
+         script no estan disponibles. -->
     <div id="fp-picker" class="fp-picker-backdrop">
         <div class="fp-picker">
             <div class="fp-picker-head">
@@ -276,6 +278,74 @@
             event.target.classList.add('active');
         }
 
+        // ── TANCAR EL DASHBOARD (2026-10-22 · #179) ────────────────────────────
+        // BUG: desar anava bé, però la finestra NO es tancava. Estos dos blocs
+        // feien `csInterface.dispatchEvent(new CSXSEvent(...))` i el
+        // `CSInterface.js` que carrega este fitxer NO definix `CSXSEvent`
+        // (només `dispatchEvent`): eixa línia llançava ReferenceError i el
+        // `toggleSetup(false)` de davall no s'executava MAI.
+        // Ara: (a) la notificació va protegida, (b) el tancament té cascada
+        // (API del panell → DOM de l'overlay → `window.top`).
+
+        /**
+         * notifyConfigUpdated: avisa el panell que el Profile.json ha canviat.
+         * Si el CEP no té `CSXSEvent`, s'omet (no ha de trencar el desat).
+         */
+        function notifyConfigUpdated() {
+            try {
+                if (typeof CSXSEvent === 'function') {
+                    csInterface.dispatchEvent(new CSXSEvent('FASTPASS_CONFIG_UPDATED', 'APPLICATION'));
+                    fpDiag('event FASTPASS_CONFIG_UPDATED enviat');
+                } else {
+                    fpDiag('event FASTPASS_CONFIG_UPDATED omès (CSXSEvent no existix en CSInterface.js)');
+                }
+            } catch (eN) {
+                fpDiag('event FASTPASS_CONFIG_UPDATED KO · ' + ((eN && eN.message) || eN));
+            }
+        }
+
+        /**
+         * closeSetup: tanca el dashboard i torna al panell.
+         * @param {boolean} [reload] cert (per defecte) = refresca el perfil en
+         *   memòria del panell (`FASTPASS_UI.Config.loadProfile`), perquè les
+         *   rutes acabades de desar valguen sense reiniciar l'extensió.
+         * @returns {boolean} true si alguna via de tancament ha funcionat
+         */
+        function closeSetup(reload) {
+            var fr = fpFrames();
+            var i, C, done = false;
+            if (reload !== false) {
+                for (i = 0; i < fr.length; i++) {
+                    try {
+                        C = fr[i].FASTPASS_UI && fr[i].FASTPASS_UI.Config;
+                        if (C && typeof C.loadProfile === 'function') { C.loadProfile(); break; }
+                    } catch (eR) { fpDiag('refresc del perfil KO · ' + ((eR && eR.message) || eR)); }
+                }
+            }
+            for (i = 0; i < fr.length && !done; i++) {
+                try {
+                    C = fr[i].FASTPASS_UI && fr[i].FASTPASS_UI.Workflows &&
+                        fr[i].FASTPASS_UI.Workflows.Config;
+                    if (!C) continue;
+                    if (typeof C.closeSetup === 'function') { C.closeSetup(); done = true; }
+                    else if (typeof C.toggleSetup === 'function') { C.toggleSetup(false); done = true; }
+                } catch (e1) { fpDiag('tanca · API KO · ' + ((e1 && e1.message) || e1)); }
+            }
+            if (!done) {
+                // XARXA DE SEGURETAT: llevar-li `.active` a l'overlay és
+                // exactament el que fa `toggleSetup(false)` al panell.
+                for (i = 0; i < fr.length && !done; i++) {
+                    try {
+                        var doc = fr[i].document;
+                        var ov = doc && doc.getElementById('setup-overlay');
+                        if (ov) { ov.classList.remove('active'); done = true; }
+                    } catch (e2) { }
+                }
+            }
+            fpDiag('tanca el dashboard · ' + (done ? 'OK' : 'KO (cap via)'));
+            return done;
+        }
+
         async function salvarTodo() {
             // Recollir camps General i Rutas abans de salvar
             currentProfile.general.autor = document.getElementById('val-autor').value;
@@ -342,8 +412,8 @@
                 try { chkOk = !!(chk && JSON.parse(chk)); } catch (eChk) { chkOk = false; }
                 if (chkOk) {
                     alert("Configuració desada a Profile.json");
-                    csInterface.dispatchEvent(new CSXSEvent('FASTPASS_CONFIG_UPDATED', 'APPLICATION'));
-                    window.parent.FASTPASS_UI.Workflows.Config.toggleSetup(false);
+                    notifyConfigUpdated();
+                    closeSetup();
                     return;
                 }
                 writeErr = 'escriptura NO verificada (el fitxer rellegit no és JSON)';
@@ -358,8 +428,8 @@
             csInterface.evalScript(`IO.writeTxt('${profilePath.replace(/\\/g, '\\\\')}', '${payload}')`, function(res) {
                 if(res && res.indexOf("OK") !== -1) {
                     alert("Configuració física desada al Profile.json");
-                    csInterface.dispatchEvent(new CSXSEvent('FASTPASS_CONFIG_UPDATED', 'APPLICATION'));
-                    window.parent.FASTPASS_UI.Workflows.Config.toggleSetup(false);
+                    notifyConfigUpdated();
+                    closeSetup();
                 } else {
                     alert("❌ No s'ha pogut desar Profile.json\n" +
                         "Motiu: " + writeErr + "\nPont JSX: " + res);
@@ -451,19 +521,41 @@
         };
 
 
-        // ── SELECTOR DE CARPETES/XITXERS (2026-10-21 · revisat #177) ─────────
-        // El botó 📁 obri DIRECTAMENT el diàleg del SISTEMA (`cep.fs.showOpenDialog`):
-        // és el MATEIX que obria el botó SISTEMA…, porta els accessos ràpids de
-        // l'Explorador (Accés ràpid, Documents, Baixades, discos…) i deixa enganxar
-        // una ruta UNC. Ja NO s'obri el selector HTML: queda només com a XARXA DE
-        // SEGURETAT si `cep.fs.showOpenDialog` no existix o llança.
+        // ── SELECTOR DE CARPETES/XITXERS (2026-10-21 · revisat #178b) ─────────
+        // (2026-10-22 · BUG #178b) El diàleg de CEP per a carpetes
+        // (`cep.fs.showOpenDialog(..., chooseDirectory = true)`) és l'ANTIC
+        // (`SHBrowseForFolder`): un arbre de discs sense barra d'adreces, sense
+        // l'Accés ràpid ni els favorits de l'Explorador, i sense manera
+        // d'enganxar una ruta UNC → les rutes de xarxa NO mapejades no s'hi
+        // podien triar.
         //
-        // LÍMIT CONEGUT: el MODE DE VISTA (llista/detalls vs icones grans) el decidix
-        // Windows i recorda l'últim de cada carpeta; l'API de CEP no el pot forçar.
-        // Posar-lo en "Detalls" una vegada dins la carpeta és suficient.
+        // El botó 📁 obri el MATEIX diàleg que l'Explorador de Windows
+        // («Selecciona una carpeta»): `scripts/pick_folder.ps1` amb
+        // IFileOpenDialog + FOS_PICKFOLDERS. Cascada de transports (la primera
+        // que arranca guanya):
+        //   1. Node `child_process` → NOMÉS si el manifest declara --enable-nodejs
+        //   2. `cep.process`       → API nativa de CEP 10+, SENSE Node (3a volta)
+        //   3. cep.fs.showOpenDialog (SHBrowseForFolder) → xarxa de seguretat
+        //   4. selector HTML del dashboard → última xarxa de seguretat
+        //
+        // (3a volta) La 2a volta escrivia la traça amb `fs` de Node i sondejava
+        // el .ps1 amb `fs.existsSync`: sense Node, les dos coses desapareixien en
+        // SILENCI i sempre guanyava el diàleg vell. Ara la traça va al log del
+        // panell (`fpDiag` → `FASTPASS_UI.Utils.forceLog`) i el transport bo és
+        // `cep.process`, que no necessita Node.
+        //
+        // El botó 🧪 (provaRuta) i el camp de text NO canvien: es pot seguir
+        // enganxant la ruta a mà i desant sense obrir cap diàleg.
+
         var _fpPicker = { id: null, mode: 'folder', ext: [], dir: '', sel: '', token: 0, quick: null };
 
-        function cepFs() { return (window.cep && window.cep.fs) ? window.cep.fs : null; }
+        function cepFs() {
+            var fr = fpFrames();
+            for (var i = 0; i < fr.length; i++) {
+                try { if (fr[i].cep && fr[i].cep.fs) return fr[i].cep.fs; } catch (e) { }
+            }
+            return null;
+        }
 
         /** isDirPath: existix i és carpeta (`readdir` és la prova barata). */
         function isDirPath(p) {
@@ -752,18 +844,476 @@
             return true;
         }
 
-        window.browseFolder = function (id) {
-            if (!pickNative(id, 'folder')) pickerOpen(id, { mode: 'folder' });
+        // ── 1) DIÀLEG MODERN DE L'EXPLORADOR (2026-10-22 · BUG #178b) ─────────
+        var _fpPickBusy = false;
+        var _fpNodeMods = {};
+
+        /**
+         * fpExtRoot: carpeta de l'extensió (`''` si no es pot resoldre).
+         * `setup.html` viu dins d'un <iframe>, així que no sempre hi ha les API
+         * del marc principal: es prova `csInterface` i, si falla, l'URL propi.
+         */
+        var _fpExtRoot;
+        function fpExtRoot() {
+            if (_fpExtRoot !== undefined) return _fpExtRoot;
+            _fpExtRoot = '';
+            try {
+                var b = csInterface.getSystemPath(SystemPath.EXTENSION) || '';
+                if (b) _fpExtRoot = String(b).replace(/[\\/]+$/, '');
+            } catch (e1) { }
+            if (!_fpExtRoot) {
+                try {
+                    var href = String(window.location.href || '').split('?')[0];
+                    var i = href.lastIndexOf('/setup.html');
+                    if (i > 0) {
+                        var p = decodeURIComponent(href.substring(0, i));
+                        if (p.indexOf('file:///') === 0) p = p.substring(8);
+                        _fpExtRoot = p.replace(/\//g, '\\');
+                    }
+                } catch (e2) { }
+            }
+            return _fpExtRoot;
+        }
+
+        /**
+         * fpFrames: finestres on buscar les API del panell, per orde.
+         *
+         * `setup.html` viu dins d'un <iframe> d'`index.html`: en CEP el mòdul de
+         * Node pot estar exposat NOMÉS al marc principal, i `FASTPASS_UI.Utils`
+         * (el log del panell) sempre hi viu. Es prova este marc, `parent` i `top`.
+         * @returns {Window[]}
+         */
+        function fpFrames() {
+            var ws = [window];
+            try { if (window.parent && window.parent !== window) ws.push(window.parent); } catch (eP) { }
+            try {
+                if (window.top && window.top !== window && window.top !== window.parent) ws.push(window.top);
+            } catch (eT) { }
+            return ws;
+        }
+
+        /**
+         * fpDiag: traça de la tria de carpetes — SEMPRE, i a un FITXER.
+         *
+         * (2026-10-22 · BUG #178b, 3a volta) Escriu via
+         * `FASTPASS_UI.Utils.forceLog` del panell (`index.html`), que bolca de
+         * seguida al `FASTPASS.log` del projecte o, sense projecte, a
+         * `<extensió>\_keyframe_trace.log`. Així el diagnòstic no depén de Node
+         * ni de `console.log` (el CEP està en `LogLevel : 1` i no deixa `.debug`)
+         * i el fallback deixa de ser cec.
+         *
+         * NO s'usa `cep.fs.writeFile` a posta: el probe de la finestra compta les
+         * escriptures d'este fitxer (`#SETUP/17` exigix UNA sola, la del perfil).
+         * @param {string} msg
+         * @returns {boolean} true si ha anat a un fitxer de log
+         */
+        var _fpDiagEnv = false;
+        function fpDiag(msg) {
+            var line = '[PICK] ' + msg;
+            try { console.log('[setup] ' + line); } catch (e0) { }
+            try {
+                var fr = fpFrames();
+                for (var i = 0; i < fr.length; i++) {
+                    var U = fr[i].FASTPASS_UI && fr[i].FASTPASS_UI.Utils;
+                    if (U && typeof U.forceLog === 'function') {
+                        U.forceLog(line);
+                        if (!_fpDiagEnv) { _fpDiagEnv = true; U.forceLog('[PICK] entorn · ' + fpEnvTxt()); }
+                        return true;
+                    }
+                }
+            } catch (e1) { }
+            return false;
+        }
+
+        /**
+         * fpEnvTxt: què hi ha disponible en este CEP, en UNA línia de log.
+         * Servix per a saber, sense obrir res més, si el diàleg podrà ser el
+         * modern: `Node`/`child_process` (cal `--enable-nodejs` al manifest) o
+         * `cep.process` (API nativa de CEP 10+, NO necessita Node).
+         * @returns {string}
+         */
+        function fpEnvTxt() {
+            var node = false, cp = false, proc = false, fsKind = '?';
+            try { node = !!(window.cep_node && window.cep_node.require); } catch (e1) { }
+            try { cp = !!fpNodeReq('child_process'); } catch (e3) { }
+            try { proc = !!fpCepProc(); } catch (e4) { }
+            var fr = fpFrames();
+            for (var i = 0; i < fr.length; i++) {
+                try {
+                    var U = fr[i].FASTPASS_UI && fr[i].FASTPASS_UI.Utils;
+                    if (U && U._fsKind) { fsKind = U._fsKind; break; }
+                } catch (e5) { }
+            }
+            return 'url=' + String(window.location.href || '') +
+                ' · Node=' + node + ' · child_process=' + cp + ' · cep.process=' + proc +
+                ' · escriptura=' + fsKind + ' · ext=' + (fpExtRoot() || '?');
+        }
+
+        /**
+         * fpNodeReq: mòdul de Node (cascada cep_node → require → cep.node).
+         *
+         * `setup.html` va dins d'un <iframe> i en CEP el mòdul de Node pot estar
+         * exposat NOMÉS al marc principal: si en este marc no hi és, es prova
+         * `parent`/`top` (mateix origen). Sense això el 📁 queia sempre al
+         * diàleg vell de CEP i pareixia que el #178b no s'havia aplicat.
+         * @param {string} name
+         * @returns {Object|null}
+         */
+        function fpNodeReq(name) {
+            if (_fpNodeMods[name] !== undefined) return _fpNodeMods[name];
+            var wins = fpFrames();
+            var mod = null;
+            for (var i = 0; i < wins.length && !mod; i++) {
+                var w = wins[i];
+                // 0) La cascada del panell (Utils._nodeReq) ja sap on mirar primer.
+                try {
+                    if (w.FASTPASS_UI && w.FASTPASS_UI.Utils && typeof w.FASTPASS_UI.Utils._nodeReq === 'function') {
+                        mod = w.FASTPASS_UI.Utils._nodeReq(name);
+                    }
+                } catch (e0) { mod = null; }
+                try { if (!mod && w.cep_node && w.cep_node.require) mod = w.cep_node.require(name); } catch (e1) { mod = null; }
+                if (!mod) { try { if (typeof w.require === 'function') mod = w.require(name); } catch (e2) { mod = null; } }
+                if (!mod) { try { if (w.cep && w.cep.node && w.cep.node.require) mod = w.cep.node.require(name); } catch (e3) { mod = null; } }
+            }
+            _fpNodeMods[name] = mod || null;
+            return _fpNodeMods[name];
+        }
+
+        /**
+         * fpExists: existix un fitxer? (`cep.fs.readdir` del pare, sense Node).
+         * @param {string} full
+         * @returns {boolean}
+         */
+        function fpExists(full) {
+            var p = String(full || '');
+            var i = p.lastIndexOf('\\');
+            if (i <= 0) return false;
+            var dir = p.substring(0, i);
+            var base = p.substring(i + 1).toLowerCase();
+            var list = listPaths(dir);
+            if (!list) return false;
+            for (var k = 0; k < list.length; k++) {
+                if (String(list[k]).toLowerCase() === base) return true;
+            }
+            return false;
+        }
+
+        /**
+         * fpPickScript: ruta de `scripts/pick_folder.ps1` ('' si no hi és).
+         *
+         * (3a volta, #178b) ABANS es comprovava amb `fs.existsSync` de Node: sense
+         * `--enable-nodejs` al manifest, Node no existix i el diàleg modern es
+         * descartava SEMPRE en silenci. Ara es mira amb `cep.fs` (que sí que hi és)
+         * perquè el transport per `cep.process` no necessita Node per a res.
+         */
+        var _fpScript = null;
+        function fpPickScript() {
+            if (_fpScript !== null) return _fpScript;
+            _fpScript = '';
+            var base = fpExtRoot();
+            if (!base) return _fpScript;
+            var full = String(base).replace(/[\\/]+$/, '') + '\\scripts\\pick_folder.ps1';
+            if (fpExists(full)) _fpScript = full;
+            return _fpScript;
+        }
+
+        /** fpPickCursor: cursor d'espera mentres arrenca el diàleg. */
+        function fpPickCursor(on) {
+            try { document.body.classList.toggle('fp-picking', !!on); } catch (e) { }
+        }
+        /**
+         * fpPickViaNode: transport A — `child_process.execFile` de Node.
+         *
+         * NOMÉS existix si el manifest declara `--enable-nodejs` (este panell NO
+         * el declara: vore `fpCepProc`). Es manté perquè és el camí amb stdout i
+         * codi d'eixida, i funciona igual si algun dia s'habilita Node.
+         *
+         * @param {string} id
+         * @param {string} initial
+         * @returns {boolean} false = Node no hi és (que seguisca la cascada)
+         */
+        function fpPickViaNode(id, initial) {
+            var cp = fpNodeReq('child_process');
+            if (!cp || !cp.execFile) return false;
+            var script = fpPickScript();
+            if (!script) { fpDiag('KO · falta el .ps1 (root=' + fpExtRoot() + ')'); return false; }
+            var el = document.getElementById(id);
+
+            // Títol i ruta inicial: per ENTORN (`FP_PICK_*`) si el marc té
+            // `process`, i SEMPRE per arguments — `execFile` no passa per cap
+            // shell, així que espais, accents i `\\srv\share` hi arriben intactes.
+            // (Si `process` no hi és, l'entorn del fill s'hereta sencer: sense
+            // `PATH`/`SystemRoot` PowerShell no arranca de manera fiable.)
+            var initialTxt = String(initial == null ? '' : initial);
+            var env = null;
+            try {
+                var pe = (typeof process !== 'undefined') ? process.env : null;
+                if (pe) {
+                    env = {};
+                    for (var k in pe) { if (Object.prototype.hasOwnProperty.call(pe, k)) env[k] = pe[k]; }
+                    env.FP_PICK_TITLE = 'Tria una carpeta';
+                    env.FP_PICK_INITIAL = initialTxt;
+                }
+            } catch (eEnv) { env = null; }
+
+            var argv = ['-NoProfile', '-STA', '-ExecutionPolicy', 'Bypass', '-File', script,
+                        '-Title', 'Tria una carpeta', '-Initial', initialTxt];
+            var opts = { windowsHide: true };
+            if (env) opts.env = env;
+
+            _fpPickBusy = true;
+            fpPickCursor(true);
+            fpDiag('obre (Node) id=' + id + ' · initial=' + initialTxt);
+            try {
+                cp.execFile('powershell.exe', argv, opts,
+                    function (err, stdout, stderr) {
+                        _fpPickBusy = false;
+                        fpPickCursor(false);
+                        var code = err ? (typeof err.code === 'number' ? err.code : -1) : 0;
+                        var out = String(stdout || '').replace(/[\r\n]+/g, '').trim();
+                        if (code === 0 && out) {
+                            if (el) el.value = out;
+                            fpDiag('OK (Node) exit=0 · ' + out);
+                            return;
+                        }
+                        if (code === 3) { fpDiag('cancel·lat (exit=3)'); return; }
+                        var why = String(stderr || (err && err.message) || '').replace(/[\r\n]+/g, ' ').trim();
+                        fpDiag('KO (Node) exit=' + code + ' · ' + why);
+                        // El mecanisme ha fallat de debò: xarxa de seguretat.
+                        if (!pickNative(id, 'folder')) pickerOpen(id, { mode: 'folder' });
+                    });
+            } catch (eSp) {
+                _fpPickBusy = false;
+                fpPickCursor(false);
+                fpDiag('KO execFile · ' + ((eSp && eSp.message) || eSp));
+                return false;
+            }
+            return true;
+        }
+
+        /**
+         * fpCepProc: l'objecte `cep` amb l'API de processos (`cep.process`, CEP 10+).
+         *
+         * PER QUÈ (BUG #178b, 3a volta, 2026-10-22): el diàleg modern de carpeta
+         * necessita LLANÇAR `scripts/pick_folder.ps1`, i el transport triat era
+         * `child_process` de Node. Però el manifest d'este panell NO declara
+         * `--enable-nodejs`: dins de CEP no hi ha ni `require` ni `cep_node`, així
+         * que eixe transport no s'arrancava MAI i tot queia (en silenci) al diàleg
+         * vell de CEP. `cep.process` és l'API nativa del CEP i no necessita Node.
+         * @returns {Object|null}
+         */
+        function fpCepProc() {
+            var fr = fpFrames();
+            for (var i = 0; i < fr.length; i++) {
+                try {
+                    var c = fr[i].cep;
+                    if (c && c.process && typeof c.process.createProcess === 'function') return c;
+                } catch (e) { }
+            }
+            return null;
+        }
+
+        /**
+         * fpPickOutFile: fitxer d'intercanvi amb el .ps1.
+         * `cep.process` no dóna stdout ni codi d'eixida, així que el .ps1 escriu
+         * ací el resultat (`OK <b64>` / `CANCEL` / `ERR <b64>`). Va a l'extensió
+         * i acaba en `.tmp` (ja ignorat per git).
+         * @returns {string}
+         */
+        function fpPickOutFile() {
+            var root = fpExtRoot();
+            return root ? (String(root).replace(/[\\/]+$/, '') + '\\_pick_result.tmp') : '';
+        }
+
+        /**
+         * fpFromB64: desfà el payload base64 (UTF-8) que escriu el .ps1.
+         * Amb base64 el resultat no depén de com `cep.fs.readFile` decidix
+         * decodificar el fitxer i els accents (`VERTICALITZACIÓ`) no es trenquen.
+         * @param {string} s
+         * @returns {string}
+         */
+        function fpFromB64(s) {
+            var raw = String(s || '');
+            try {
+                var bin = window.atob ? window.atob(raw) : '';
+                if (!bin) return raw;
+                var pct = '';
+                for (var i = 0; i < bin.length; i++) {
+                    pct += '%' + ('0' + bin.charCodeAt(i).toString(16)).slice(-2);
+                }
+                return decodeURIComponent(pct);
+            } catch (e) { return raw; }
+        }
+
+        /**
+         * fpPickOutcome: interpreta el fitxer d'intercanvi del .ps1.
+         * @param {string} id
+         * @param {string} raw - contingut del fitxer ('' = el .ps1 no hi va arribar)
+         * @returns {string} 'ok' | 'cancel' | 'err'
+         */
+        function fpPickOutcome(id, raw) {
+            var txt = String(raw || '').replace(/^\uFEFF/, '').trim();
+            if (!txt) return 'err';
+            var sp = txt.indexOf(' ');
+            var kind = (sp > 0 ? txt.substring(0, sp) : txt).toUpperCase();
+            var val = sp > 0 ? fpFromB64(txt.substring(sp + 1)) : '';
+            if (kind === 'OK' && val) {
+                var el = document.getElementById(id);
+                if (el) el.value = val;
+                fpDiag('OK (cep.process) · ' + val);
+                return 'ok';
+            }
+            if (kind === 'CANCEL') { fpDiag('cancel·lat per l\'usuari'); return 'cancel'; }
+            fpDiag('KO (cep.process) · ' + (val || txt));
+            return 'err';
+        }
+
+        /**
+         * fpPickViaCep: transport B — `cep.process` (CEP 10+), SENSE Node.
+         *
+         * Llança `powershell.exe` amb `scripts/pick_folder.ps1` (IFileOpenDialog +
+         * FOS_PICKFOLDERS = el diàleg de carpeta de l'Explorador: Accés ràpid,
+         * Equip, Xarxa i barra d'adreces per a enganxar UNC) i espera el resultat
+         * en un FITXER (`-OutFile`), perquè esta API no dóna ni stdout ni codi
+         * d'eixida. L'espera no bloqueja la UI: `onquit` + sondeig cada 250 ms.
+         *
+         * @param {string} id
+         * @param {string} initial
+         * @returns {boolean} false = no s'ha pogut ni intentar (que seguisca la cascada)
+         */
+        function fpPickViaCep(id, initial) {
+            var cepApi = fpCepProc();
+            if (!cepApi) return false;
+            var script = fpPickScript();
+            if (!script) { fpDiag('KO · falta el .ps1 (root=' + fpExtRoot() + ')'); return false; }
+            var out = fpPickOutFile();
+            if (!out) { fpDiag('KO · sense carpeta d\'extensió per al resultat'); return false; }
+
+            // `cep.process` NO passa pel shell (ni resol el PATH): la ruta de
+            // l'executable ha de ser COMPLETA. Si no hi fora, no s'intenta.
+            var exe = 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe';
+            if (!fpExists(exe)) { fpDiag('KO · no trobe powershell.exe'); return false; }
+
+            // Restes d'una tria anterior farien acabar el sondeig en fals.
+            try { if (cepApi.fs && cepApi.fs.deleteFile) cepApi.fs.deleteFile(out); } catch (eD) { }
+
+            var initialTxt = String(initial == null ? '' : initial);
+            var pid = 0;
+            _fpPickBusy = true;
+            fpPickCursor(true);
+            fpDiag('obre (cep.process) id=' + id + ' · initial=' + initialTxt);
+            try {
+                var r = cepApi.process.createProcess(exe,
+                    '-NoProfile', '-STA', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden',
+                    '-File', script, '-Title', 'Tria una carpeta',
+                    '-Initial', initialTxt, '-OutFile', out);
+                if (!r || typeof r.data !== 'number' || r.data <= 0) {
+                    fpDiag('KO createProcess · err=' + (r && r.err) + ' pid=' + (r && r.data));
+                    _fpPickBusy = false;
+                    fpPickCursor(false);
+                    return false;
+                }
+                pid = r.data;
+            } catch (eCr) {
+                _fpPickBusy = false;
+                fpPickCursor(false);
+                fpDiag('KO createProcess · ' + ((eCr && eCr.message) || eCr));
+                return false;
+            }
+            fpDiag('pid=' + pid + ' · esperant el resultat');
+
+            var done = false;
+            var iv = 0;
+            var t0 = Date.now();
+            var acaba = function (why) {
+                if (done) return;
+                done = true;
+                if (iv) { clearInterval(iv); iv = 0; }
+                _fpPickBusy = false;
+                fpPickCursor(false);
+                var raw = '';
+                try {
+                    var rd = (cepApi.fs && cepApi.fs.readFile) ? cepApi.fs.readFile(out) : null;
+                    if (rd && rd.err === 0 && rd.data) raw = String(rd.data);
+                } catch (eRd) { }
+                try { if (cepApi.fs && cepApi.fs.deleteFile) cepApi.fs.deleteFile(out); } catch (eDel) { }
+                if (!raw) fpDiag('cap resultat (' + why + ')');
+                if (fpPickOutcome(id, raw) === 'err') {
+                    // El diàleg modern ha fallat de debò: xarxa de seguretat.
+                    if (!pickNative(id, 'folder')) pickerOpen(id, { mode: 'folder' });
+                }
+            };
+            // `onquit` és el senyal bo; el sondeig cobrix les versions de CEP on
+            // eixe callback no arriba (i detecta el cas «procés mort sense fitxer»).
+            try { cepApi.process.onquit(pid, function () { setTimeout(function () { acaba('quit'); }, 150); }); } catch (eQ) { }
+            iv = setInterval(function () {
+                if (done) { clearInterval(iv); iv = 0; return; }
+                var raw = '';
+                try {
+                    var rd = (cepApi.fs && cepApi.fs.readFile) ? cepApi.fs.readFile(out) : null;
+                    if (rd && rd.err === 0 && rd.data) raw = String(rd.data);
+                } catch (eP) { }
+                if (raw) { acaba('fitxer'); return; }
+                var alive = false;
+                try { var ir = cepApi.process.isRunning(pid); alive = !!(ir && ir.data); } catch (eI) { alive = false; }
+                if (!alive) { acaba('el procés ha acabat sense resultat'); return; }
+                if (Date.now() - t0 > 30 * 60 * 1000) { acaba('temps esgotat'); }
+            }, 250);
+            return true;
+        }
+
+        /**
+         * fpPickFolderNative: obri el diàleg MODERN de carpeta de l'Explorador i,
+         * quan l'usuari tria, posa la ruta al camp `id`. És ASÍNCRON.
+         *
+         * Cascada de transports (la primera que arranca guanya):
+         *   A) Node `child_process`  → cal `--enable-nodejs` al manifest (ací NO).
+         *   B) `cep.process`         → API nativa de CEP 10+, SENSE Node (#178b 3a).
+         * I si cap arranca, el cridador seguix amb `cep.fs.showOpenDialog` i, al
+         * final, amb el selector HTML del dashboard.
+         *
+         * @param {string} id      - id de l'input destí
+         * @param {string} initial - carpeta on començar ('' = última recordada)
+         * @returns {boolean} true si el diàleg s'ha POGUT LLANÇAR (cancel·lar
+         *   també compta: aleshores NO es cau al diàleg de CEP ni al selector HTML).
+         */
+        window.fpPickFolderNative = function (id, initial) {
+            var el = document.getElementById(id);
+            if (!el) return true;
+            if (_fpPickBusy) return true;                     // ja n'hi ha un d'obert
+            if (fpPickViaNode(id, initial)) return true;
+            if (fpPickViaCep(id, initial)) return true;
+            fpDiag('KO id=' + id + ' · cap transport (ni Node ni cep.process) → diàleg de CEP');
+            return false;
         };
+
+        window.browseFolder = function (id) {
+            var el = document.getElementById(id);
+            var cur = el ? String(el.value || '').trim() : '';
+            // 1) Explorador modern: Accés ràpid + barra d'adreces (rutes UNC).
+            //    La ruta inicial la valida el propi diàleg (C#) en un procés a
+            //    banda: si la xarxa no respon, NO es bloqueja el panell.
+            if (window.fpPickFolderNative(id, cur)) return;
+            // 2) Diàleg de CEP (SHBrowseForFolder): arbre de discs, sense favorits.
+            if (pickNative(id, 'folder')) return;
+            // 3) Selector HTML del dashboard.
+            pickerOpen(id, { mode: 'folder' });
+        };
+
+        // La plantilla és un FITXER .prproj: seguix pel diàleg de CEP, que per a
+        // fitxers SÍ que és el modern de l'Explorador (GetOpenFileName).
         window.browseFile = function (id) {
             if (!pickNative(id, 'file')) pickerOpen(id, { mode: 'file', ext: ['prproj'] });
         };
 
-        // Tooltip dels botons 📁: obrin el diàleg del SISTEMA (una sola passada).
+
+        // Tooltip dels botons 📁 (una sola passada).
         Array.prototype.forEach.call(document.querySelectorAll('.btn-browse'), function (b) {
             var oc = String(b.getAttribute('onclick') || '');
-            if (oc.indexOf('browseFolder(') === 0 || oc.indexOf('browseFile(') === 0) {
-                b.title = "Obrir el diàleg del sistema (accessos ràpids de l'Explorador)";
+            if (oc.indexOf('browseFolder(') === 0) {
+                b.title = "Obrir l'Explorador de Windows (Accés ràpid i rutes UNC enganxables)";
+            } else if (oc.indexOf('browseFile(') === 0) {
+                b.title = "Obrir el diàleg del sistema per a triar l'arxiu .prproj";
             }
         });
 

@@ -193,30 +193,124 @@
                 // `finally`: es torna SEMPRE a HOY, també si `runMainAction` peta;
                 // abans, en aquell cas `workTarget` quedava en 'yesterday' i el poll
                 // de 15 s repintava l'AHIR indefinidament.
+                // (2026-10-22 · #181) DOS FORATS QUE FEIEN QUE EL Ctrl+CLIC «NO FERA RES»:
+                //   1) `checkContext({force:true})` s'ENGANXAVA a l'escaneig que ja
+                //      estava en curs (el poll de 15 s) i tornava l'estat de HOY: el
+                //      mode correcció llegia «MASSA D'HORA» d'avui i avortava sense
+                //      fer res (log real del 22/10 13:05). Ara es demana `fresh:true`
+                //      (espera el torn i llança el SEU escaneig, ja amb
+                //      `workTarget='yesterday'`) i es reintenta fins que la data de
+                //      l'estat siga la demanada (`_awaitTargetScan`).
+                //   2) Si del dia anterior no es detecta material (el NAS no el
+                //      conserva, sondes KO...), el gate d'arrencada CREA/ESPERA/MASSA
+                //      deixava el flux en «AHIR: sense material». Pedir AHIR amb Ctrl
+                //      és una ORDRE explícita → es crea igualment i `_runNew` farà la
+                //      FOTO (si tampoc no hi ha escaleta, avorta amb el motiu real).
+                //      Vegeu `_correctionAction`.
                 const St = window.FASTPASS_UI.State;
                 u.log('🔄 [MAIN] Ctrl+clic → mode correcció (AHIR).', 'INFO');
                 St.workTarget = 'yesterday';
+                // ── (2026-10-22 · #181) DATA DEMANADA, capturada UNA vegada ───────
+                // Tota la resta del mode correcció es valida contra esta data: si
+                // l'escaneig que es llig no és d'esta data, no val (vegeu
+                // `_awaitTargetScan`).
+                const targetY = this._targetDateDir();
                 try {
-                    await this.checkContext({ force: true });
-                    const stA = this._lastConclusion;
-                    const dataA = this._lastButtonData;
-                    if (stA === 'NEW' || stA === 'UPDATE' || stA === 'GO' || stA === 'LOAD') {
-                        const actA = (stA === 'NEW') ? 'NEW' : stA;
-                        u.log('🔄 [MAIN] Correcció AHIR → ' + stA + (dataA && dataA.name ? ' · ' + dataA.name : ''), 'INFO');
-                        await FASTPASS_UI.Workflows.MainButton.runMainAction(actA, dataA);
+                    const scanY = await this._awaitTargetScan(targetY, 3);
+                    const stA = scanY.state;
+                    const dataA = scanY.data;
+                    const plan = this._correctionAction(stA, scanY.ok);
+                    if (!plan.action) {
+                        u.log('⚠️ [MAIN] Mode correcció: ' + targetY + ' sense estat aprofitable (' + stA + ')', 'WARN');
+                        u.status('AHIR: no s\'ha pogut llegir l\'estat del dia. Torna-ho a provar.', 'warn');
                     } else {
-                        u.log('⚠️ [MAIN] Mode correcció: AHIR sense material útil (estat ' + stA + ')', 'WARN');
-                        u.status('AHIR: sense material per corregir', 'warn');
+                        if (plan.reason === 'sense-escaneig-del-dia') {
+                            u.log('⚠️ [MAIN] Correcció ' + targetY + ': cap escaneig propi (l\'últim estat és ' +
+                                stA + ') → es crea igualment', 'WARN');
+                        } else if (plan.reason === 'sense-material') {
+                            u.log('🔄 [MAIN] Correcció ' + targetY + ': ' + stA +
+                                ' → es crea igualment (AHIR demanat amb Ctrl)', 'WARN');
+                        }
+                        u.log('🔄 [MAIN] Correcció ' + targetY + ' → ' + plan.action +
+                            (dataA && dataA.name ? ' · ' + dataA.name : ''), 'INFO');
+                        // La data de treball del flux és la DEMANADA, també si
+                        // l'escaneig no ha pogut confirmar-la (dataA d'un altre dia).
+                        St.dateDir = targetY;
+                        await FASTPASS_UI.Workflows.MainButton.runMainAction(plan.action, dataA);
                     }
                 } finally {
                     St.workTarget = 'today';
                     // Repintat de HOY (si `runMainAction` ha petat, el panell no es
                     // queda ensenyant l'estat d'AHIR ni un botó desactivat).
-                    try { await this.checkContext({ force: true }); } catch (eRep) { }
+                    // (2026-10-22 · #181) `fresh:true`: el poll pot haver arrancat un
+                    // escaneig mentres es creava el projecte, i eixe escaneig és
+                    // d'AHIR (`workTarget` encara era 'yesterday'); enganxar-s'hi
+                    // deixaria el botó en AHIR fins al següent cicle.
+                    try { await this.checkContext({ force: true, fresh: true }); } catch (eRep) { }
                 }
             } catch (e) {
                 u.handleError(e, 'onMainClick');
             }
+        },
+
+        /**
+         * _awaitTargetScan: (2026-10-22 · #181) Escaneig PROPI de la data demanada.
+         *
+         * PER QUÈ EXISTEIX: `checkContext` és single-flight. En mode correcció el
+         * poll de 15 s pot tindre un escaneig en curs fet amb HOY; eixe resultat
+         * (i el `_lastButtonData` que deixa) és d'una ALTRA data. Ací:
+         *   · es demana `fresh:true` → no ens hi enganxem, s'espera el torn;
+         *   · es comprova que l'estat lligut siga de `targetDate`;
+         *   · si no ho és, es reintenta (el poll pot haver tornat a arrancar).
+         * @param {string} targetDate - YYYY_MM_DD demanada (AHIR)
+         * @param {number} [attempts=3] - intents màxims
+         * @returns {Promise<{ok:boolean, state:(string|null), data:(Object|null), attempts:number}>}
+         *          `ok:false` = no s'ha pogut obtindre cap escaneig d'eixa data.
+         */
+        _awaitTargetScan: async function (targetDate, attempts) {
+            const max = Math.max(1, parseInt(attempts, 10) || 3);
+            let state = null;
+            let data = null;
+            for (let i = 1; i <= max; i++) {
+                await this.checkContext({ force: true, fresh: true });
+                state = this._lastConclusion;
+                data = this._lastButtonData;
+                if (data && data.dateDir === targetDate) {
+                    return { ok: true, state: state, data: data, attempts: i };
+                }
+                getUtils().log('🔁 [MAIN] Escaneig d\'una ALTRA data (' + ((data && data.dateDir) || '?') +
+                    ') en comptes de ' + targetDate + ' → reintent ' + i + '/' + max, 'WARN');
+            }
+            return { ok: false, state: state, data: data, attempts: max };
+        },
+
+        /**
+         * _correctionAction: (2026-10-22 · #181) Què fa el Ctrl+clic (mode correcció)
+         * amb l'estat que ha deixat l'escaneig. Funció PURA (sense DOM ni NAS) per
+         * poder provar-la aïllada.
+         *
+         * Regles:
+         *   · Estat aprofitable (NEW/UPDATE/GO/LOAD) → eixa acció, com sempre.
+         *   · MASSA/ESPERA (el gate d'arrencada no veu material del dia) → NEW:
+         *     el gate existix per a «no crear abans de l'emissió d'AVUI»; en mode
+         *     correcció l'usuari demana explícitament un dia que ja s'ha emés.
+         *   · Sense escaneig de la data demanada → NEW igualment: treballar amb
+         *     l'estat d'un altre dia seria pitjor (obriria/actualitzaria el d'avui).
+         *   · Qualsevol altre estat (DISABLED/WAITING) → cap acció.
+         * @param {string|null} state - `_lastConclusion`
+         * @param {boolean} targetOk - l'estat és de la data demanada?
+         * @returns {{action:(string|null), reason:string}}
+         */
+        _correctionAction: function (state, targetOk) {
+            if (!targetOk) return { action: 'NEW', reason: 'sense-escaneig-del-dia' };
+            if (state === 'UPDATE' || state === 'GO' || state === 'LOAD') {
+                return { action: state, reason: 'material' };
+            }
+            if (state === 'NEW') return { action: 'NEW', reason: 'material' };
+            if (state === 'MASSA' || state === 'ESPERANT') {
+                return { action: 'NEW', reason: 'sense-material' };
+            }
+            return { action: null, reason: 'estat-' + state };
         },
 
 
@@ -279,14 +373,32 @@
          */
         async checkContext(_opts) {
             if (!getUtils().isJsxReady) return;
+            const _fresh = !!(_opts && _opts.fresh);
             if (_ccInFlight) {
-                // Només un recàlcul EXPLÍCIT (force) justifica repetir l'escaneig
-                // en acabar; una crida passiva (poll) ja queda servida per
-                // l'execució en curs, que llegeix l'estat fresc igualment.
-                if (_opts && _opts.force) _ccAgain = true;
-                getUtils().log('⏳ [checkContext] Ja hi ha un escaneig en curs: la crida s\'hi enganxa ' +
-                    '(no se\'n llança cap altre)', 'DEBUG');
-                return await _ccInFlight;
+                if (!_fresh) {
+                    // Només un recàlcul EXPLÍCIT (force) justifica repetir l'escaneig
+                    // en acabar; una crida passiva (poll) ja queda servida per l'execució
+                    // en curs, que llegeix l'estat fresc igualment.
+                    if (_opts && _opts.force) _ccAgain = true;
+                    getUtils().log('⏳ [checkContext] Ja hi ha un escaneig en curs: la crida s\'hi enganxa ' +
+                        '(no se\'n llança cap altre)', 'DEBUG');
+                    return await _ccInFlight;
+                }
+                // ── (2026-10-22 · #181) CARRERA DE DATES: «fresh» ────────────────
+                // En mode correcció (Ctrl+clic a MAIN) la data de treball és AHIR,
+                // però el poll de 15 s pot tindre un escaneig en curs fet amb HOY.
+                // Enganxar-s'hi retornava l'estat del dia equivocat (MASSA d'avui) i
+                // el clic acabava en «AHIR sense material» sense fer res. Amb `fresh`
+                // s'espera el torn (sense cancel·lar res: el resultat de l'escaneig en
+                // curs és vàlid per al poll) i se'n llança un de PROPI, que ja llegirà
+                // `workTarget='yesterday'`.
+                let _waits = 0;
+                while (_ccInFlight && _waits < 8) {
+                    try { await _ccInFlight; } catch (eW) { }
+                    _waits++;
+                }
+                getUtils().log('🔁 [checkContext] Escaneig PROPI (fresh) després d\'esperar ' + _waits +
+                    ' cicle(s): hi havia un escaneig en curs amb una altra data de treball', 'DEBUG');
             }
             _ccInFlight = this._runCheckContext(_opts);
             try {
@@ -328,6 +440,12 @@
                 // Només s'usa getFormattedDate() com a fallback si State.dateDir no existeix.
                 // BUG #1 FIX (2026-06-09): Resetear dateDir si el programa ha canviat.
                 // Evita contaminació creuada entre programes (ex: TNCOMARQUES → TN_VESPRE).
+                // (2026-10-22 · #181) Però el MODE CORRECCIÓ (Ctrl+clic) no es pot
+                // desactivar ací: canviar de programa o de bloc just abans del clic
+                // deixava `workTarget='today'` i el clic treballava amb el dia d'avui.
+                const _keepYest = !!(window.FASTPASS_UI && window.FASTPASS_UI.State &&
+                    window.FASTPASS_UI.State.workTarget === 'yesterday');
+                const _resetTarget = _keepYest ? 'yesterday' : 'today';
                 const progId = (config.mapeoProgramas[elProg.value] && config.mapeoProgramas[elProg.value].archivo) || '';
                 const lastProg = (window.FASTPASS_UI && window.FASTPASS_UI.State && window.FASTPASS_UI.State.lastProgram);
                 if (progId && lastProg && progId !== lastProg) {
@@ -335,7 +453,7 @@
                     if (window.FASTPASS_UI && window.FASTPASS_UI.State) {
                         window.FASTPASS_UI.State.dateDir = null;
                         window.FASTPASS_UI.State.projectDateDir = null;
-                        window.FASTPASS_UI.State.workTarget = 'today';
+                        window.FASTPASS_UI.State.workTarget = _resetTarget;
                     }
                 }
                 // Resetear dateDir també si canvia el bloc dins del mateix programa.
@@ -347,7 +465,7 @@
                     if (window.FASTPASS_UI && window.FASTPASS_UI.State) {
                         window.FASTPASS_UI.State.dateDir = null;
                         window.FASTPASS_UI.State.projectDateDir = null;
-                        window.FASTPASS_UI.State.workTarget = 'today';
+                        window.FASTPASS_UI.State.workTarget = _resetTarget;
                     }
                 }
                 // Guardar programa actual per a la següent comparació
@@ -393,13 +511,16 @@
                     ctx.bloque
                 );
 
-                // ── MECÀNICA D'INICI (2026-10-21 · 3 ESTATS, #177) ────────────────
+                // ── MECÀNICA D'INICI (2026-10-21 · 3 ESTATS, #177/#182) ───────────
                 // Amb el projecte del dia ja fet (o d'un altre dia obert) no canvia res:
                 // ACTUALITZAR / OBRIR. Si NO hi ha projecte del dia, el botó només pot
                 // estar en un d'estos TRES estats (per ordre de material disponible):
-                //   · CREA          → hi ha WOTTS del bloc (el bloc ja s'ha emés).
-                //   · ESPERA        → hi ha el MP4 ORIGEN però encara no els wotts.
-                //   · MASSA D'HORA  → no hi ha ni MP4 origen ni wotts (res a fer).
+                //   · CREA          → hi ha WOTTS del bloc (el bloc ja s'ha emés) o una
+                //                     ESCALETA LOCAL completa (#182: la FOTO ja és
+                //                     material suficient per crear).
+                //   · ESPERA        → hi ha el MP4 ORIGEN però encara no els wotts ni
+                //                     cap escaleta local.
+                //   · MASSA D'HORA  → no hi ha ni MP4 origen ni wotts ni escaleta local.
                 // Les dos sondes són BARATES (noms + birthtime; cap escaneig ExtendScript)
                 // i el poll de 15 s de main.js repinta el botó tot sol.
                 // (2026-10-21) Fora `getStatus` sobre …\ESCALETES: era el 96% de
@@ -447,10 +568,22 @@
                     if (mp4 && mp4.ok) semaforoData.mp4 = mp4.found ? 'blink' : 'error';
 
                     const escFound = !!(semaforoData.esc && semaforoData.esc.found);
+                    // ── (2026-10-22 · #182) ESCALETA LOCAL COMPLETA = MATERIAL SUFICIENT ──
+                    // L'usuari fa FOTO per generar l'escaleta on demand: a partir d'eixe
+                    // moment HI HA escaleta per al bloc (és el que el CREAR farà servir)
+                    // i el botó ha de poder passar a CREA sense esperar cap sonda de
+                    // wotts. Abans només desbloquejaven els wotts i, en equips sense
+                    // Node (`birthtime` no disponible), la sonda podia dir 0 per sempre:
+                    // el botó es quedava a MASSA D'HORA amb l'escaleta ja baixada.
+                    const escReady = !!(escFound && semaforoData.esc.local && semaforoData.esc.ready);
                     if (wots.found) {
                         // CREA: el bloc ja s'ha emés (hi ha wotts).
                         getUtils().log('✅ [checkContext] CREA: wotts del bloc (' + wots.count + ')' +
                             (mp4.found ? ' + MP4 origen' : '') + ' (' + (wots.via || '?') + ')', 'INFO');
+                    } else if (escReady) {
+                        // CREA: escaleta local (FOTO o còpia del NAS) del bloc complet.
+                        getUtils().log('✅ [checkContext] CREA: escaleta local (' + semaforoData.esc.filename + ')' +
+                            ' · wotts=' + (wots.ok ? wots.count : '?') + ' → es pot crear', 'INFO');
                     } else if (!wots.ok) {
                         // El NAS no ha respost: NO es bloqueja el botó per un error
                         // transitori (el CREAR farà la FOTO i, si tampoc no pot, avortarà).
@@ -870,10 +1003,12 @@
 
             switch (state) {
                 case 'NEW':
-                    // (2026-10-21 · #177) Els tres estats d'inici es diuen com les
-                    // opcions: CREA · ESPERA · MASSA D'HORA.
+                    // (2026-10-21 · #177 · 2026-10-22 · #182) Els tres estats d'inici
+                    // es diuen com les opcions: CREA · ESPERA · MASSA D'HORA. Es pot
+                    // crear amb els wotts del bloc o amb una escaleta local completa
+                    // (FOTO `escaleta_on_demand_*`), que el CREAR farà servir.
                     btn.innerText = "CREA";
-                    btn.title = "Ja hi ha wotts del bloc (s'ha emés): crea el projecte del dia. Ctrl+clic = AHIR.";
+                    btn.title = "Crea el projecte del dia: hi ha wotts del bloc o l'escaleta local (FOTO) ja baixada. Ctrl+clic = AHIR.";
                     btn.onclick = function (ev) {
                         FASTPASS_UI.Core.Context._onMainClick(ev, 'NEW', data);
                     };

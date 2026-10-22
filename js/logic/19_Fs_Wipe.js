@@ -28,6 +28,14 @@
  *     al cap d'un parell de segons) i ACABA VERIFICANT que la carpeta no hi es.
  *   - TOTES les funcions reben `fs` (Node `fs` o un doble de prova) i cap toca
  *     el disc pel seu compte: el modul es pot provar sense CEP ni Premiere.
+ *
+ * ACTUALITZACIO 2026-10-22 (#180) - SENSE NODE
+ *   En aquest equip el panell NO te Node.js (`_nodeFs()` retorna null: el
+ *   manifest no porta `--enable-nodejs`), aixi que `Utils.wipeFolder` responia
+ *   SENSE-NODE i el RESET no esborrava RES (nomes ho deia al log). S'afegeix
+ *   `cepFs()`: un adaptador amb la mateixa forma que `fs` de Node pero sobre
+ *   `cep.fs` (natiu de CEP, SEMPRE present), de manera que el motor d'esborrat
+ *   funciona igual amb Node o sense.
  * ============================================================================
  */
 (function () {
@@ -35,6 +43,12 @@
     FASTPASS_UI.Logic = FASTPASS_UI.Logic || {};
 
     var FsWipe = {
+
+        // Cache de l'adaptador cep.fs (es crea una sola vegada per sessio).
+        _cepFsCache: null,
+        // Coneixement "aquest cami es carpeta" obtingut de `cep.fs.readdir`
+        // (evita un stat per entrada): clau normalitzada -> boolean.
+        _cepDir: null,
 
         /**
          * norm: ruta absoluta normalitzada en forma Windows (barres invertides,
@@ -75,6 +89,135 @@
         canRemove: function (fs) {
             return !!(fs && typeof fs.readdirSync === 'function' &&
                 typeof fs.unlinkSync === 'function' && typeof fs.rmdirSync === 'function');
+        },
+
+        /**
+         * cepFs: adaptador `fs`-like SOBRE `cep.fs` (natiu de CEP, SENSE Node).
+         *
+         * PER QUE (2026-10-22 · #180): en aquest equip el panell no te Node.js
+         * (`_nodeFs()` -> null), i `Utils.wipeFolder` no podia esborrar res: el
+         * RESET deia "Node fs no disponible" i s'aturava. `cep.fs` sempre hi es
+         * (el log i els llistats ja el fan servir), aixi que el motor d'esborrat
+         * pot treballar-hi igual.
+         *
+         * ATENCIO (verificat a `CEPEngine_extensions.js` de CEP 11 i 12): `cep.fs`
+         * NO te `unlink` ni `rmdir`. Te:
+         *   readdir(path)            -> {err, data:[{name,isDir,...}]}
+         *   stat(path)               -> {err, data:{isDirectory,isFile,...}}
+         *   deleteFile(path)         -> {err}   (NOMES fitxers: si es carpeta,
+         *                                        torna ERR_NOT_FILE)
+         *   chmod(path, mode)        -> {err}   (best effort per a nomes lectura)
+         * Per aixo `rmdirSync` llança `CEP-NO-RMDIR` si el CEP no porta `rmdir`:
+         * les CARPETES les lleva `Utils._rmTreeProc` amb `cep.process` +
+         * PowerShell (API nativa de CEP, sense Node i sense JSX); si eixa via no
+         * esta disponible, la carpeta queda BUIDA i el RESET ho sap.
+         *
+         * Forma EXACTA que espera `removeTree`/`unlink`:
+         *   readdirSync(p) -> [noms]  (llança si no es pot llegir)
+         *   lstatSync(p)   -> { isDirectory(), isFile() }
+         *   unlinkSync(p)  -> true (llança si falla)
+         *   rmdirSync(p)   -> true (llança si falla)
+         *   existsSync(p)  -> boolean
+         *
+         * @returns {Object|null} null si `cep.fs` no te les primitives necessaries
+         */
+        cepFs: function () {
+            if (this._cepFsCache) return this._cepFsCache;
+            var CF = (window.cep && window.cep.fs) ? window.cep.fs : null;
+            // `deleteFile` es el nom REAL a CEP 11/12; `unlink` es dóna tambe per
+            // si una versio futura l'exposa.
+            var del = (CF && typeof CF.deleteFile === 'function') ? 'deleteFile'
+                : ((CF && typeof CF.unlink === 'function') ? 'unlink' : '');
+            if (!CF || typeof CF.readdir !== 'function' || !del) {
+                return null;
+            }
+            var self = this;
+
+            /** fail: error amb `code` llegible (el codi numeric de cep.fs). */
+            function fail(res, what) {
+                var n = (res && res.err != null) ? res.err : '?';
+                var e = new Error('cep.fs.' + what + ' (err=' + n + ')');
+                e.code = 'CEP-' + n;
+                return e;
+            }
+
+            var api = {
+                existsSync: function (p) {
+                    try { if (CF.stat(p).err === 0) return true; } catch (e1) { }
+                    try { if (CF.readdir(p).err === 0) return true; } catch (e2) { }
+                    return false;
+                },
+                readdirSync: function (p) {
+                    var r = CF.readdir(p);
+                    if (!r || r.err !== 0 || !r.data) throw fail(r, 'readdir');
+                    var out = [];
+                    for (var i = 0; i < r.data.length; i++) {
+                        var it = r.data[i];
+                        var nm = (typeof it === 'string') ? it : (it && it.name);
+                        if (!nm) continue;
+                        // CEP 10+ retorna objectes amb `isDir`: s'aprofita per no
+                        // fer un stat per entrada (a UNC cada stat costa).
+                        if (it && typeof it === 'object' && typeof it.isDir === 'boolean') {
+                            self._cepDir = self._cepDir || Object.create(null);
+                            self._cepDir[self.key(p + '\\' + nm)] = it.isDir;
+                        }
+                        out.push(nm);
+                    }
+                    return out;
+                },
+                lstatSync: function (p) {
+                    var k = self.key(p);
+                    var isDir;
+                    if (self._cepDir && typeof self._cepDir[k] === 'boolean') {
+                        isDir = self._cepDir[k];
+                    } else {
+                        try {
+                            var st = CF.stat(p);
+                            if (st && st.err === 0 && st.data) {
+                                if (typeof st.data.isDirectory === 'boolean') isDir = st.data.isDirectory;
+                                else if (typeof st.data.isFile === 'boolean') isDir = !st.data.isFile;
+                            }
+                        } catch (eS) { }
+                        if (isDir === undefined) {
+                            // Sonda: si es pot llistar es carpeta; si no, fitxer.
+                            var rd = null;
+                            try { rd = CF.readdir(p); } catch (eR) { rd = null; }
+                            isDir = !!(rd && rd.err === 0);
+                        }
+                        self._cepDir = self._cepDir || Object.create(null);
+                        self._cepDir[k] = isDir;
+                    }
+                    return {
+                        isDirectory: function () { return !!isDir; },
+                        isFile: function () { return !isDir; }
+                    };
+                },
+                unlinkSync: function (p) {
+                    var r = CF[del](p);
+                    if (!r || r.err !== 0) throw fail(r, del);
+                    return true;
+                },
+                chmodSync: function (p) {
+                    // Best effort: a Windows lleva l'atribut de nomes lectura.
+                    if (typeof CF.chmod !== 'function') return;
+                    var r = CF.chmod(p, 438);   // 0666
+                    if (!r || r.err !== 0) throw fail(r, 'chmod');
+                },
+                rmdirSync: function (p) {
+                    // CEP 11/12 NO exposen `rmdir`: les carpetes buides les lleva
+                    // `Utils.wipeFolder` amb `_rmTreeViaJsx` i torna a verificar.
+                    if (typeof CF.rmdir !== 'function') {
+                        var e = new Error('cep.fs sense rmdir (CEP 11/12)');
+                        e.code = 'CEP-NO-RMDIR';
+                        throw e;
+                    }
+                    var r = CF.rmdir(p);
+                    if (!r || r.err !== 0) throw fail(r, 'rmdir');
+                    return true;
+                }
+            };
+            this._cepFsCache = api;
+            return api;
         },
 
         /**
@@ -177,7 +320,7 @@
          * `Project.close()`. Un sol intent deixa restes que el flux NOU acaba
          * reaprofitant; amb 4 intents (~1,6 s) el cas normal queda net.
          *
-         * @param {Object} fs - Node fs (o doble de prova)
+         * @param {Object} fs - Node fs, l'adaptador `cepFs()` o un doble de prova
          * @param {string} path - carpeta (o fitxer) a esborrar
          * @param {Object} [opts] - {maxAttempts=4, waitMs=400, delay=fn(ms)->Promise}
          * @returns {Promise<Object>} informe:
@@ -195,6 +338,9 @@
             };
             if (!rep.path) { rep.reason = 'RUTA-BUIDA'; return rep; }
             if (!this.canRemove(fs)) { rep.reason = 'SENSE-NODE'; return rep; }
+            // Coneixement fresc d'aquest esborrat (l'adaptador cep.fs hi desa si
+            // cada entrada es carpeta o fitxer).
+            this._cepDir = Object.create(null);
             if (!this.exists(fs, rep.path)) { rep.ok = true; rep.reason = 'JA-NO-EXISTEIX'; return rep; }
             for (var a = 1; a <= maxAttempts; a++) {
                 rep.attempts = a;
@@ -210,6 +356,16 @@
                     break;
                 }
                 rep.reason = 'RESTES';
+                // (2026-10-22 · #180) `cep.fs` de CEP 11/12 no te `rmdir`: si l'unic
+                // que ha fallat son CARPETES (`CEP-NO-RMDIR`) reintentar no canvia
+                // res. Les lleva `Utils._rmTreeProc` (`cep.process` + PowerShell,
+                // JS pur) ABANS d'arribar aci; si tampoc pot, queden buides i el
+                // RESET ho sap (mai es diu ok sense comprovar).
+                var nomesDirs = acc.failed.length > 0;
+                for (var f = 0; f < acc.failed.length; f++) {
+                    if (acc.failed[f].code !== 'CEP-NO-RMDIR') { nomesDirs = false; break; }
+                }
+                if (nomesDirs) { break; }
                 if (a < maxAttempts && wait) { await wait(waitMs); }
             }
             // Verificacio FINAL (independent dels reintents): la carpeta nomes

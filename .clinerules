@@ -1,0 +1,46 @@
+# FAST >>> PASS — regles permanents de l'agent
+
+> S'injecten a **cada tasca nova**. No cal repetir-les al xat.
+> Detall: `README.md` §4 i §7 · `docs/guides/DEVELOPMENT.md` · `docs/HANDOFF_2026-10-22.md` §0.
+
+## 1 · Validació: UNA ordre, UNA línia
+
+- Valida SEMPRE amb `bin/check_all.ps1`. No llances les 4 proves per separat.
+- **Selectiva** (no passar-ho tot cada volta):
+  `docs/` → res · `js/**` → `-Only js,smoke` · `setup.html` / `setup.css` /
+  `scripts/pick_folder.ps1` → `-Only setup` · fitxers nous o esborrats → `-Only dead` ·
+  `jsx/**` → permís previ + `-Only js,smoke`.
+- Redirigeix a `%TEMP%` i llig només `ALL GREEN` / `FAIL` / `exit=`.
+  El detall ja és a `%TEMP%\fp_check_all\<control>.txt`.
+- Verd esperat: `ALL GREEN | setup 29/29 | js 61/61 | smoke 369/369 | dead 0 | jsx intacte`.
+
+## 2 · ⛔ EXTENDSCRIPT INTOCABLE (`jsx/main.jsx`, `jsx/modules/*.jsx`)
+
+- **Mai** editar un `.jsx` sense **permís explícit** de l'usuari. Ni «de passada», ni per
+  arreglar una cosa que semble petita.
+- Només si és **absolutament necessari** i no es pot compondre amb àtoms JS existents.
+- Canvi **atòmic**: una funció, un motiu. Mai refactor ni retoc cosmètic.
+- Després d'un canvi autoritzat i validat: `bin\check_all.ps1 -AcceptJsx` + entrada a
+  `docs/CHANGELOG.md` i `docs/BUGS_FIXED.md`.
+- Si `check_all` diu **`jsx MODIFICAT (n)`**: atura't i pregunta. Mai re-sellar sense validar.
+
+## 3 · Cost de context
+
+- Llig per **rangs de línies** o amb `Select-String -Context`; mai fitxers sencers si no cal.
+  `docs/BUGS_FIXED.md` són 234 KB (~60k tokens) i `docs/CHANGELOG.md` 79 KB: busca-hi, no els llisques.
+- Un objectiu per torn; agrupa lectures i comandaments independents **en paral·lel**.
+- Edicions quirúrgiques amb `old_text` únic i curt; no reescriguis fitxers sencers.
+- Resposta final curta: què s'ha canviat, com s'ha validat (la línia verda) i què queda pendent.
+
+## 4 · Convencions
+
+- Codi, comentaris i documentació del repo: **català**. Amb l'usuari: **espanyol**.
+- UTF-8 **sense BOM**. No «normalitzar» mai un `.jsx`.
+- Capa JS a `js/**` (compatible amb `check_js_v8.ps1`); DOM de Premiere a `jsx/**`.
+- Bug nou → `docs/BUGS_FIXED.md` amb número; canvi rellevant → `docs/CHANGELOG.md` (data + estat).
+
+## 5 · Tancar tasca
+
+- `check_all.ps1` en verd (o l'`-Only` que corresponga) abans de dir «fet».
+- Actualitza `docs/HANDOFF_2026-10-22.md` (estat + pendents) si la feina continua en una altra sessió;
+  el missatge inicial per a eixa sessió viu a `docs/PROMPT_CONTINUACIO.md`.

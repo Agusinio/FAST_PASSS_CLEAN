@@ -1181,51 +1181,118 @@
         },
 
         /**
-         * close: Tanca el projecte i elimina el lock.
+         * close: Tanca el projecte obert a Premiere (i el seu lock).
+         *
+         * (2026-10-22 · #180) ABANS: retornava `undefined` i s'empassava tots els
+         * errors (el `catch` només escrivia al log), i esborrava el `.lock` amb el
+         * projecte ENCARA OBERT. El RESET no podia saber si el projecte s'havia
+         * tancat de debò: intentava esborrar una carpeta bloquejada i s'aturava
+         * («Esborrat INCOMPLET») sense dir per què.
+         *
+         * ARA: retorna un informe i VERIFICA llegint `FASTPASS.Project.path()`:
+         * si el camí continua sent el mateix, el tancament NO s'ha fet.
+         * @param {Object} [opts] - {attempts=2, waitMs=350, refreshContext=true}
+         * @returns {Promise<{ok:boolean, path:string, closed:boolean, error:(string|null)}>}
          */
-        close: async function () {
+        close: async function (opts) {
+            var o = opts || {};
+            var attempts = Math.max(1, parseInt(o.attempts, 10) || 2);
+            var waitMs = (o.waitMs != null) ? Number(o.waitMs) : 350;
+            var refreshContext = (o.refreshContext !== false);
+            var res = { ok: false, path: '', closed: false, error: null };
             try {
-                utils.log("🔒 Tancant projecte i eliminant lock...", "INFO");
-                // 1. Obtener ruta del proyecto activo
-                const projectPath = await callJSX("FASTPASS.Project.path()");
-                if (!projectPath) {
-                    utils.log("⚠️ No hi ha projecte obert.", "WARN");
-                    return;
+                utils.log("🔒 Tancant projecte...", "INFO");
+                // 1. Ruta del projecte obert
+                var projectPath = await callJSX("FASTPASS.Project.path()");
+                if (!projectPath || projectPath === '[]' || String(projectPath).indexOf('ERR:') === 0) {
+                    utils.log("ℹ️ No hi ha cap projecte obert: res a tancar.", "INFO");
+                    res.ok = true;
+                    return res;
                 }
-                utils.log(`🔍 Ruta del projecte: ${projectPath}`, "INFO");
-                
-                // 2. Borrar archivo .lock si existe
-                const lockPath = projectPath + ".lock";
-                const safeLockPath = lockPath.replace(/\\/g, "/").replace(/'/g, "\\'");
-                const deleteScript = `IO.remove('${safeLockPath}')`;
-                utils.log(`🗑️ Eliminant lock: ${deleteScript}`, "INFO");
-                const deleteResult = await callJSX(deleteScript);
-                if (deleteResult !== "OK") {
-                    utils.log("⚠️ No s'ha pogut eliminar el lock (potser no existeix). Resultat: " + deleteResult, "INFO");
-                } else {
-                    utils.log("✅ Lock eliminat.", "INFO");
+                res.path = String(projectPath);
+                utils.log("🔍 Ruta del projecte: " + res.path, "INFO");
+
+                // 2. Tancar + VERIFICAR (Premiere pot trigar un instant a deixar
+                //    el projecte; `path()` ha de deixar de retornar-lo).
+                var closeResult = '';
+                for (var i = 1; i <= attempts; i++) {
+                    closeResult = await callJSX("FASTPASS.Project.close()");
+                    utils.log("🔍 Resultat de tancament (" + i + '/' + attempts + "): " + closeResult, "INFO");
+                    var after = await callJSX("FASTPASS.Project.path()");
+                    if (!after || after === '[]' || !this._samePath(after, res.path)) {
+                        res.closed = true;
+                        break;
+                    }
+                    if (i < attempts) { await utils.delay(waitMs); }
                 }
-                
-                // 3. Guardar y cerrar proyecto via JSX
-                const closeResult = await callJSX("FASTPASS.Project.close()");
-                utils.log(`🔍 Resultat de tancament: ${closeResult}`, "INFO");
-                
-                if (closeResult !== "OK") {
-                    throw new Error("Error al tancar el projecte: " + closeResult);
+                if (!res.closed) {
+                    res.error = 'el projecte continua obert (' + closeResult + ')';
+                    utils.log("❌ No s'ha pogut tancar el projecte: " + res.error, "ERROR");
+                    return res;
                 }
-                
-                utils.log("✅ Projecte tancat correctament.", "INFO");
-                // Limpiar último proyecto abierto
+
+                // 3. Lock: NOMÉS després de tancar. Abans s'esborrava amb el
+                //    projecte obert i Premiere el tornava a crear tot seguit.
+                await this._removeLock(res.path);
+
+                res.ok = true;
+                utils.log("✅ Projecte tancat i verificat.", "INFO");
+                // Netejar últim projecte obert
                 if (window.FASTPASS_UI && window.FASTPASS_UI.State) {
                     window.FASTPASS_UI.State.lastOpenedProjectName = "";
                 }
-                // 4. Actualizar contexto
-                if (FASTPASS_UI.Core && FASTPASS_UI.Core.Context) {
-                    await FASTPASS_UI.Core.Context.checkContext();
+                // 4. Actualitzar context (pot trigar: no ha de fer fallar el tancament).
+                //    El RESET ho desactiva (`refreshContext:false`): tot seguit esborra
+                //    la carpeta i crea el projecte nou, i un checkContext complet
+                //    (lectures del NAS) just ací només afig espera.
+                if (refreshContext) {
+                    try {
+                        if (FASTPASS_UI.Core && FASTPASS_UI.Core.Context &&
+                            typeof FASTPASS_UI.Core.Context.checkContext === 'function') {
+                            await FASTPASS_UI.Core.Context.checkContext();
+                        }
+                    } catch (eCtx) {
+                        utils.log("⚠️ Context no actualitzat després de tancar: " + eCtx.message, "WARN");
+                    }
                 }
+                return res;
             } catch (e) {
-                utils.log("💥 Error en tancar projecte: " + e.message, "ERROR");
+                res.error = (e && e.message) ? e.message : String(e);
+                utils.log("💥 Error en tancar projecte: " + res.error, "ERROR");
+                return res;
             }
+        },
+
+        /**
+         * _samePath: compara dos camins de Windows (barres, majúscules i barra final).
+         * @param {string} a
+         * @param {string} b
+         * @returns {boolean}
+         */
+        _samePath: function (a, b) {
+            var mod = (window.FASTPASS_UI && window.FASTPASS_UI.Logic && window.FASTPASS_UI.Logic.FsWipe);
+            if (mod && typeof mod.key === 'function') return mod.key(a) === mod.key(b);
+            var na = String(a == null ? '' : a).replace(/\//g, '\\').replace(/\\+$/, '').toLowerCase();
+            var nb = String(b == null ? '' : b).replace(/\//g, '\\').replace(/\\+$/, '').toLowerCase();
+            return !!na && na === nb;
+        },
+
+        /**
+         * _removeLock: esborra el `<projecte>.prproj.lock` si encara hi és.
+         * S'ha de cridar SEMPRE després de tancar el projecte.
+         * @param {string} projectPath
+         */
+        _removeLock: async function (projectPath) {
+            try {
+                var lockPath = String(projectPath) + ".lock";
+                var safe = lockPath.replace(/\\/g, "/").replace(/'/g, "\\'");
+                var del = await callJSX("IO.remove('" + safe + "')");
+                if (del === "OK") {
+                    utils.log("🧹 Lock eliminat: " + lockPath, "DEBUG");
+                } else {
+                    utils.log("ℹ️ Lock no eliminat (" + del + "): segurament ja no hi era", "DEBUG");
+                }
+            } catch (eL) { }
         }
     };
 

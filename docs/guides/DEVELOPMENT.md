@@ -61,6 +61,47 @@ git merge fix/047-descripcio-del-bug
 
 ---
 
+## 🎯 PROTOCOL DE VALIDACIÓ (NORMA · 2026-10-22)
+
+**Una ordre, una línia.** `bin/check_all.ps1` és l'única porta d'entrada de la validació:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File ".\bin\check_all.ps1"
+# ALL GREEN | setup 29/29 | js 61/61 | smoke 369/369 | dead 0 | jsx intacte     (exit 0)
+```
+
+- El detall queda a `%TEMP%\fp_check_all\<control>.txt`; per consola només ixen els `FAIL`
+  (màxim 8 per control). **No cal llegir la sortida sencera de cada prova.**
+- **Validació selectiva** — no passar-ho tot cada volta:
+
+| Toc… | Opció |
+|---|---|
+| `docs/**` o comentaris | (res; `-Only dead` si s'afigen/esborren fitxers) |
+| `js/**` | `-Only js,smoke` |
+| `setup.html`, `setup.css`, `scripts\pick_folder.ps1` | `-Only setup` |
+| `bin/**` | `-Only dead` + el control afectat |
+
+Cada control també es pot llançar sol (`check_js_v8.ps1`, `check_dead.ps1 -ListAll`,
+`fp_probe_setup_ui.ps1 -FailOnly`), però **`check_all` és el que es documenta i s'usa**.
+
+### ⛔ EXTENDSCRIPT INTOCABLE (`jsx/`)
+
+`jsx\main.jsx` i `jsx\modules\*.jsx` són el *múscul*: el DOM de Premiere. Moltes funcions JS
+depenen del seu **contracte exacte** i un canvi "de passada" trenca funcionalitats senceres.
+
+1. **Permís exprés abans de tocar-hi.** No s'edita cap `.jsx` sense autorització explícita.
+2. **Només si és absolutament necessari.** Si es pot compondre amb àtoms **existents** des de JS,
+   es fa en JS.
+3. **Atòmic.** Una funció, un motiu, un canvi; mai refactors ni retocs cosmètics.
+4. **Traçabilitat.** `check_all.ps1` compara el SHA256 de cada `.jsx` amb `bin\jsx_baseline.json`:
+   si canvia sense re-sellar, la línia ix **`jsx MODIFICAT (n)`** i el procés acaba en **exit 1**.
+   Després d'un canvi autoritzat i validat: `.\bin\check_all.ps1 -AcceptJsx`.
+
+Detall: `README.md` §4 (regla 3) i `docs\HANDOFF_2026-10-22.md` §0.
+
+---
+
+
 ## ⏱️ DIAGNÒSTIC D'ARRENCADA LENTA (2026-09-29)
 
 La càrrega inicial del panell (`Context.init` → `checkContext`) pot trigar molt. Per

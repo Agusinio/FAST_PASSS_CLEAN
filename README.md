@@ -79,8 +79,14 @@ Regles d'or del projecte:
 
 1. **JavaScript = cervell** (CEP/Chromium: `window.cep.fs`, strings, validació de rutes UNC).
 2. **ExtendScript = múscul** (només DOM de Premiere; funcions atòmiques via `callJSX`).
-3. **La capa JSX està tancada**: per afegir funcionalitat, compondre crides JSX **existents**
-   des de JavaScript; no crear mètodes JSX nous (tret d'una interacció realment nova amb el DOM).
+3. **La capa JSX està TANCADA i és INTOCABLE** ⛔ — per afegir funcionalitat, compondre crides JSX
+   **existents** des de JavaScript; no crear mètodes JSX nous (tret d'una interacció realment nova
+   amb el DOM). `jsx/main.jsx` i `jsx/modules/*.jsx` són el *múscul* de Premiere i el seu contracte
+   el comparteixen moltes funcions JS, així que **abans de canviar-hi res cal permís exprés** i
+   només si és **absolutament necessari**; el canvi ha de ser **atòmic** (una funció, un motiu) i
+   mai "aprofitant que hi sóc" ni un refactor. `bin/check_all.ps1` guarda un baseline SHA256 a
+   `bin/jsx_baseline.json` i crida **`jsx MODIFICAT`** si un `.jsx` canvia de bytes; després d'un
+   canvi autoritzat i validat es re-sella amb `-AcceptJsx`.
 4. **Rutes UNC**: crear l'arbre de directoris amb `getUtils().ensureFolders(...)` **abans** de
    `saveAs`/`import` (Premiere és fràgil amb xarxa; JS no).
 5. **Sanititzar** els textos dinàmics amb `getUtils().sanitizeName()` abans de passar-los a JSX.
@@ -120,13 +126,38 @@ Detall: [`docs/guides/ARCHITECTURE_MAP.md`](docs/guides/ARCHITECTURE_MAP.md) i
 
 ## 7. Validar el codi abans de tocar res
 
+**Norma (2026-10-22) — la validació és d'UNA línia.** `bin/check_all.ps1` executa tots els
+controls en un procés fill, deixa el detall a `%TEMP%\fp_check_all\` i per consola només trau el
+resum (més els `FAIL`, si n'hi ha). No cal llançar quatre ordres ni llegir 400 línies:
+
 ```powershell
-# Sintaxi REAL de tots els .js/.jsx amb el motor V8 del navegador (Chromium)
-powershell -NoProfile -ExecutionPolicy Bypass -File ".\bin\check_js_v8.ps1"
-# exit 0 = tot OK · 1 = hi ha FAIL · 2 = sense navegador
+powershell -NoProfile -ExecutionPolicy Bypass -File ".\bin\check_all.ps1"
+# ALL GREEN | setup 29/29 | js 61/61 | smoke 369/369 | dead 0 | jsx intacte     (exit 0)
 ```
 
-Resultat esperat en aquest paquet: **TOTAL 57 | OK 57 | FAIL 0**.
+| Control | Script | Què comprova |
+|---|---|---|
+| `setup` | `bin\smoke\fp_probe_setup_ui.ps1` | Finestra de config: `<script src>` existents, taula de programes, DOM real (Edge headless) i diàleg modern de carpetes |
+| `js` | `bin\check_js_v8.ps1` | Sintaxi **real** de tots els `.js`/`.jsx` amb V8 (`new Function`) |
+| `smoke` | `bin\smoke\fp_smoke_build.ps1` | Harness del manifest (AnalysisCenter, SessionManifest, lògica, workflows) |
+| `dead` | `bin\check_dead.ps1` | Codi mort a `js/` i `jsx/` (fitxers sense carregador) |
+| `jsx` | (intern) | SHA256 de `jsx/**/*.jsx` contra `bin/jsx_baseline.json` — **norma ExtendScript** |
+
+**Què cal passar segons què es toca** (estalvia temps i soroll):
+
+| Toc… | Valida |
+|---|---|
+| Només `docs/**` o comentaris | res (o `-Only dead` si s'han afegit/esborrat fitxers) |
+| `js/**` | `-Only js,smoke` |
+| `setup.html`, `setup.css`, `scripts\pick_folder.ps1` | `-Only setup` |
+| `bin/**` (scripts de suport) | `-Only dead` + el control afectat |
+| `jsx/**` | ⛔ **permís previ obligatori** (regla 3 de §4); després `-Only js,smoke` |
+
+Opcions: `-Only setup,js` · `-Full` (detall per consola) · `-AcceptJsx` (re-sella el baseline
+després d'un canvi autoritzat). El detall complet queda sempre a `%TEMP%\fp_check_all\<control>.txt`.
+
+Cada control també es pot executar sol: `check_js_v8.ps1` (`-ShowOk`), `check_dead.ps1` (`-ListAll`)
+i `fp_probe_setup_ui.ps1` (`-FailOnly`, només els `FAIL` + el `TOTAL`).
 
 ---
 

@@ -536,27 +536,89 @@
         },
 
         /**
-         * _emptyProgramTC: TC on el PROGRAMA és buit (cap clip a CAP pista de vídeo).
+         * _freezeZone: Zona del timeline on es pot capturar un congelat AMB ALPHA.
+         *
+         * ── PER QUÈ (2026-10-22 · BUG #183) ────────────────────────────────────────────
+         * `_capturePng` exporta el frame COMPOST del programa: per a un rètol amb
+         * transparència (TITOLET, traduccions) el TC de captura ha de caure on NO hi ha
+         * cap clip de vídeo a CAP pista, o el PNG se n'endú el vídeo de sota i perd l'alpha
+         * (l'usuari ho veu com «el congelat ha congelat el clip de V1»).
+         *
+         * L'antic `_emptyProgramTC` calculava `maxEnd + 5` i, si NO podia llegir les pistes
+         * (o `Clips.count` responia `ERR:…`, que `getTrackClips` convertix en `[]`), càlcul
+         * `maxEnd = 0` → **600 s**. Eixe 600 s és dins del bloc (el cleanFeed dura 2700 s) i
+         * té el V1 a sota → congelat amb vídeo incrustat, només «de vegades» (quan la
+         * lectura fallava). Ara:
+         *   1. Es VALIDA la zona preferida (`preferredTC`) amb una lectura real de TOTES les
+         *      pistes: si hi ha un clip que hi encalça, no s'usa.
+         *   2. Si alguna pista no s'ha pogut llegir, la zona **NO és garantible** →
+         *      `ok:false` (el cridador col·loca el rètol NOMÉS viu, mai un congelat fals).
+         *   3. `maxEnd === 0` amb totes les pistes llegides = timeline buit → 600 s és segur.
+         *
+         * @param {number} needSec - Amplada mínima que necessita la inserció temporal
+         * @param {number} [preferredTC] - TC candidat que es vol reutilitzar
+         * @returns {Promise<{ok:boolean, tc:number, via:string, maxEnd:number, nTracks:number, fallides:number[]}>}
+         */
+        _freezeZone: async function (needSec, preferredTC) {
+            const need = Math.max(0.5, Number(needSec) || 0);
+            const pref = (Number(preferredTC) > 0) ? Number(preferredTC) : 0;
+            let nTracks = 0;
+            try { nTracks = parseInt(await callJSX("Tracks.count('video')") || '0', 10) || 0; } catch (eN) { nTracks = 0; }
+            const fallides = [];
+            const clips = [];
+            for (let t = 1; t <= nTracks; t++) {
+                let n = 0;
+                try {
+                    const rawC = await callJSX(`Clips.count(${t}, 'video')`);
+                    // `getTrackClips` fa `parseInt('ERR:…')` → NaN → bucle buit → `[]`: una
+                    // pista IL·LEGIBLE semblaria buida. Ací es comprova que siga un número.
+                    const txt = String(rawC == null ? '' : rawC).trim();
+                    if (!/^\d+$/.test(txt)) { fallides.push(t); continue; }
+                    n = parseInt(txt, 10) || 0;
+                } catch (eC) { fallides.push(t); continue; }
+                if (n === 0) continue;
+                let cl = [];
+                try { cl = (await getClipsLogic().getTrackClips(t, 'video')) || []; } catch (eL) { fallides.push(t); continue; }
+                if (cl.length === 0) { fallides.push(t); continue; }
+                for (const c of cl) clips.push({ t: t, start: Number(c.start), end: Number(c.end) });
+            }
+            const solapa = (tc) => clips.some(c => isFinite(c.start) && isFinite(c.end) &&
+                tc < (c.end - 0.02) && (tc + need) > (c.start + 0.02));
+            let maxEnd = 0;
+            for (const c of clips) { if (isFinite(c.end) && c.end > maxEnd) maxEnd = c.end; }
+            // 1. Sense lectura fiable de TOTES les pistes no es pot garantir cap zona (ni tan
+            //    sols la que proposa el cridador: podria caure damunt de la pista que no s'ha
+            //    pogut llegir).
+            if (!(nTracks > 0) || fallides.length > 0) {
+                log(`   ⚠️ [_freezeZone] zona temporal NO garantible: ${nTracks > 0 ? 'pistes il·legibles ' + fallides.join(',') : 'Tracks.count() no llegible'} → el congelat amb ALPHA no es pot capturar`, 'WARN');
+                return { ok: false, tc: 0, via: 'illegible', maxEnd: maxEnd, nTracks: nTracks, fallides: fallides };
+            }
+            // 2. La zona que volia el cridador, si PROVA que està buida a totes les pistes.
+            if (pref > 0 && !solapa(pref)) {
+                log(`   🧭 [_freezeZone] zona ${pref.toFixed(2)}s VALIDADA (buida a ${nTracks} pistes de vídeo · necessita ${need.toFixed(1)}s)`);
+                return { ok: true, tc: pref, via: 'preferit', maxEnd: maxEnd, nTracks: nTracks, fallides: fallides };
+            }
+            const tc = (maxEnd > 0) ? (Math.ceil((maxEnd + 5) / REV_FRAME) * REV_FRAME) : 600;
+            if (pref > 0) {
+                log(`   ⚠️ [_freezeZone] la zona ${pref.toFixed(2)}s NO era buida (hi ha material a sota: el PNG s'enduria el vídeo) → es passa a ${tc.toFixed(2)}s`, 'WARN');
+            }
+            log(`   🧭 [_freezeZone] programa buit a ${tc.toFixed(2)}s (darrer clip ${maxEnd > 0 ? maxEnd.toFixed(2) + 's' : 'timeline buit'} · ${nTracks} pistes de vídeo · necessita ${need.toFixed(1)}s)`);
+            return { ok: true, tc: tc, via: (pref > 0 ? 'recalculat' : 'calculat'), maxEnd: maxEnd, nTracks: nTracks, fallides: fallides };
+        },
+
+        /**
+         * _emptyProgramTC: TC on el PROGRAMA és buit (compatibilitat).
          * (2026-10-05) `_v6FreeTC` només garanteix que la PISTA DESTÍ sigui lliure: a 600 s
          * el vídeo de V1 del bloc hi és, i el PNG d'un titulillo (amb transparència) se
          * l'enduria congelat a dins. Aquí es va DESPRÉS del darrer clip de totes les pistes.
+         * (2026-10-22 · BUG #183) Delega a `_freezeZone` i **retorna 0 quan la zona no és
+         * garantible** (abans tornava 600 s a cegues → PNG amb el vídeo de V1 a dins).
          * @param {number} needSec - Amplada mínima que necessita la inserció temporal
-         * @returns {Promise<number>} TC en segons
+         * @returns {Promise<number>} TC en segons, o 0 si no es pot garantir
          */
         _emptyProgramTC: async function (needSec) {
-            const need = Math.max(0.5, Number(needSec) || 0);
-            let maxEnd = 0;
-            let nTracks = 0;
-            try { nTracks = parseInt(await callJSX("Tracks.count('video')") || '0', 10) || 0; } catch (eN) { nTracks = 0; }
-            for (let t = 1; t <= nTracks; t++) {
-                try {
-                    const cl = (await getClipsLogic().getTrackClips(t, 'video')) || [];
-                    for (const c of cl) { if (isFinite(c.end) && c.end > maxEnd) maxEnd = c.end; }
-                } catch (eC) { }
-            }
-            const tc = (maxEnd > 0) ? (Math.ceil((maxEnd + 5) / REV_FRAME) * REV_FRAME) : 600;
-            log(`   🧭 [_emptyProgramTC] programa buit a ${tc.toFixed(2)}s (darrer clip ${maxEnd > 0 ? maxEnd.toFixed(2) + 's' : '?'} · ${nTracks} pistes de vídeo · necessita ${need.toFixed(1)}s)`);
-            return tc;
+            const z = await this._freezeZone(needSec);
+            return z.ok ? z.tc : 0;
         },
 
         /**
@@ -569,10 +631,12 @@
          * @param {number} placeTime - Inici del clip d'animació
          * @param {number|null} stretchEnd - Final del congelat (null = final de la seqüència)
          * @param {string} label
-         * @param {Object} [opts] - {track, animSec, tempTC, freezeSec, frameMid}: pista destí,
+         * @param {Object} [opts] - {track, animSec, tempTC, freezeSec, frameMid, alpha, zoneOk}: pista destí,
          *   durada del clip d'animació (part viva), zona temporal lliure ja calculada i durada
          *   del congelat (ho usa la CADENA TITOLET). `freezeSec` = 0 → SENSE congelat (s'estalvia
          *   tot el procés del PNG). `frameMid` = captura el frame del congelat al 60 % del clip.
+         *   `alpha` = el rètol té TRANSPARÈNCIA → la zona s'ha de verificar amb `_freezeZone`.
+         *   `zoneOk` = el cridador ja l'ha verificada (estalvia la lectura de totes les pistes).
          * @returns {Promise<{success:boolean, duration:number}>}
          */
         _freezeTemaTitol: async function (wottName, placeTime, stretchEnd, label, opts) {
@@ -586,7 +650,32 @@
             const CUT_OFFSET = (Number(o.animSec) > 0.1) ? Number(o.animSec) : 8.0;
             // (2026-10-06, 5a passada) La cadena TITOLET passa `freezeSec` explícit: si és 0 no
             // hi ha congelat i no cal fer el viatge sencer del PNG (temporal + captura + import).
-            const needFreeze = (o.freezeSec != null) ? (Number(o.freezeSec) > 0.05) : true;
+            const wantFreeze = (o.freezeSec != null) ? (Number(o.freezeSec) > 0.05) : true;
+            // ── ZONA DE CAPTURA (2026-10-22 · BUG #183) ───────────────────────────────
+            // Un rètol amb ALPHA (titullet, traducció) només pot capturar-se on el PROGRAMA
+            // és BUID: si el TC cau damunt de vídeo, el frame compost és opac i el PNG se
+            // n'endú el clip de V1 (l'usuari veu «un congelat del clip», sense el rètol).
+            // La zona que arriba del cridador es VALIDA ací (`_freezeZone`, lectura real de
+            // totes les pistes) i, si no es pot garantir, es col·loca NOMÉS el clip viu.
+            // El Tema-Títol (`alpha` fals) es captura SOBRE VÍDEO a propòsit: és opaco i un
+            // frame sense programa eixiria transparent → congelat invisible.
+            let zone;
+            if (!wantFreeze) {
+                zone = { ok: true, tc: 0, via: 'sense congelat' };
+            } else if (Number(o.tempTC) > 0) {
+                zone = (o.zoneOk === true)
+                    ? { ok: true, tc: Number(o.tempTC), via: 'verificada pel cridador' }
+                    : await this._freezeZone(Math.max(2, CUT_OFFSET + 1), Number(o.tempTC));
+            } else if (o.alpha === true) {
+                zone = await this._freezeZone(Math.max(2, CUT_OFFSET + 1));
+            } else {
+                // Tema-Títol: només cal que la PISTA DESTÍ siga lliure (grafisme opac).
+                zone = { ok: true, tc: await this._v6FreeTC(T_THEME, 12), via: 'v6' };
+            }
+            const needFreeze = wantFreeze && zone.ok;
+            if (wantFreeze && !zone.ok) {
+                log(`   ⚠️ [_freeze] «${wottName.substring(0, 40)}…» SENSE congelat: la zona del programa on capturar el PNG no es pot garantir (${zone.via}) → es col·loca només el clip viu (un congelat amb el vídeo de sota seria pitjor)`, 'WARN');
+            }
             log(`   🧊 [_freeze] wott="${wottName.substring(0, 50)}..." placeTime=${placeTime.toFixed(2)}s stretchEnd=${stretchEnd !== null ? stretchEnd.toFixed(2) : 'final'} (V${T_THEME}, anim ${CUT_OFFSET.toFixed(2)}s, congelat ${needFreeze ? ((stretchEnd !== null) ? Math.max(stretchEnd - (placeTime + CUT_OFFSET), 0).toFixed(2) : 'fins al final') : 'NO'}s)`);
             // (2026-10-01 · #129) Zona temporal LLIURE: el PNG estirat del Tema-Títol anterior
             // pot cobrir el TC clàssic (600 s) i l'insert l'esborraria.
@@ -594,7 +683,7 @@
             // `_emptyProgramTC`: TC lliure a TOTES les pistes), s'usa AQUELLA: el TITOLET és un
             // grafisme amb TRANSPARÈNCIA i amb un TC amb contingut al darrere el PNG sortiria
             // amb el vídeo incrustat (l'alfa es perd).
-            const TEMP_TC = (Number(o.tempTC) > 0) ? Number(o.tempTC) : await this._v6FreeTC(T_THEME, 12);
+            const TEMP_TC = zone.tc;
             const cutTime = placeTime + CUT_OFFSET;
             // (2026-10-08) `Clips.insert` pot FALLAR i tornar «ERR: …»/«EXC: …» (p.ex. «Bad or
             // invalid URI» amb un `%` al nom): abans es cridava a cegues i el flux continuava
@@ -667,7 +756,37 @@
             const grabOff = (o.frameMid === true && grabFrac > 0)
                 ? Math.min(tmpDur - REV_FRAME, Math.max(REV_FRAME, tmpDur * grabFrac))
                 : (tmpDur - REV_FRAME);
-            const snapTC = Math.max(TEMP_TC, TEMP_TC + grabOff);
+            let snapTC = Math.max(TEMP_TC + REV_FRAME, TEMP_TC + grabOff);
+            // ── GUARDA (2026-10-22 · BUG #183): el clip temporal HA DE COBRIR l'instant ──
+            // Si `snapTC` cau fora del clip (el `end` del DOM pot vindre amb el frame
+            // inclusiu, o el mèdia pot ser més curt que la durada estimada), QE exporta el
+            // PROGRAMA: el PNG ix amb el vídeo de V1 i sense el rètol. Es pregunta a
+            // Premiere on és el clip i, si no cobrix, s'ancora a la meitat del temporal o
+            // s'abandona el congelat (mai un PNG del programa fent-se passar per un rètol).
+            const covOk = (c) => !!(c && isFinite(Number(c.start)) && isFinite(Number(c.end)) &&
+                Math.abs(Number(c.start) - TEMP_TC) <= 0.5 && Number(c.end) > snapTC + 0.005);
+            const readCover = async (tc) => {
+                try {
+                    const raw = await callJSX(`Clips.at(${T_THEME}, ${(tc + 0.02).toFixed(4)}, 'video')`);
+                    return (raw && raw !== 'null') ? JSON.parse(raw) : null;
+                } catch (e) { return null; }
+            };
+            let cov = await readCover(snapTC);
+            if (!covOk(cov)) {
+                const mid = TEMP_TC + Math.max(REV_FRAME, Math.min(tmpDur, CUT_OFFSET) * 0.5);
+                log(`   ⚠️ [_freeze] el clip temporal NO cobrix ${snapTC.toFixed(2)}s (${cov ? 'clip ' + Number(cov.start).toFixed(2) + '→' + Number(cov.end).toFixed(2) : 'cap clip a la pista'}) → es captura a ${mid.toFixed(2)}s`, 'WARN');
+                snapTC = mid;
+                cov = await readCover(snapTC);
+            }
+            if (!covOk(cov)) {
+                log(`   ❌ [_freeze] Cap clip temporal cobrint l'instant de captura a V${T_THEME} → congelat ABANDONAT (només clip viu)`, 'ERROR');
+                try { await callJSX(`Clips.removeAt(${T_THEME}, ${TEMP_TC}, 'video')`); } catch (eRm) { }
+                const rOnly = String(await callJSX(`Clips.insert('${escapedWott}', ${T_THEME}, ${placeTime}, null, 'video')`) || '');
+                if (isErrRes(rOnly)) return { success: false, duration: 0 };
+                await getClipsLogic().endCoherent(T_THEME, placeTime, cutTime, 'video', '_freeze·anim');
+                log(`   🎞️ [_freeze] Clip animació inserit a V${T_THEME} @ ${placeTime.toFixed(2)}s→${cutTime.toFixed(2)}s (SENSE congelat)`);
+                return { success: true, duration: 0 };
+            }
             await callJSX(`Timeline.set(${snapTC})`);
             await utils.delay(400);
 
@@ -935,18 +1054,34 @@
             // El congelat cobreix TOTA la cua (`span − media`): és l'espai que s'ha de veure
             // amb el rètol, no pas buit.
             const freeze = Math.max(0, span - media);
-            let tempTC = (Number(p.tempTC) > 0) ? Number(p.tempTC) : 0;
-            if (!(tempTC > 0)) {
-                // Xarxa: sense una zona de PROGRAMA BUID, el PNG s'enduria el vídeo de sota
-                // (l'alpha es perd) → es calcula aquí mateix.
-                tempTC = await this._emptyProgramTC(media + 2);
+            // (2026-10-22 · BUG #183) ZONA VERIFICADA: el TC que arriba del cridador es
+            // VALIDA (`_freezeZone` llig totes les pistes) si no ve marcat com a verificat
+            // (`p.zoneOk`): així la traducció no repetix la lectura a cada slot. Si no es pot
+            // garantir una zona de PROGRAMA BUID, no es congela: el PNG s'enduria el vídeo de
+            // sota i taparia el programa (simptoma «el congelat ha congelat el clip de V1»).
+            const zone = (p.zoneOk === true && Number(p.tempTC) > 0)
+                ? { ok: true, tc: Number(p.tempTC), via: 'verificada' }
+                : ((Number(p.tempTC) > 0)
+                    ? await this._freezeZone(media + 2, Number(p.tempTC))
+                    : await this._freezeZone(media + 2));
+            if (!zone.ok) {
+                log(`      ⚠️ [${tag}] «${short}…» cap zona de programa verificable (${zone.via}) → cua SENSE congelat: es col·loca estirat`, "WARN");
+                const rNoFz = await insertLive();
+                if (isErrRes(rNoFz)) {
+                    log(`      ❌ [${tag}] «${short}…» clip NO inserit a V${track} @ ${start.toFixed(2)}s (${rNoFz})`, "ERROR");
+                    return { ok: false, mode: 'live', live: span, media: media, err: rNoFz };
+                }
+                return { ok: true, mode: 'live', live: span, media: media, trim: rNoFz };
             }
+            const tempTC = zone.tc;
             const fr = await this._freezeTemaTitol(name, start, end, tag, {
                 track: track,
                 animSec: media,
                 tempTC: tempTC,
                 freezeSec: freeze,
                 frameMid: true,
+                alpha: true,
+                zoneOk: true,
                 grabFrac: (Number(TR.freezeGrabFrac) > 0) ? Number(TR.freezeGrabFrac) : undefined
             });
             if (fr && fr.success) {
@@ -1533,17 +1668,29 @@
                 }
                 pl.freeze = Math.max(0, pl.span - pl.live);
             }
-            // Zona temporal LLIURE per als congelats: `_emptyProgramTC` mira els clips que hi
+            // Zona temporal LLIURE per als congelats: `_freezeZone` mira els clips que hi
             // ha ARA, però les targetes s'aniran col·locant → la zona ha de quedar DESPRÉS del
             // final de l'última. Si no, el clip temporal (overwrite) cauria damunt d'una
             // targeta ja col·locada i l'esborraria.
             // (El TITOLET és un grafisme amb TRANSPARÈNCIA: el congelat s'ha de capturar amb el
             // PROGRAMA BUID perquè el PNG conservi l'alpha i no s'endugui cap frame de vídeo.)
-            const programFree = await this._emptyProgramTC(Math.max.apply(null, durs) + 2);
+            // (2026-10-22 · BUG #183) `_freezeZone` VALIDA la zona amb una lectura real de
+            // totes les pistes i, si no la pot garantir, torna `ok:false`: llavors les targetes
+            // es col·loquen NOMÉS vives (mai un congelat amb el vídeo de V1 a dins).
+            const needZone = Math.max.apply(null, durs) + 2;
+            let zone = await this._freezeZone(needZone);
+            let tempTC = zone.ok ? zone.tc : 0;
             const tailCeil = Math.ceil((maxEndTl + 5) / REV_FRAME) * REV_FRAME;
-            const tempTC = Math.max(programFree, tailCeil);
-            if (tempTC > programFree) {
-                log(`   🧭 [${p.label}] Zona temporal dels congelats a ${tempTC.toFixed(2)}s (més enllà del final de la cadena ${maxEndTl.toFixed(2)}s)`);
+            if (zone.ok && tailCeil > zone.tc) {
+                // La cadena planificada arriba MÉS ENLLÀ de l'últim clip del timeline: cal un
+                // TC posterior, però eixa zona NO està provada (hi pot haver V1) → es revalida.
+                const z2 = await this._freezeZone(needZone, tailCeil);
+                log(`   🧭 [${p.label}] Zona temporal dels congelats a ${z2.ok ? z2.tc.toFixed(2) + 's' : '?'} (més enllà del final de la cadena ${maxEndTl.toFixed(2)}s)`);
+                zone = z2;
+                tempTC = z2.ok ? z2.tc : 0;
+            }
+            if (!zone.ok) {
+                log(`   ⚠️ [${p.label}] Cap zona de programa verificable per als congelats (${zone.via}) → els ${TAG} es col·locaran NOMÉS amb el clip viu: un congelat capturat sobre el vídeo de V1 taparia el programa`, 'WARN');
             }
             // ── Col·locació: cada targeta al SEU instant. `_chooseSlot` decideix la pista (V8
             //    Lloc/Data preferent, V7 rètols alternativa) i només mou la targeta si la pista
@@ -1567,7 +1714,7 @@
                 const freeze = Math.max(0, span - live);
                 const movedMsg = slot.moved ? ` ⟵ desplaçat (pista ocupada; ideal ${pl.start.toFixed(2)}s)` : '';
                 const fr = await this._freezeTemaTitol(pl.chy.name, slot.start, slot.start + span, p.label,
-                    { track: slot.track, animSec: live, tempTC: tempTC, freezeSec: freeze, frameMid: true });
+                    { track: slot.track, animSec: (zone.ok ? live : span), tempTC: tempTC, freezeSec: (zone.ok ? freeze : 0), frameMid: true, alpha: true, zoneOk: zone.ok });
                 if (fr && fr.success) {
                     placed++;
                     this._addPlaced(p.ctx, slot.track, slot.start, slot.start + span);
@@ -2883,6 +3030,56 @@
                         // (a V6, el PNG estirat del Tema-Títol). El final es fixa tot seguit amb
                         // `Clips.endCoherent`, que cerca el clip pel seu start.
                         await callJSX(`Clips.insert('${escapedName}', ${slot.track}, ${slot.start.toFixed(4)}, null, 'video')`);
+                        // ── (2026-10-22 · #182c) WOTT SENCER = 1 FRAME MENYS ──────────
+                        // Queixa de l'usuari: «quan es col·loca el clip SENCER (no l'acurta
+                        // cap pla de V1) ix 1 frame més llarg que el mèdia real». La causa
+                        // no és l'estimació de la durada sinó l'INSERT: el rang in/out del
+                        // project item és INCLUSIU i Premiere hi afig el frame del outPoint
+                        // → el clip del timeline queda `end − start = out − in + 1 frame`.
+                        // Per això ací NO es fa servir `durInfo.dur` (estimada per mida, i
+                        // pot errar 2-3 frames): es LLIG el clip que ha deixat Premiere i es
+                        // fixa el final 1 FRAME abans, a la graella. Es VERIFICA amb el clip
+                        // real i, si `endCoherent` encara hi torna a afegir el frame
+                        // inclusiu, es baixa una 2a volta. Mai per davall d'1 frame de clip.
+                        // Només mana el pla de l'ítem quan el rètol ve ACURTAT (eixe cas ja
+                        // el resol `placeEnd` i no s'hi toca).
+                        const vaSencer = (placeEnd === null) ||
+                            (durInfo.dur > 0 && (placeEnd - slot.start) >= durInfo.dur - 1.5 * REV_FRAME);
+                        let sencerFet = false;
+                        if (vaSencer) {
+                            const llegirClip = async (st) => {
+                                try {
+                                    const c = await getClipsLogic()._clipAtTime(slot.track, st, 'video');
+                                    return (c && isFinite(Number(c.start)) && isFinite(Number(c.end))) ? c : null;
+                                } catch (eL) { return null; }
+                            };
+                            const cIns = await llegirClip(slot.start);
+                            const dIns = cIns ? (Number(cIns.end) - Number(cIns.start)) : 0;
+                            if (dIns > 2 * REV_FRAME) {
+                                const stReal = Number(cIns.start);
+                                const dWant = Math.max(REV_FRAME, dIns - REV_FRAME);   // 1 frame menys
+                                let dFin = dIns, rCy = '';
+                                for (let pas = 0; pas < 2 && dFin > dWant + 0.5 * REV_FRAME; pas++) {
+                                    // pas 0: el final desitjat · pas 1: 1 frame més avall (si
+                                    // Premiere ha tornat a afegir el frame inclusiu)
+                                    const wantE = gridDown(stReal + dWant - pas * REV_FRAME);
+                                    if (!(wantE > stReal + 0.5 * REV_FRAME)) break;
+                                    rCy = String(await getClipsLogic().endCoherent(
+                                        slot.track, stReal, wantE, 'video', label) || '');
+                                    const cFin = await llegirClip(stReal);
+                                    if (!cFin) break;
+                                    dFin = Number(cFin.end) - stReal;
+                                }
+                                if (dFin > 0 && dFin < dIns - 0.5 * REV_FRAME) {
+                                    placeEnd = stReal + dFin;
+                                    sencerFet = true;
+                                    log(`   ✂️ [${label}] CLIP SENCER ${String(chy.name).substring(0, 34)}…: ` +
+                                        `${Math.round(dIns / REV_FRAME)} → ${Math.round(dFin / REV_FRAME)} frames ` +
+                                        `(−${Math.round((dIns - dFin) / REV_FRAME)} frame(s) sobre el mèdia; ` +
+                                        `V${slot.track} @ ${stReal.toFixed(2)}s) [${rCy.split(' ')[0] || 'n/d'}]`);
+                                }
+                            }
+                        }
                         // (2026-09-18) IMPORTANT: el JSX Clips.insert aplica l'endSec al DARRER
                         // clip de la pista, NO al que acaba d'inserir → cal fixar-lo pel clip
                         // que comença a slot.start. Sense això els wotts quedaven més llargs
@@ -2891,7 +3088,7 @@
                         // (2026-10-16 · #171) El final es fixa amb `Clips.endCoherent` (retall
                         // COHERENT: in/out del source ↔ end del timeline) perquè el rètol quede
                         // ESTIRABLE amb el ratolí; cerca el clip pel seu start.
-                        if (placeEnd !== null) {
+                        if (placeEnd !== null && !sencerFet) {
                             const rEndAt = await getClipsLogic().endCoherent(slot.track, slot.start, placeEnd, 'video', label);
                             if (String(rEndAt).indexOf('OK') === -1) {
                                 log(`   ⚠️ [${label}] retall V${slot.track} @ ${slot.start.toFixed(2)}s → ${rEndAt}`, "WARN");
@@ -4886,14 +5083,20 @@
                         const maxMedia = Math.max.apply(null, group.map(t => trMedia[t.name] || 0).concat([0]));
                         const needFz = (N > 0) && group.some(t => (trMedia[t.name] || 0) > 0.1 && (slotDur - trMedia[t.name]) >= minFz);
                         let tempTC = 0;
+                        let zoneTr = { ok: false };
                         if (needFz) {
                             // Zona temporal del final del timeline amb el PROGRAMA BUID (a TOTES
                             // les pistes de vídeo): el congelat d'un rètol amb ALPHA només el
                             // conserva si no hi ha vídeo a sota. Sempre més enllà del final del
                             // grup (els slots que col·loquem viuen dins del programa).
-                            tempTC = Math.max(await this._emptyProgramTC(maxMedia + 2),
-                                Math.ceil((refStart + clipDur + 5) / REV_FRAME) * REV_FRAME);
-                            log(`   🧊 [Traducció] TC=${tc}: mèdia més curt que el slot → la cua s'omple amb el CONGELAT del frame · zona temporal ${tempTC.toFixed(2)}s`);
+                            // (2026-10-22 · BUG #183) Es VALIDA amb `_freezeZone` i es passa
+                            // `zoneOk` als slots perquè no repetisquen la lectura.
+                            const needZ = maxMedia + 2;
+                            const candTr = Math.ceil((refStart + clipDur + 5) / REV_FRAME) * REV_FRAME;
+                            zoneTr = await this._freezeZone(needZ);
+                            if (zoneTr.ok && candTr > zoneTr.tc) zoneTr = await this._freezeZone(needZ, candTr);
+                            tempTC = zoneTr.ok ? zoneTr.tc : 0;
+                            log(`   🧊 [Traducció] TC=${tc}: mèdia més curt que el slot → la cua s'omple amb el CONGELAT del frame · zona temporal ${zoneTr.ok ? tempTC.toFixed(2) + 's' : 'NO garantible: es col·locarà estirat'}`);
                         }
                         for (let i = 0; i < N; i++) {
                             const placeTime = refStart + slotDur * i;
@@ -4902,7 +5105,7 @@
                             // congelada, en comptes d'estirar el clip més enllà del mèdia.
                             const rSlot = await this._placeTradSlot({
                                 chy: group[i], track: T_TRAD, start: placeTime, end: placeEnd,
-                                mediaDur: trMedia[group[i].name] || 0, tempTC: tempTC, label: 'Traducció'
+                                mediaDur: trMedia[group[i].name] || 0, tempTC: tempTC, zoneOk: zoneTr.ok, label: 'Traducció'
                             });
                             if (!rSlot || !rSlot.ok) {
                                 log(`      ⚠️ [${i+1}/${N}] NO col·locat (${rSlot ? rSlot.err : '?'})`, "WARN");
@@ -5336,6 +5539,7 @@
                     for (const c of group) trMedia[c.name] = await this._tradMediaDur({ name: c.name }, wottIdxRep);
                     const minFz = (cfg.traduccio && Number(cfg.traduccio.freezeMinSec) > 0) ? Number(cfg.traduccio.freezeMinSec) : 0.12;
                     let tempTCRep = 0;   // zona temporal dels congelats (es calcula al 1r que calgui)
+                    let zoneRep = { ok: false };
 
                     for (let s = 0; s < M; s++) {
                         const seqNum = s + 1;
@@ -5349,15 +5553,20 @@
                             // les pistes): el congelat d'un rètol amb ALPHA només el conserva si
                             // no hi ha vídeo a sota. Es calcula ARA perquè els veïns apartats ja
                             // són a la pista i són el material més llunyà.
-                            tempTCRep = Math.max(await this._emptyProgramTC(media + 2),
-                                Math.ceil((limit + 5) / REV_FRAME) * REV_FRAME);
-                            log(`   🧊 [Repartir] Tram ${gi+1}: mèdia (${media.toFixed(2)}s) més curt que el slot (${slotDur.toFixed(2)}s) → la cua s'omple amb el CONGELAT del frame · zona temporal ${tempTCRep.toFixed(2)}s`);
+                            // (2026-10-22 · BUG #183) VALIDADA amb `_freezeZone`; el TC candidat
+                            // (`limit + 5`) es revalida si va més enllà de la zona provada.
+                            const needZ = media + 2;
+                            const candRep = Math.ceil((limit + 5) / REV_FRAME) * REV_FRAME;
+                            zoneRep = await this._freezeZone(needZ);
+                            if (zoneRep.ok && candRep > zoneRep.tc) zoneRep = await this._freezeZone(needZ, candRep);
+                            tempTCRep = zoneRep.ok ? zoneRep.tc : 0;
+                            log(`   🧊 [Repartir] Tram ${gi+1}: mèdia (${media.toFixed(2)}s) més curt que el slot (${slotDur.toFixed(2)}s) → la cua s'omple amb el CONGELAT del frame · zona temporal ${zoneRep.ok ? tempTCRep.toFixed(2) + 's' : 'NO garantible: es col·locarà estirat'}`);
                         }
                         // (2026-10-12) `_placeTradSlot`: clip SENCER (durada del mèdia) + cua
                         // congelada, en comptes d'estirar el clip més enllà del mèdia.
                         const rSlot = await this._placeTradSlot({
                             chy: { name: chy.name }, track: T_TRAD, start: slotStart, end: slotEnd,
-                            mediaDur: media, tempTC: tempTCRep, label: 'Repartir'
+                            mediaDur: media, tempTC: tempTCRep, zoneOk: zoneRep.ok, label: 'Repartir'
                         });
                         if (!rSlot || !rSlot.ok) {
                             log(`      ⚠️ [${seqNum}/${M}] NO col·locat (${rSlot ? rSlot.err : '?'})`, "WARN");
