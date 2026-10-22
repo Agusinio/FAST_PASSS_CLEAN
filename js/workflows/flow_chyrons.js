@@ -4074,17 +4074,56 @@
          * @param {string} label - Etiqueta pel log
          * @returns {Promise<boolean>}
          */
-        _freezeTitulilloStill: async function (petit, track, startSec, endSec, label) {
+        _freezeTitulilloStill: async function (petit, track, startSec, endSec, label, zone) {
             const utils = getUtils();
             if (!petit || !petit.name || !(endSec > startSec + 0.02)) return false;
             // (2026-10-01 · #129) Zones temporals LLIURES de la pista: l'insert és un
             // overwriteClip i esborraria tot el material que cobrís (p. ex. el PNG estirat del
             // Tema-Títol gran, que ocupa el bloc sencer).
-            const TEMP_TC = await this._v6FreeTC(track, Math.max(3, (petit.dur || 1) + 1));
+            // ── (2026-10-22 · BUG #183, 2a part) A MÉS, el PROGRAMA ha de ser BUID ─────────
+            // El titulillo és un grafisme amb ALPHA i el PNG el pinta QE sobre el PROGRAMA
+            // COMPOST: `_v6FreeTC` només garantix que la PISTA destí siga lliure, però amb el
+            // TC clàssic (600 s) V1 té el clip del programa a sota → el PNG ix OPAC amb el
+            // vídeo incrustat i el rètol «desapareix» (PNG de ~1 MB en compte de ~20 KB).
+            // MESURAT al TNC V3 del 22/10 (14:37): `freeze_titulillo_1792672636408.png` =
+            // 1.077.396 B (era un frame de la presentadora!) mentre el congelat BO de la
+            // mateixa corrida pesava 21.229 B. Ara la zona es VALIDA amb `_freezeZone`
+            // (programa buit a TOTES les pistes de vídeo) i, si no es pot garantir, NO es
+            // captura: val més no tindre congelat que congelar el programa.
+            // @param {Object} [zone] - Zona ja validada pel cridador (resultat de `_freezeZone`)
+            const needZone = Math.max(3, (petit.dur || 1) + 1);
+            const z = (zone && typeof zone === 'object') ? zone : await this._freezeZone(needZone);
+            if (!z || z.ok !== true) {
+                log(`   ⚠️ [Titol·Petit] «${label}» SENSE congelat: no hi ha cap zona del programa BUIDA on capturar el PNG (${z ? z.via : 'sense zona'}) → un PNG amb el vídeo de sota congelaria el programa`, 'WARN');
+                return false;
+            }
+            const TEMP_TC = z.tc;
             try {
                 await callJSX(`Clips.insert('${utils.escape(petit.name)}', ${track}, ${TEMP_TC}, null, 'video')`);
                 await utils.delay(300);
-                const snapTC = TEMP_TC + Math.max(0.04, petit.dur - 0.05);
+                let snapTC = TEMP_TC + Math.max(0.04, petit.dur - 0.05);
+                // ── GUARDA DE COBERTURA (2026-10-22 · BUG #183) ──────────────────────────
+                // `snapTC` ix de `petit.dur` i l'`end` del DOM porta el frame INCLUSIU (#182c):
+                // si el mèdia és més curt que la durada estimada, l'instant de captura pot
+                // caure FORA del clip temporal i QE exportaria el programa (sense rètol).
+                const coversTemp = async (tc) => {
+                    try {
+                        const raw = await callJSX(`Clips.at(${track}, ${(tc + 0.02).toFixed(4)}, 'video')`);
+                        const c = (raw && raw !== 'null') ? JSON.parse(raw) : null;
+                        return !!(c && isFinite(Number(c.start)) && isFinite(Number(c.end)) &&
+                            Math.abs(Number(c.start) - TEMP_TC) <= 0.5 && Number(c.end) > tc + 0.005);
+                    } catch (eCov) { return false; }
+                };
+                if (!(await coversTemp(snapTC))) {
+                    const mid = TEMP_TC + Math.max(REV_FRAME, (Number(petit.dur) || 1) * 0.5);
+                    log(`   ⚠️ [Titol·Petit] «${label}»: el clip temporal NO cobrix ${snapTC.toFixed(2)}s → es captura a ${mid.toFixed(2)}s`, 'WARN');
+                    snapTC = mid;
+                }
+                if (!(await coversTemp(snapTC))) {
+                    log(`   ❌ [Titol·Petit] «${label}»: cap clip temporal cobrint l'instant de captura a V${track} → congelat ABANDONAT (només el titulillo temporal es retira)`, 'ERROR');
+                    try { await callJSX(`Clips.removeAt(${track}, ${TEMP_TC}, 'video')`); } catch (eRm) { }
+                    return false;
+                }
                 await callJSX(`Timeline.set(${snapTC})`);
                 await utils.delay(400);
                 const folder = await callJSX("Context.folder()");
@@ -4098,7 +4137,18 @@
                 await callJSX(`Timeline.set(${startSec})`);
                 // Treure el titulillo temporal (és a TEMP_TC)
                 try { await callJSX(`Clips.removeAt(${track}, ${TEMP_TC}, 'video')`); } catch (eDel) { }
-                if (cap.ok) {
+                // ── XARXA DE SEGURETAT pel TAMANY (2026-10-22 · BUG #183) ─────────────────
+                // Un titulillo amb ALPHA a 1080x1920 pesa ~20 KB (mesurat: 21.229 B). Un frame
+                // del PROGRAMA en pesa ~1 MB (mesurat: 1.077.396 B al TNC V3 del 22/10). Si el
+                // PNG s'ix d'eixe orde de magnitud, la zona NO era buida encara que les
+                // lectures digueren que sí → MAI es col·loca (seria congelar el programa).
+                const LIMIT_PROGRAMA = 400 * 1024;
+                const pngSospitos = cap.ok && Number(cap.bytes) > LIMIT_PROGRAMA;
+                if (pngSospitos) {
+                    log(`   ❌ [Titol·Petit] «${label}»: el PNG pesa ${(Number(cap.bytes) / 1024).toFixed(0)} KB (un titulillo amb alpha en pesa ~20) → és un frame del PROGRAMA → congelat DESCARTAT`, 'ERROR');
+                    try { window.cep.fs.deleteFile(snapPath); } catch (eDelP) { }
+                }
+                if (cap.ok && !pngSospitos) {
                     const fName = snapPath.split("\\").pop();
                     await callJSX(`IO.importFiles('${utils.escape(JSON.stringify([snapPath]))}', 'CHY')`);
                     // (2026-10-01 · #129) COL·LOCACIÓ NO DESTRUCTIVA del congelat.
@@ -4138,7 +4188,7 @@
                     log(`      ${label} → V${track} @ ${startSec.toFixed(2)}s→${endSec.toFixed(2)}s (${(endSec - startSec).toFixed(2)}s) [${mv} · ${rEstFz}]`);
                     return true;
                 }
-                log(`   ⚠️ [Titol·Petit] Snapshot del congelat fallit (${cap.res})`, 'WARN');
+                log(`   ⚠️ [Titol·Petit] Snapshot del congelat NO usable (${pngSospitos ? 'PNG del programa descartat' : cap.res})`, 'WARN');
                 return false;
             } catch (e) {
                 log(`   ⚠️ [Titol·Petit] Congelat fallit: ${e.message}`, 'WARN');

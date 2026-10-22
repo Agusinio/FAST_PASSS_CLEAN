@@ -1487,33 +1487,70 @@ seu TC candidat `refStart + clipDur + 5` / `limit + 5` si va més enllà de la p
 
 (f) `index.html`: `flow_chyrons.js?v=83 → ?v=84`.
 
-**OBERT / SEGONA CAUSA CANDIDATA (no tocada)**: `jsx/modules/9_Render.jsx::exportFrameQE`
-captura amb `qe.project.getActiveSequence()` (el **projecte ACTIU** de Premiere), mentre els
+**(g) 2a PART — el punt que encara congelava el programa: `_freezeTitulilloStill`**
+(2026-10-22, després del primer lliurament). El fix (a)-(f) cobria `_freezeTemaTitol`
+(Tema-Títol i cadena TITOLET), però **el congelat que va fallar al TNC V3 venia d'un altre
+camí**: `_fillTitulilloGaps` / la cobertura del CasB criden `_freezeTitulilloStill`, que
+inseria el titulillo a `_v6FreeTC(track, …)` → **600 s** (el primer TC lliure *de la pista
+V6*) i capturava allí. A 600 s **V1 té el clip del programa a sota** → el PNG ix OPAC amb
+el vídeo incrustat. `_v6FreeTC` només mira la pista destí: **no pot garantir res sobre el
+programa**.
+
+*Prova documental* (carpeta `Snapshots/` del bloc `02_COMARQUES_PROJECTES/2026_10_22/V3`):
+
+| Fitxer | Bytes | Què era |
+|---|---|---|
+| `freeze_titulillo_1792672636408.png` (14:37:17) | **1.077.396** | un **frame del programa** (la presentadora del 3Cat) — el bug |
+| `freeze_1792672639741.png` (14:37:19) | **21.229** | el rètol amb ALPHA, correcte (fons transparent) |
+
+Un titullet amb alpha a 1080x1920 pesa ~20 KB; un frame del programa, ~1 MB. Ara
+`_freezeTitulilloStill` fa el mateix que la resta de congelats amb alpha:
+1. **Zona validada** amb `_freezeZone(needZone)` (programa buit a TOTES les pistes de
+   vídeo); accepta una `zone` ja calculada pel cridador (6é paràmetre, opcional).
+   Sense zona garantible → `⚠️ [Titol·Petit] «…» SENSE congelat` i **no es captura**
+   (val més no tindre congelat que congelar el programa).
+2. **Guarda de COBERTURA** (`Clips.at(track, snapTC + 0,02)`): el clip temporal ha de
+   cobrir l'instant de captura; si no, s'ancora a la meitat i, si tampoc, s'abandona.
+3. **Xarxa de seguretat pel TAMANY**: si el PNG supera **400 KB** (un titullet en pesa
+   ~20), es considera un frame del PROGRAMA → `❌ … congelat DESCARTAT` i s'esborra el
+   fitxer (mai s'importa al bin CHY ni es col·loca).
+
+**SEGONA CAUSA CANDIDATA (descartada amb l'usuari)**: `jsx/modules/9_Render.jsx::exportFrameQE`
+captura amb `qe.project.getActiveSequence()` (el **projecte ACTIU** de Premiere) mentre els
 inserts, el cabezal i l'Out van a la **seqüència de treball** (`Context.getWorkSequence()` =
-`FASTPASS_WorkProject.activeSequence`, vegeu `11_Context.jsx:127`). Amb **dos projectes
-oberts** i el focus a l'altre, el PNG eixiria de l'altra seqüència (mateix símptoma). No s'ha
-tocat perquè `jsx/**` és intocable sense permís exprés; el blindatge seria una línia:
-comparar `qeSeq.name` amb el nom de la seqüència de treball i tornar `ERR_SEQ_MISMATCH`
-(en compte d'exportar un frame alié) — i, al panell, un `Context.workSeq()` per poder
-comparar-ho des de JS.
+`FASTPASS_WorkProject.activeSequence`, vegeu `11_Context.jsx:127`). Amb **dos projectes**
+oberts i el focus a l'altre, el PNG podria eixir de l'altra seqüència. L'usuari confirma
+(22/10) que té **sempre** un altre projecte obert però que l'activa era la de verticalització,
+i el PNG del bug és del **programa d'eixa mateixa seqüència** → no és la causa. Es deixa
+anotada com a blindatge opcional (comparar `qeSeq.name` amb la seqüència de treball i tornar
+`ERR_SEQ_MISMATCH`): requerix permís exprés per a `jsx/**` i no s'ha tocat.
+Per a futurs dubtes hi ha un **probe en viu** (no toca res del projecte):
+`bin\smoke\fp_probe_qe_frame.jsx` — Premiere → *File > Scripts > Run Script File*. Exporta el
+mateix TC amb timecode / ticks / objecte `Time`, amb el cabezal en dos punts, i deixa el
+veredicte a `C:\temp\probe_qe_frame\_report.txt` (diu si QE respecta el timecode o si
+exporta el frame del cabezal).
 
 **FITXERS**: `js/workflows/flow_chyrons.js`, `index.html`, `bin/smoke/fp_probe_wotts.js`,
 `docs/BUGS_FIXED.md`, `docs/CHANGELOG.md`. `jsx/**` intacte.
 
-**VALIDACIO**: `bin/check_all.ps1 -Only js,smoke` → **ALL GREEN | js 61/61 | smoke 415/415
-| jsx intacte**. Proves noves: `#WOTT/45` (`_freezeZone` existeix, `_emptyProgramTC` hi
+**VALIDACIO**: `bin/check_all.ps1 -Only js,smoke` → **ALL GREEN | js 61/61 | smoke 416/416
+| dead 0 | jsx intacte**. Proves noves: `#WOTT/45` (`_freezeZone` existeix, `_emptyProgramTC` hi
 delega i, sense llegir les pistes, **no** torna 600 → `ok:false`), `#WOTT/46` (V1 ple fins a
 2700 s: el TC preferit 600 es **rebutja** i la zona passa a 2705 s), `#WOTT/47` (un TC
 preferit que prova buit es reutilitza), `#WOTT/48` (guarda de cobertura `covOk`/`readCover`
-**abans** de `_capturePng`, abandonament net i `alpha`/`zoneOk` als dos cridadors).
-`#WOTT/24` i `#WOTT/44` actualitzats al cache-bust 84.
+**abans** de `_capturePng`, abandonament net i `alpha`/`zoneOk` als dos cridadors) i
+`#WOTT/49` (2a part: `_freezeTitulilloStill` valida la zona amb `_freezeZone` **abans** de
+capturar, ja no usa `_v6FreeTC` per al `TEMP_TC`, té la guarda de cobertura i la xarxa de
+400 KB). `#WOTT/24` i `#WOTT/44` actualitzats al cache-bust 85.
 
-**PENDENT DE VALIDAR EN VIU**: recarregar el panell (v=84), crear un TNC i col·locar
-(F3/F4). Al log s'ha de veure `🧭 [_freezeZone] zona … VALIDADA` (o
-`programa buit a …s`), **mai** `programa buit a 600.00s` amb el bloc ple; si la zona no es
-pot garantir: `⚠️ [_freezeZone] zona temporal NO garantible` + `⚠️ [_freeze] … SENSE
-congelat`. Al timeline, el congelat del titullet ha de contindre **el rètol** (i el vídeo
-de V1 s'ha de veure per davall, no congelat dins del PNG).
+**PENDENT DE VALIDAR EN VIU**: recarregar el panell (v=85), crear un TNC i col·locar
+(F3/F4, i sobretot els buits de titulillo → `_freezeTitulilloStill`). Al log s'ha de veure
+`🧭 [_freezeZone] zona … VALIDADA` (o `programa buit a …s`), **mai** `programa buit a
+600.00s` amb el bloc ple; si la zona no es pot garantir:
+`⚠️ [_freezeZone] zona temporal NO garantible` + `⚠️ [_freeze] … SENSE congelat` /
+`⚠️ [Titol·Petit] … SENSE congelat`. Al timeline, el congelat del titullet ha de contindre
+**el rètol** amb el vídeo de V1 visible per davall (no congelat dins del PNG) i el PNG de
+`Snapshots/freeze_titulillo_*.png` ha de pesar **~20 KB**, no ~1 MB.
 
 
 
@@ -1532,7 +1569,7 @@ de V1 s'ha de veure per davall, no congelat dins del PNG).
 | `#152` | implementat_pendent_test | 2026-10-13 | El JSON d'anàlisi del bloc (analisis_estructura/DD_MM_PROG_BLOC.json: ítems del bloc + ítems de CONTEXT prevVideoItem/nextVideoItem + trimBounds + fases crudo/cocinado/us [...] |
 | `#153` | pendent_implementacio | 2026-10-13 | Unificar el JSON d'anàlisi del bloc (analisis_estructura/DD_MM_PROG_BLOC.json) en una sola peça amb 4 blocs: (1) BLOC — prog/bloc/data/escaletaFile/seqName/projectFile +  [...] |
 | `#178b` | **fet_parcial** 2026-10-22 | 2026-10-22 | El botó 📁 de CONFIG (RUTES DE XARXA) obria el diàleg **ANTIC** de carpetes (arbre de discs, sense Accés ràpid ni barra d'adreces editable → no es podia enganxar una ruta UNC). 1a passada: `scripts/pick_folder.ps1` + `IFileOpenDialog`, 29/29 al probe… però **la prova en viu al panell DIST va tornar a traure el vell**; 2a volta: cascada de Node a `parent`/`top` perquè `setup.html` viu en un `<iframe>`. **3a volta**: causa arrel trobada — el manifest NO té `--enable-nodejs`, així que Node no existix dins del CEP i el transport `child_process` no arrancava mai; ara el `.ps1` es llança amb **`cep.process`** (API nativa, sense Node) amb `-OutFile`, i cada pas deixa traça a `_keyframe_trace.log`/`FASTPASS.log`. Detall a §2 |
-| `#183` | implementat_pendent_test | 2026-10-22 | CONGELAT DEL TITOLET que «congela el clip de V1»: el PNG del congelat s'exporta del PROGRAMA COMPOST i `_emptyProgramTC` podia tornar el TC clàssic **600 s** (dins del bloc, amb V1 a sota) quan la lectura de les pistes fallava (`getTrackClips` convertix `ERR:…` en `[]`); a més ningú comprovava que el clip temporal cobrira l'instant de captura. Ara `_freezeZone` valida la zona llegint TOTES les pistes (i `ok:false` si alguna és il·legible), `_freezeTemaTitol` verifica la cobertura amb `Clips.at` i, sense garanties, col·loca només el clip viu. Detall a §2 |
+| `#183` | implementat_pendent_test | 2026-10-22 | CONGELAT DEL TITOLET que «congela el clip de V1»: el PNG del congelat s'exporta del PROGRAMA COMPOST i el TC de captura podia caure damunt del bloc amb V1 a sota. (1) `_emptyProgramTC` tornava el TC clàssic **600 s** quan la lectura de les pistes fallava (`getTrackClips` convertix `ERR:…` en `[]`) i ningú comprovava que el clip temporal cobrira l'instant; (2) **2a part, la que va produir el PNG real**: `_freezeTitulilloStill` (buits de titulillo / cobertura CasB) capturava a `_v6FreeTC` → **600 s**, que només mira la pista destí — mesurat al TNC V3 del 22/10: `freeze_titulillo_*.png` de **1.077.396 B** (un frame de la presentadora) contra 21.229 B del congelat bo. Ara `_freezeZone` valida la zona llegint TOTES les pistes (i `ok:false` si alguna és il·legible), `_freezeTemaTitol` i `_freezeTitulilloStill` verifiquen la cobertura amb `Clips.at`, `_freezeTitulilloStill` descarta qualsevol PNG > **400 KB** i, sense garanties, es col·loca només el clip viu. Detall a §2 |
 
 
 

@@ -282,8 +282,8 @@
                 /if \(placeEnd !== null && \(placeEnd - slot\.start\) > REV_FRAME \+ 0\.001\) \{/.test(chySrc) &&
                 /placeEnd = gridDown\(placeEnd - REV_FRAME\);/.test(chySrc));
             var idxW = await readRepo('index.html');
-            ok('#WOTT/24 cache-bust del #177/#182c/#183 (4_Context 30, flow_chyrons 84, Scanner 17)',
-                /4_Context\.js\?v=30/.test(idxW) && /flow_chyrons\.js\?v=84/.test(idxW) &&
+            ok('#WOTT/24 cache-bust del #177/#182c/#183 (4_Context 30, flow_chyrons 85, Scanner 17)',
+                /4_Context\.js\?v=30/.test(idxW) && /flow_chyrons\.js\?v=85/.test(idxW) &&
                 /Scanner\.js\?v=17/.test(idxW),
                 (idxW.match(/4_Context\.js\?v=\d+/) || '') + ' ' +
                 (idxW.match(/flow_chyrons\.js\?v=\d+/) || '') + ' ' +
@@ -603,9 +603,9 @@
             ok('#WOTT/43 retall del clip sencer: 3 → 2 frames i un de 2 frames NO es toca (mai <1)',
                 rC === null && rD !== null && fN(rD) === 2,
                 '2f=' + (rC === null ? 'intacte' : fN(rC)) + ' 3f=' + (rD === null ? 'n/d' : fN(rD)));
-            ok('#WOTT/44 el retall del sencer deixa traça (✂️ CLIP SENCER) i cache-bust flow_chyrons 84',
+            ok('#WOTT/44 el retall del sencer deixa traça (✂️ CLIP SENCER) i cache-bust flow_chyrons 85',
                 chySrc.indexOf('✂️ [') > 0 && chySrc.indexOf('CLIP SENCER') > 0 &&
-                /flow_chyrons\.js\?v=84/.test(idxW),
+                /flow_chyrons\.js\?v=85/.test(idxW),
                 (idxW.match(/flow_chyrons\.js\?v=\d+/) || ''));
 
             // ── O. CONGELAT DEL TITOLET: MAI CAPTURAR SOBRE EL VÍDEO (2026-10-22 · #183) ──
@@ -679,6 +679,27 @@
                     /alpha: true, zoneOk: zone\.ok/.test(chySrc),
                     'guarda=' + /const covOk = \(c\)/.test(chySrc) +
                     ' alpha=' + /alpha: true/.test(chySrc));
+
+                // 49 · el TITULET amb ALPHA no pot capturar-se amb `_v6FreeTC` (només mira la
+                // pista destí). Mesurat al TNC V3 del 22/10: el PNG del titullet pesava
+                // 1.077.396 B (un frame del programa) contra 21.229 B del congelat bo.
+                var iStill = chySrc.indexOf('_freezeTitulilloStill: async function');
+                var stillSrc = (iStill >= 0) ? chySrc.slice(iStill, iStill + 8000) : '';
+                ok('#WOTT/49 _freezeTitulilloStill: zona VALIDADA amb _freezeZone (no _v6FreeTC), cobertura i descart pel TAMANY del PNG',
+                    stillSrc.length > 0 &&
+                    /const z = \(zone && typeof zone === 'object'\) \? zone : await this\._freezeZone\(needZone\)/.test(stillSrc) &&
+                    /const TEMP_TC = z\.tc/.test(stillSrc) &&
+                    stillSrc.indexOf('const TEMP_TC = await this._v6FreeTC') === -1 &&
+                    stillSrc.indexOf('_freezeZone(needZone)') < stillSrc.indexOf('_capturePng(capBase') &&
+                    /cap clip temporal cobrint l'instant de captura a V\$\{track\}/.test(stillSrc) &&
+                    /const LIMIT_PROGRAMA = 400 \* 1024/.test(stillSrc) &&
+                    /const pngSospitos = cap\.ok && Number\(cap\.bytes\) > LIMIT_PROGRAMA/.test(stillSrc) &&
+                    /if \(cap\.ok && !pngSospitos\)/.test(stillSrc) &&
+                    /flow_chyrons\.js\?v=85/.test(idxW),
+                    'still=' + stillSrc.length +
+                    ' zoneAvansCaptura=' + (stillSrc.indexOf('_freezeZone(needZone)') > -1 && stillSrc.indexOf('_freezeZone(needZone)') < stillSrc.indexOf('_capturePng(capBase')) +
+                    ' v6=' + (stillSrc.indexOf('const TEMP_TC = await this._v6FreeTC') === -1 ? 'fora' : 'DINS') +
+                    ' v85=' + /flow_chyrons\.js\?v=85/.test(idxW));
             } finally {
                 UI.Utils.callJSX = savedCJZ;
             }
