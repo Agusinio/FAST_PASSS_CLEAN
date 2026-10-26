@@ -106,8 +106,9 @@ Detall: [`docs/guides/ARCHITECTURE_MAP.md`](docs/guides/ARCHITECTURE_MAP.md) i
   ⚠️ El codi de runtime porta els **valors per defecte i actius** a `js/core/11_Configuracio.js`
   (hi ha comentaris que adverteixen que `Profile.json` no es llegeix en alguns camins): abans de
   canviar una ruta o un track, **reviseu primer `11_Configuracio.js`**.
-- **`CSXS/manifest.xml`** — ID d'extensió i port. Aquest paquet fa servir `com.fastpass.dist` i el
-  port `8908` per poder conviure amb una altra còpia instal·lada al mateix equip.
+- **`CSXS/manifest.xml`** — ID d'extensió i port. Aquest paquet fa servir `com.fastpass` i el
+  port `8908` (només per al depurador remot); si instal·leu una altra còpia al mateix equip,
+  doneu-li un altre ID i un altre port.
 
 ---
 

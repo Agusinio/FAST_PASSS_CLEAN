@@ -1,0 +1,2 @@
+# ExtendScript INTOCABLE: bytes estables tambe en clonar (amb core.autocrlf=true git el tornaria CRLF)
+*.jsx text eol=lf

@@ -53,11 +53,11 @@ La clau que fa servir cada equip depèn de la versió de Premiere/CEP instal·la
 ## 4. Activar el panell
 
 1. **Reinicieu Premiere Pro** (les extensions es llegeixen en arrancar).
-2. `Finestra` / `Window` → `Extensions` → **FAST >>> PASS (DIST)**.
+2. `Finestra` / `Window` → `Extensions` → **FAST >>> PASS**.
 
-> Aquest paquet porta l'ID `com.fastpass.dist` i el port `8908`, diferents dels de la còpia de
-> desenvolupament (`com.test.debug` / `8907`), perquè **les dues puguin conviure** al mateix equip
-> sense xocar. Si només en tindreu una, no cal tocar res.
+> Aquest paquet porta l'ID `com.fastpass` i el port `8908`. Si instal·leu una altra còpia al
+> mateix equip, doneu-li un altre ID i un altre port (`<Host Port>` al manifest) perquè **les
+> dues puguin conviure** sense xocar.
 > Si preferiu un altre nom al menú, editeu `<Menu>` a `CSXS\manifest.xml`.
 
 ---
@@ -103,7 +103,7 @@ Si als vostres equips no hi ha cap d'aquests camins, instal·leu ffmpeg i deixeu
 | Símptoma | Causa probable | Solució |
 |----------|----------------|---------|
 | El panell no apareix al menú d'extensions | `PlayerDebugMode` no activat, o Premiere no reiniciat | Repetiu §3 i reinicieu Premiere. |
-| Error «duplicate extension» o el panell es buida | Una altra còpia amb el **mateix** ID instal·lada | Deixeu IDs diferents (aquest paquet: `com.fastpass.dist`). |
+| Error «duplicate extension» o el panell es buida | Una altra còpia amb el **mateix** ID instal·lada | Deixeu IDs diferents (aquest paquet: `com.fastpass`). |
 | Un flux s'atura dient que no troba un executable | ffmpeg/ffprobe absents als camins de §5 | Instal·leu ffmpeg a `bin\ffmpeg\bin\`. |
 | No llegeix l'escaleta o no desa el projecte | Rutes NAS sense accés (VPN/xarxa corporativa) | Comproveu les rutes de `Profile.json`. |
 | El panell va amb codi vell després d'actualitzar-lo | CEP cacheja per ID d'extensió | Reinicieu Premiere; els `.js` porten *cache-bust* (`?v=NN`) a `index.html`. |
