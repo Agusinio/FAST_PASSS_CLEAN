@@ -32,6 +32,10 @@ $files = @(
     (Resolve-Harness 'fp_smoke_boot.js'),
     (Resolve-Harness 'fp_smoke_ac.js'),
     (Join-Path $repo 'js\core\escaleta_timecode.js'),
+    # (2026-10-23) DEPENDÈNCIA REAL de `escaleta_io.load`: sense este fitxer
+    # `applyDurationOverrides` no existix i `load` tornava null en silenci
+    # (el harness només ho veia quan `load` havia de llegir de disc).
+    (Join-Path $repo 'js\core\escaleta_config.js'),
     # (2026-10-21) LLISTAT D'ESCALETES: l'arrencada en fred es menjava 5,2 s en
     # aquest llistat (motor ExtendScript). El prova la prova 22-arrancada.
     (Join-Path $repo 'js\core\escaleta_io.js'),

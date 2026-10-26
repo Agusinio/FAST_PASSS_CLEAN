@@ -34,8 +34,9 @@ Un clic **sense Ctrl treballa SEMPRE amb la data d'avui** (encara que el panell 
 el projecte d'ahir obert). Per a un projecte d'ahir cal **Ctrl+clic** (mode correcció) — obligatori.
 
 Els fluxos els dirigeix el **botó principal**, que canvia d'estat segons el context
-(`NOU` → `OBRIR` → `ANAR-HI` → `ACTUALITZAR`). Detall a [`docs/guides/USER_GUIDE.md`](docs/guides/USER_GUIDE.md)
-i [`docs/guides/GUIA_BOTONERA.md`](docs/guides/GUIA_BOTONERA.md).
+(`MASSA D'HORA` → `ESPERA` → `CREA` → `ACTUAL.`; `BLOQUEJAT: <autor>` si un company té el lock).
+Detall: [`docs/guides/MASTER_MANUAL_RAPID.md`](docs/guides/MASTER_MANUAL_RAPID.md) (operativa)
+i [`docs/guides/MASTER_FUNCIONALITATS.md`](docs/guides/MASTER_FUNCIONALITATS.md) (botó a botó).
 
 ---
 
@@ -116,7 +117,7 @@ Detall: [`docs/guides/ARCHITECTURE_MAP.md`](docs/guides/ARCHITECTURE_MAP.md) i
 |-------------|----|----------------------|
 | **ffmpeg / ffprobe** | Talls de precisió, extracció de clips, conversió | `js/logic/15_FFmpeg_Logic.js` cerca, en aquest ordre: `bin\ffmpeg\bin\ffmpeg.exe` (dins de l'extensió), `C:\Program Files\Dalet\DaletPlus.409526\bin\ffmpeg.exe`, `E:\ffmpeg\bin\ffmpeg.exe`, `C:\Program Files (x86)\OpenVideoDownloader\...\ffmpeg.exe` |
 | **PowerShell 5.1** | Scripts de suport de `bin/` (OCR, escaletes, anàlisi de `.prproj`) | Crides des de JS |
-| **NAS corporatiu** | Escaletes, material, exports, portades | Rutes de `Profile.json` / `11_Configuracio.js` |
+| **NAS corporatiu** | Rètols, subtítols de 15 min, exports, portades | Rutes de `Profile.json` / `11_Configuracio.js` |
 | **Plantilla `.prproj`** | Base dels projectes nous | Ruta `rutas.plantilla` |
 
 > Els binaris d'ffmpeg **no s'inclouen** (pes). Si el vostre equip no en té cap dels candidats,
@@ -167,8 +168,8 @@ i `fp_probe_setup_ui.ps1` (`-FailOnly`, només els `FAIL` + el `TOTAL`).
 |-------------|--------|
 | Arquitectura i capes | [`docs/guides/ARCHITECTURE_MAP.md`](docs/guides/ARCHITECTURE_MAP.md) |
 | Qui fa què a cada mòdul | [`docs/guides/CODE_OWNERSHIP.md`](docs/guides/CODE_OWNERSHIP.md) |
-| Com s'usa el panell | [`docs/guides/USER_GUIDE.md`](docs/guides/USER_GUIDE.md) |
-| Què fa cada botó | [`docs/guides/GUIA_BOTONERA.md`](docs/guides/GUIA_BOTONERA.md) |
+| Com s'usa el panell | [`docs/guides/MASTER_MANUAL_RAPID.md`](docs/guides/MASTER_MANUAL_RAPID.md) (resum: [`USER_GUIDE.md`](docs/guides/USER_GUIDE.md)) |
+| Què fa cada botó | [`docs/guides/MASTER_FUNCIONALITATS.md`](docs/guides/MASTER_FUNCIONALITATS.md) (resum: [`GUIA_BOTONERA.md`](docs/guides/GUIA_BOTONERA.md)) |
 | Convencions de desenvolupament | [`docs/guides/DEVELOPMENT.md`](docs/guides/DEVELOPMENT.md) |
 | Flux de Git | [`docs/guides/GIT_WORKFLOW.md`](docs/guides/GIT_WORKFLOW.md) |
 | Bugs arreglats i pendents | [`docs/BUGS_FIXED.md`](docs/BUGS_FIXED.md) |

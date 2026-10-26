@@ -304,7 +304,7 @@
     };
 
     let _activeConfig = {
-        general: { autor: "AGUS", guarda: 22, debug: false, handles: 20, tcOffset: 0, clipInOffset: 10, zonaInOffset: 10, srtEmergencyTailSec: 120, snapWindowDeducedSec: 2.5, snapWindowFaroSec: 2.5, clipOutMarginSec: 0, clipExtraTailSec: 60, srtEditMarginLeftSec: 0.4, srtSyntheticGapTolSec: 0.2 },
+        general: { autor: "AGUS", guarda: 22, debug: false, handles: 20, tcOffset: 0, clipInOffset: 10, zonaInOffset: 10, srtEmergencyTailSec: 120, snapWindowDeducedSec: 2.5, snapWindowFaroSec: 2.5, clipOutMarginSec: 0, clipExtraTailSec: 60, srtEditMarginLeftSec: 0.4, srtSyntheticGapTolSec: 0.2, srtSyntheticMinDurSec: 0.4, srtSyntheticMaxTrimSec: 0.8, srtGapColorLabel: 7 },
         // Hora d'inici d'emissió de cada programa (font ÚNICA per a tota l'extensió:
         // guardes de temps, peticions a l'API d'escaletes i OFFSET del MP4).
         programStartHours: { TNV: 21.0, TNM: 14.5, TNC: 13.8333, MAT: 7.9167 },
@@ -318,20 +318,18 @@
         rutas: {
             plantilla: "\\\\nas1.ad-ccrtv.local\\informatius\\001 RECURSOS\\XXX Recursos AGUS - NO TOCAR!!!!\\PROJECTE 3CatInfo_NET.prproj",
             conductors: "\\\\DSMEDIA07\\portal324\\PROJECTE 9x16 PREMIERE 2\\CHYRONS CONDUCTORS\\",
-            vertical: "\\\\192.168.147.199\\public\\VERTICALITZACIO_INFORMATIUS\\",
             chyrons: "\\\\192.168.147.199\\public\\00_CHYRONS AUTOMATICS\\3CatInfo\\VERTICALITZACIO\\",
             destino_base: "\\\\DSMEDIA07\\portal324\\PROJECTE 9x16 PREMIERE 2\\AAA_PROJECTES PREMIERE VERTICALITZACIO\\PROVES\\",
             portadas: "\\\\public.ad-ccrtv.local\\Public\\VERTICALITZACIO_INFORMATIUS\\AAA_PORTADES",   // 🖼️ (2026-10-09) destí del PNG de portada publicat
             render1: "\\\\public.ad-ccrtv.local\\Public\\VERTICALITZACIO_INFORMATIUS\\EXPORTS PROVISIONALS",   // 📤 (2026-10-09) DESTÍ DIRECTE del render (EXPORTS PROVISIONALS); després es copia a render2
             render2: "\\\\svftpccma\\videos\\MP4_3CATINFO_VERTICAL\\CONVERTITS_1080-1920\\608-1080",
             // (2026-10-21 · F2) RUTES DE TREBALL configurables. Fins ara vivien al
-            // codi: `escaletes` a escaleta_config.js, `grafismos` a flow_mapa.js i
-            // `subtitulos` a srt_editor.js. Si un Profile.json desplegat no les
-            // porta, `Logic.Rutas.normalizeRutas` les DERIVA de `vertical` (i
-            // `projectes` de `destino_base`): compatibilitat cap enrere.
+            // codi: `grafismos` a flow_mapa.js i `subtitulos` a srt_editor.js.
+            // `projectes` es l'alies de `destino_base` (el garantix normalizeRutas)
+            // i `subtitulosSinteticos` es deriva de `subtitulos` si falta.
+            // (2026-10-23) FORA les rutes de la carpeta de VERTICALITZACIÓ i les de les
+            // escaletes del NAS: ja no es fan servir enlloc.
             projectes: "",            // alies de destino_base (arrel dels blocs)
-            escaletes: "",            // escaletes de digition
-            escaletes_domini: "",     // fallback pel nom de domini (xarxa)
             grafismos: "",            // ZZZ_GRAFISME (MAPA / grafismes del dia)
             subtitulos: "",           // SRT_MP4_PER_TEMPS_15MINUTS (SRT d'emergencia)
             subtitulosSinteticos: "", // F3.2: SRT sintetics (abans no existia)
@@ -573,19 +571,18 @@
                 rutas: {
                     plantilla_net:   cfg.rutas.plantilla,
                     conductors:      cfg.rutas.conductors,
-                    verticalitzacio: cfg.rutas.vertical,
                     chyrons:         cfg.rutas.chyrons,
+                    // (2026-10-23) `destino_base` es l'AUTORITATIVA (la clau que
+                    // desa la finestra de configuracio) i `projectes` es l'alies
+                    // historic amb que la llig la resta del codi. Les dos apunten
+                    // a la MATEIXA carpeta arrel (ho garantix normalizeRutas).
                     destinoBase:     cfg.rutas.destino_base,
-                    // (2026-10-21 · F2) `projectes` es l'alies nou de destino_base
-                    // (les dues claus apunten a la mateixa carpeta arrel).
                     projectes:       cfg.rutas.projectes || cfg.rutas.destino_base,
                     portadas:        cfg.rutas.portadas,
                     render1:         cfg.rutas.render1,
                     render2:         cfg.rutas.render2,
                     // (2026-10-21 · F2) Rutes que ABANS vivien al codi i ara es
                     // lligen de la configuracio: cap literal UNC a js/.
-                    escaletes:       cfg.rutas.escaletes,
-                    escaletesDomini: cfg.rutas.escaletes_domini,
                     grafismos:       cfg.rutas.grafismos,
                     subtitulos:      cfg.rutas.subtitulos,
                     subtitulosSinteticos: cfg.rutas.subtitulosSinteticos
@@ -650,9 +647,20 @@
                 srtEditMarginLeftSec: (cfg.general.srtEditMarginLeftSec != null) ? cfg.general.srtEditMarginLeftSec : 0.4,
                 // - srtSyntheticGapTolSec (F3.3, 2026-10-21): tolerancia (segons) per
                 //   decidir si una entrada SINTETICA cau dins d'un BUIT del SRT normal.
-                //   Amb 0,2 s una entrada que toque un subtitol existent no s'hi afegeix
-                //   (evita solapaments i duplicats al timeline).
                 srtSyntheticGapTolSec: (cfg.general.srtSyntheticGapTolSec != null) ? cfg.general.srtSyntheticGapTolSec : 0.2,
+                // - srtSyntheticMinDurSec (BUG #188, 2026-10-23): durada MINIMA (segons)
+                //   que ha de conservar una entrada SINT despres d'encongir-la per
+                //   encabir-la al buit. Per davall d'aixo es descarta («massa-curt»).
+                srtSyntheticMinDurSec: (cfg.general.srtSyntheticMinDurSec != null) ? cfg.general.srtSyntheticMinDurSec : 0.4,
+                // - srtSyntheticMaxTrimSec (BUG #188, 2026-10-23): retall MAXIM (segons)
+                //   que se li pot llevar a un SINT per encabir-lo al buit. Si en cal més,
+                //   es descarta («no-cab»): millor sense subtitol que tallat a la meitat.
+                srtSyntheticMaxTrimSec: (cfg.general.srtSyntheticMaxTrimSec != null) ? cfg.general.srtSyntheticMaxTrimSec : 0.8,
+                // - srtGapColorLabel (F3.6, 2026-10-23): índex de l'etiqueta de COLOR de
+                //   Premiere (0-15) amb què es pinten els clips SINT col·locats als BUITS
+                //   (pista S2). Defecte 7 = Mango (taronja): es distingix a simple vista
+                //   del SRT base, que conserva la seua etiqueta.
+                srtGapColorLabel: (cfg.general.srtGapColorLabel != null) ? cfg.general.srtGapColorLabel : 7,
                 snapWindowDeducedSec: (cfg.general.snapWindowDeducedSec != null) ? cfg.general.snapWindowDeducedSec : 2.5,
                 snapWindowFaroSec: (cfg.general.snapWindowFaroSec != null) ? cfg.general.snapWindowFaroSec : 2.5,
                 // 🎯 TITOLET (2026-10-06): paràmetres de detecció del grafisme cremat.

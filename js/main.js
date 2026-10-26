@@ -357,20 +357,11 @@ function applySliderLimits() {
         _bootMarkSafe('ruta de l\'extensió resolta');
 
         // ── ESCALETES: LLISTAT NATIU EN PARAL·LEL (2026-10-21) ────────────────
-        // A l'arrencada en fred del 21/10 (TNC V1) el 96% del temps (5,2 s de
-        // 5,4 s) era el llistat de la carpeta d'escaletes fet amb `IO.listFolder`
-        // del motor ExtendScript (~127 fitxers × stats + obertura per `eof`).
-        // Ara el llistat és NATIU (Node asíncron → no bloqueja ni el motor ni el
-        // fil de la UI) i s'engega AQUÍ, en paral·lel al bootstrap del motor:
-        // checkContext el reaprofitarà gràcies a la memòria curta + deduplicació
-        // d'`EscaletaReader._listEscaletas`.
-        try {
-            var _ER0 = window.FASTPASS_UI && window.FASTPASS_UI.EscaletaReader;
-            if (_ER0 && typeof _ER0.warmList === 'function') {
-                _ER0.warmList();
-                _bootMarkSafe('escaletes: llistat engegat en paral·lel');
-            }
-        } catch (eWarm) { }
+        // (2026-10-23) RETIRAT: el llistat de la carpeta central d'escaletes del
+        // NAS ja no existeix al flux (model local-first). L'escaleta del bloc es
+        // busca al DIRECTORI DEL PROJECTE (`findInFolder` / `lookupLocalStatus`)
+        // i, si no hi és, el flux de CREAR fa una FOTO. No hi ha res a escalfar
+        // a l'arrencada: checkContext només llista la carpeta del projecte.
 
         // 3. LLAMADA QUIRÚRGICA:
         // Usamos comillas simples para el envoltorio y dobles para el contenido
@@ -837,27 +828,39 @@ if (btnMarksC1) btnMarksC1.addEventListener('click', () => callWorkflow('Markers
         const btnSrtExport = document.getElementById('btnSrtExport');
         const btnSrtReset = document.getElementById('btnSrtReset');
         const btnSrtFill = document.getElementById('btnSrtFill');
-        const btnSrtDel = document.getElementById('btnSrtDel');
 
         if (btnSrtLoad) {
             btnSrtLoad.addEventListener('click', async function (e) {
                 const u = FASTPASS_UI.Utils;
-                // [SRT 2026-09-04] El mecanisme d'emergencia (SRTs per blocs de 15 min)
-                // passa a ser el mecanisme PRINCIPAL de CARREGAR.
-                // (F3.2, 2026-10-21) Ctrl+clic = carrega els SUBTITOLS SINTETICS del dia
-                // (i el segon Ctrl+clic torna al SRT normal). Alt+clic = forca el fallback
-                // directe (l'antic Ctrl+clic).
-                if (e && (e.ctrlKey || e.metaKey || e.altKey)) e.preventDefault();
-                if (window.SrtEditor && window.SrtEditor.loadEmergencySrt) {
+                // (2026-10-23 · BUG #184) TRAÇA INCONDICIONAL del clic. Abans, si
+                // `window.SrtEditor` no existia, només es pintava un status al panell i
+                // el FASTPASS.log quedava net: era IMPOSSIBLE distingir "el botó no
+                // escolta" de "el flux ha fallat" (queixa d'usuari: "no fa res").
+                // forceLog salta el filtre de tema i força l'escriptura immediata.
+                const _ed = window.SrtEditor ||
+                    (window.FASTPASS_UI && FASTPASS_UI.Editor && FASTPASS_UI.Editor.SrtEditor) || null;
+                const _wfSrt = !!(window.FASTPASS_UI && FASTPASS_UI.Workflows &&
+                    FASTPASS_UI.Workflows.Srt && FASTPASS_UI.Workflows.Srt.runSrtLoad);
+                u.forceLog("[SRT_CARREGAR] CLIC · editor=" + (!!_ed) +
+                    " · loadEmergencySrt=" + !!(_ed && _ed.loadEmergencySrt) +
+                    " · Workflows.Srt.runSrtLoad=" + _wfSrt);
+                // El mecanisme ÚNIC de CARREGAR són els SRT dels blocs de 15 min
+                // (`SrtEditor.loadEmergencySrt`). Ctrl+clic = SUBTÍTOLS SINTÈTICS del dia
+                // (i el segon Ctrl+clic torna al SRT normal). L'antic Alt+clic (fallback a
+                // la carpeta de VERTICALITZACIÓ) ha desaparegut amb eixa carpeta.
+                if (e && (e.ctrlKey || e.metaKey)) e.preventDefault();
+                if (_ed && _ed.loadEmergencySrt) {
                     if (e && (e.ctrlKey || e.metaKey)) {
                         u.log("[SRT_CARREGAR] Ctrl+clic → SUBTITOLS SINTETICS del dia...");
                         await callWorkflow('Srt', 'runSrtLoadSynthetic');
                         return;
                     }
-                    const forceFb = !!(e && e.altKey);
-                    u.log("[SRT_CARREGAR] Carregant SRT (mecanisme principal: blocs de 15 min)" + (forceFb ? " · Alt+clic = FALLBACK directe" : "") + "...");
-                    await callWorkflow('Srt', 'runSrtLoad', forceFb);
+                    u.log("[SRT_CARREGAR] Carregant SRT (blocs de 15 min)...");
+                    await callWorkflow('Srt', 'runSrtLoad');
                 } else {
+                    // ERROR → escriptura immediata al log, a més de l'avís al panell.
+                    u.log("[SRT_CARREGAR] ❌ Editor SRT no disponible (js/editor/srt_editor.js " +
+                        "no s'ha carregat o ha petat en carregar-se)", "ERROR");
                     u.status("Error: SrtEditor no disponible", "error");
                 }
             });
@@ -874,17 +877,23 @@ if (btnMarksC1) btnMarksC1.addEventListener('click', () => callWorkflow('Markers
         if (btnSrtAdjust) btnSrtAdjust.addEventListener('click', function () {
             if (window.SrtEditor) window.SrtEditor.applyAdjust();
         });
-        // (F3.3) 🧩 REOMLIR: buits del SRT normal amb les entrades SINT (vista MOD)
+        // (F3.3) 🧩 REOMLIR: SINT del dia (els carrega si cal) dins dels buits del normal (vista MOD)
         if (btnSrtFill) btnSrtFill.addEventListener('click', () => callWorkflow('Srt', 'runSrtFillGaps'));
-        // (F3.1) 🗑 ESBORRAR: entrada seleccionada de la taula (i del timeline si hi es)
-        if (btnSrtDel) btnSrtDel.addEventListener('click', function () {
-            if (window.SrtEditor) window.SrtEditor.deleteSelected();
-        });
+        // (2026-10-23) RETIRAT el botó 🗑 ESBORRAR: suprimia la selecció igual que
+        // Supr/Backspace (`SrtEditor.deleteSelected`), que segueix viu al canvas.
         if (btnSrtExport) btnSrtExport.addEventListener('click', function (e) {
             if (!window.SrtEditor) return;
             // (F3.2) Ctrl+clic = forca l'exportacio a S2 (els SINT ja hi van sols)
             const toS2 = !!(e && (e.ctrlKey || e.metaKey));
-            window.SrtEditor.exportToPremiere(toS2 ? { track: 1 } : undefined);
+            // (F3.6 · 2026-10-23 · BUG #186) Ctrl+clic = AFEGIR NOMÉS EL QUE FALTA: no
+            // es reescriu el que ja té clip al timeline, va a S2 i els clips nous es
+            // pinten amb una ALTRA etiqueta de color (`srtGapColorLabel`).
+            let col = 7;
+            try {
+                const cfgG = (FASTPASS_UI.Config && FASTPASS_UI.Config.get) ? FASTPASS_UI.Config.get() : null;
+                if (cfgG && cfgG.srtGapColorLabel != null) col = Number(cfgG.srtGapColorLabel);
+            } catch (eCfg) { }
+            window.SrtEditor.exportToPremiere(toS2 ? { track: 1, onlyMissing: true, colorLabel: col } : undefined);
         });
         // (2026-09-22) RESET ♻️ → reinicia la taula I **torna a buscar els .SRT del tema**
         // del bloc (abans només restaurava el SRT que ja hi havia carregat, així que si
@@ -1075,16 +1084,31 @@ if (btnMarksC1) btnMarksC1.addEventListener('click', () => callWorkflow('Markers
         // --- INICIALIZACIÓN DE VALORES ---
         if (FASTPASS_UI.Config && FASTPASS_UI.Config.loadSelection) FASTPASS_UI.Config.loadSelection();
 
-        const progInicial = document.getElementById('programa').value;
+        const _progEl = document.getElementById('programa');
+        const progInicial = _progEl ? _progEl.value : '';
         if (progInicial && FASTPASS_UI.Core.Context.syncConductorUI) {
             FASTPASS_UI.Core.Context.syncConductorUI(progInicial);
         }
 
         // Inicialitzar SRT Editor
-        if (window.SrtEditor) {
-            window.SrtEditor.init();
+        // (2026-10-23 · BUG #184) Si `js/editor/srt_editor.js` no s'ha carregat (error de
+        // sintaxi o excepció dins del IIFE), `window.SrtEditor` no existeix i el botó ⬇️
+        // CARREGAR quedava MUT (només un status al panell, cap traça al log). Ara es
+        // prova també el mòdul intern i es deixa constància explícita al FASTPASS.log.
+        const _edInit = window.SrtEditor ||
+            (window.FASTPASS_UI && FASTPASS_UI.Editor && FASTPASS_UI.Editor.SrtEditor) || null;
+        if (_edInit && typeof _edInit.init === 'function') {
+            _edInit.init();
             FASTPASS_UI.Utils.log("✅ SRT Editor inicialitzat");
+        } else {
+            FASTPASS_UI.Utils.log("❌ SRT Editor NO disponible: js/editor/srt_editor.js no s'ha " +
+                "carregat o ha petat (els botons de SUBTÍTOLS no faran res)", "ERROR");
         }
+        FASTPASS_UI.Utils.forceLog("[SRT-INIT] btnSrtLoad=" + !!btnSrtLoad +
+            " · btnSrtExport=" + !!btnSrtExport +
+            " · editor=" + !!_edInit +
+            " · Workflows.Srt.runSrtLoad=" + !!(window.FASTPASS_UI && FASTPASS_UI.Workflows &&
+                FASTPASS_UI.Workflows.Srt && FASTPASS_UI.Workflows.Srt.runSrtLoad));
 
         callContextAudit();
         FASTPASS_UI.Utils.log("✅ TODOS LOS BOTONES VINCULADOS");
@@ -1133,6 +1157,11 @@ if (btnMarksC1) btnMarksC1.addEventListener('click', () => callWorkflow('Markers
 
     async function callWorkflow(module, method, ...args) {
         console.log(`🔘 callWorkflow: ${module}.${method}`);
+        // (2026-10-23 · BUG #184) El dispatch també va al FITXER (abans només a la
+        // consola del panell): si un botó no fa res, el log ha de dir si la crida ha
+        // eixit o si el mòdul/mètode no existeix.
+        const _u = window.FASTPASS_UI && FASTPASS_UI.Utils;
+        if (_u && _u.log) _u.log(`🔘 [DISPATCH] ${module}.${method}`, 'INFO');
         if (FASTPASS_UI.Workflows[module] && FASTPASS_UI.Workflows[module][method]) {
             try {
                 await FASTPASS_UI.Workflows[module][method](...args);
@@ -1144,6 +1173,7 @@ if (btnMarksC1) btnMarksC1.addEventListener('click', () => callWorkflow('Markers
             }
         } else {
             console.error("⚠️ Error: " + module + "." + method + " no existe.");
+            if (_u && _u.log) _u.log("⚠️ [DISPATCH] Workflow inexistent: " + module + "." + method, "ERROR");
         }
     }
 
@@ -1773,9 +1803,11 @@ window.onmouseenter = function () {
 // Escalfament de rutes de xarxa
 async function warmUpNetwork() {
     var config = FASTPASS_UI.Config.get();
-    if (config.rutas) {
-        console.log("🔥 [SYSTEM] Escalfant rutes de xarxa...");
-        FASTPASS_UI.Utils.callJSX(`IO.exists('${config.rutas.verticalitzacio.replace(/\\/g, '\\\\')}')`);
-        FASTPASS_UI.Utils.callJSX(`IO.exists('${config.rutas.chyrons.replace(/\\/g, '\\\\')}')`);
-    }
+    if (!config.rutas) return;
+    console.log("🔥 [SYSTEM] Escalfant rutes de xarxa...");
+    // (2026-10-23) Ja NO s'escalfa la carpeta de VERTICALITZACIÓ (no existeix al flux):
+    // només els rètols (CHY) i l'arrel dels projectes.
+    var esc = function (p) { return String(p || '').replace(/\\/g, '\\\\'); };
+    if (config.rutas.chyrons) FASTPASS_UI.Utils.callJSX("IO.exists('" + esc(config.rutas.chyrons) + "')");
+    if (config.rutas.projectes) FASTPASS_UI.Utils.callJSX("IO.exists('" + esc(config.rutas.projectes) + "')");
 };

@@ -44,6 +44,10 @@
         _wfMediaStart: 0,
         _wfMediaEnd: 0,
         _axisOrigin: 0,     // media on comença el timeline (IN del primer clip) → eix del editor
+        // (F3.6 · BUG #188 · 2026-10-23) Entrades SINT que la fusió 🧩 ha afegit als
+        // BUITS de la taula. Serveixen per a pintar-les amb un to propi a l'editor i
+        // per al resum del log: el 🧩 NO exporta res al timeline (allò és 💾).
+        _gapAdded: [],
         // (#132, 2026-10-02) FINESTRA D'EDICIÓ: un cop fixats l'IN/OUT de la peça
         // (botons IN / OUT de l'editor) l'eix es cenyeix al TRAM DE LA PEÇA amb un
         // marge a la dreta, en lloc d'estirar-se sobre tot el clip carregat.
@@ -109,7 +113,7 @@
 
         // ── F3 (2026-10-21) · SELECCIO, SINTETICS I REOMLIMENT ──────────────
         // _selIndex: entrada PRINCIPAL de la TAULA QUE ES VEU (la primera de la
-        //   selecció). -1 = cap. Es conserva per compatibilitat (exportar, 🗑,
+        //   selecció). -1 = cap. Es conserva per compatibilitat (exportar, Supr,
         //   missatges) i ha de coincidir amb el primer índex de _selIndices.
         _selIndex: -1,
         // (F3.4, 2026-10-21) SELECCIO MULTIPLE de clips (Ctrl/Shift+clic al clip):
@@ -127,6 +131,10 @@
         // _views: instantanies de les taules que NO es veuen (kind → vista), per
         // poder alternar NORMAL↔SINT sense rellegir res i sense barrejar-les.
         _views: {},
+        // (BUG #189 · 2026-10-23) Desplacament (s) aplicat a la taula SINT per a
+        // portar-la a l'eix de MEDIA del SRT NORMAL. Es guarda per a aplicar-lo
+        // tambe als marcadors que es restauren DESPRES de l'ajust.
+        _sintShiftSec: 0,
         // _timelineSubs: caché de clips de subtitol del timeline [{track,start,end}]
         // (per saber si l'entrada seleccionada ja esta exportada). 0 = sense llegir.
         _timelineSubs: null,
@@ -426,6 +434,11 @@
             // → els accents arribaven malmesos ("Ã“" en lloc de "Ó"). Es repara aquí.
             var srtContent = getUtils()._fromMojibake(await callJSX("IO.readTxt('" + escapedPath + "')"), 'srt_editor');
             if (!srtContent || srtContent.indexOf('ERR') === 0) {
+                // (2026-10-23 · BUG #185) Sense esta traça, un path mal format (p.ex.
+                // carpeta+nom enganxats) deixava el log mut després de "Carregant ...":
+                // l'usuari veia que el botó "no carregava" sense cap motiu.
+                log("⚠️ SRT_EDIT: NO s'ha pogut llegir '" + srtPath + "' (" +
+                    (srtContent ? String(srtContent).slice(0, 140) : 'resposta buida') + ")");
                 getUtils().status("Error llegint .srt", "error");
                 return false;
             }
@@ -441,8 +454,14 @@
             this._srtFingerprint = this._fingerprintSrt();
             // (F3) La taula carregada passa a ser la VIVA i la seua marca de color
             this._kind = kind;
+            this._sintShiftSec = 0;   // (BUG #189) cap ajust de SINT encara
             this._clearSelection();
             this._timelineSubs = null;
+            this._gapAdded = [];   // (F3.6) SRT nou → cap clip pendent d'exportar a S2
+            // (BUG #189) Els .srt sintetics no comencen al media 0 del clip: es
+            // MESURA el desfasament amb les frases en comu i es desplaça la taula
+            // SINT abans de pintar res (si l'altra taula ja esta a _views).
+            this._applySintAlignment();
             if (this._entries.length > 0) {
                 this._maxSec = this._entries[this._entries.length - 1].endSec + 10;
             }
@@ -464,6 +483,15 @@
                 // manifest), no a C:/temp, perquè cada projecte tingui els seus.
                 if (skipMarkerRestore) log("📝 SRT_EDIT: marcadors NO restaurats (RESET ♻️)");
                 else await this._restoreMarkers();
+                // (BUG #189) Els marcadors es desen amb els temps del .srt ORIGINAL
+                // (l'eix propi del SINT). Si la taula s'ha desplaçat per quadrar-la
+                // amb el SRT NORMAL, els marcadors han de viatjar igual.
+                if (kind === 'SINT' && this._sintShiftSec) {
+                    var shS = Number(this._sintShiftSec) || 0;
+                    this._markers = (this._markers || []).map(function (m) { return Math.max(0, m + shS); });
+                    this._originalMarkers = (this._originalMarkers || []).map(function (m) { return Math.max(0, m + shS); });
+                    log("📝 SRT_EDIT: marcadors SINT desplaçats " + shS.toFixed(2) + "s (" + this._markers.length + ")");
+                }
                 if (wg && projFolder) {
                     var binPath = await wg.getBinPath(projFolder);
                     if (binPath) {
@@ -521,18 +549,65 @@
                 const config = FASTPASS_UI.Config.get();
                 const idProg = (document.getElementById('programa') || {}).value;
                 const progData = config.mapeoProgramas && config.mapeoProgramas[idProg];
-                if (!progData) { u.status("Selecciona un programa", "warn"); return; }
+                if (!progData) {
+                    u.status("Selecciona un programa", "warn");
+                    log("⚠️ SRT_EMERGENCIA: cap programa seleccionat (o id '" + idProg + "' fora de mapeoProgramas)");
+                    return;
+                }
                 const bloque = (document.getElementById('bloc') || {}).value;
                 const stateDateDir = (FASTPASS_UI.State && FASTPASS_UI.State.dateDir);
                 const dateDir = stateDateDir || u.getFormattedDate().replace(/["\s]/g, "").trim();
                 const ctx = { config: config, progData: progData, programa: idProg, bloque: bloque, dateDir: dateDir };
 
                 // 2. Rang real del bloc (hora del dia, en segons) des del manifest
-                const manifest = await FASTPASS_UI.SessionManifest.load(ctx);
+                // (2026-10-23 · BUG #185b) El manifest es busca amb la DATA DE TREBALL,
+                // però en mode correcció (projecte d'ahir obert hui) eixa data pot ser
+                // la de hui, i el manifest de hui pot ser un STUB (`ref` tot a null) →
+                // eixia "no s'ha carregat cap .srt" tot i que el projecte obert SÍ que
+                // té rang. Es reintenta amb la data/bloc del PROJECTE OBERT.
+                let projFolder = '';
+                try { projFolder = String(await callJSX("Context.folder()") || ''); } catch (eF) { projFolder = ''; }
+                if (projFolder && projFolder.indexOf('ERR') === 0) projFolder = '';
+                const hasRange = function (m) {
+                    return !!(m && m.ref && m.ref.worldBlockStartSec != null &&
+                        m.ref.worldBlockEndSec != null && m.ref.worldBlockEndSec > m.ref.worldBlockStartSec);
+                };
+                let manifest = await FASTPASS_UI.SessionManifest.load(ctx);
+                if (!hasRange(manifest) && projFolder) {
+                    const pc = this._projectCtxFromPath(projFolder);
+                    if (pc && (pc.dateDir !== ctx.dateDir || (pc.bloque && pc.bloque !== ctx.bloque))) {
+                        log("🔁 SRT_EMERGENCIA: el manifest de la data de treball (" + ctx.dateDir +
+                            ") no té rang → provant el del PROJECTE OBERT (" + pc.dateDir + " · " +
+                            (pc.bloque || ctx.bloque) + ")");
+                        const ctx2 = {
+                            config: config, progData: progData, programa: idProg,
+                            bloque: pc.bloque || ctx.bloque, dateDir: pc.dateDir
+                        };
+                        const m2 = await FASTPASS_UI.SessionManifest.load(ctx2);
+                        if (hasRange(m2)) {
+                            manifest = m2;
+                            ctx.dateDir = ctx2.dateDir;
+                            ctx.bloque = ctx2.bloque;
+                            log("✅ SRT_EMERGENCIA: manifest del projecte obert · bloc world [" +
+                                Number(m2.ref.worldBlockStartSec).toFixed(1) + "s → " +
+                                Number(m2.ref.worldBlockEndSec).toFixed(1) + "s]");
+                        } else {
+                            log("⚠️ SRT_EMERGENCIA: el manifest del projecte obert tampoc no té rang (" + pc.dateDir + ")");
+                        }
+                    }
+                }
                 const worldStart = manifest.ref && manifest.ref.worldBlockStartSec;
                 const worldEnd = manifest.ref && manifest.ref.worldBlockEndSec;
                 if (worldStart == null || worldEnd == null || worldEnd <= worldStart) {
                     u.status("El manifest no té el rang del bloc (executa NOU primer)", "warn");
+                    // (2026-10-23 · BUG #185) Motiu EXPLÍCIT al log. Amb un manifest
+                    // buit (projecte obert sense escaleta → `ref` tot a null) el
+                    // carregador ix ací i al log només es veia "no s'ha carregat cap
+                    // .srt": semblava que el botó estiguera trencat.
+                    log("⚠️ SRT_EMERGENCIA: el manifest NO té rang de bloc (" +
+                        "worldStart=" + worldStart + ", worldEnd=" + worldEnd + ") · programa=" + idProg +
+                        " · bloc=" + ctx.bloque + " · data=" + ctx.dateDir +
+                        " → executa NOU o FOTO de l'escaleta per reconstruir el manifest");
                     return;
                 }
                 // Margen de captura GARANTITZAT per banda en la càrrega per blocs de 15 min.
@@ -551,18 +626,15 @@
                 const winEnd = worldEnd + Math.max(marginSecs, tailSec);
                 log("🚨 SRT_EMERGENCIA: bloc world [" + worldStart.toFixed(1) + "s → " + worldEnd.toFixed(1) + "s], finestra [" + winStart.toFixed(1) + "s → " + winEnd.toFixed(1) + "s] (davant sense marge · darrere +" + Math.max(marginSecs, tailSec) + "s)");
 
-                // ⚠️ ORIGEN DE L'EIX: el clip extret comença al HANDLE (worldSecMediaStart),
-                // no a l'inici del bloc. Si re-temporitzem contra worldStart, TOTS els
-                // subtítols queden avançats tants segons com handles i els últims del clip
-                // es queden sense subtítols (sempre en faltaven uns quants al final).
-                // ⚠️ ORIGEN DE L'EIX (2026-09-16): el MP4 del projecte NO és el cleanFeed
-                // sencer, sinó un EXTRACTE que comença a `mp4ExpandedInPoint` (p.ex. 124 s)
-                // dins del cleanFeed. La base de temps dels subtítols ha de ser, doncs,
-                //   worldSecMediaStart + mp4ExpandedInPoint   (inici del clip extret),
-                // no worldSecMediaStart (inici del cleanFeed).
-                // Amb l'antiga base, les entrades quedaven en l'eix del cleanFeed: a
-                // l'editor sortien ~115 s tard (buit enorme al davant) i l'EXPORTAR a
-                // Premiere les deixava desplaçades exactament el mateix.
+                // ⚠️ ORIGEN DE L'EIX (2026-09-16 · CORREGIT 2026-10-23 · BUG #186)
+                // `worldSecMediaStart` JA és el TC DE MÓN on comença el MEDIA 0 del clip
+                // (per als extractes = `extractedClip.extractedWorldSecMediaStart`).
+                // `mp4ExpandedInPoint` és una coordenada DINS del MP4, NO un desplaçament
+                // de món: sumar-la movia tot l'SRT eixos segons ABANS del clip. Eixa era
+                // la causa que l'usuari veiés els subtítols "molt del principi" i que
+                // l'exportació a Premiere els deixés desplaçats el mateix temps.
+                // Conversió bona (igual per a clip extret i per a cleanFeed sencer):
+                //     media(W) = W − worldSecMediaStart
                 const theExIn = (manifest.ref && manifest.ref.mp4ExpandedInPoint != null)
                     ? Number(manifest.ref.mp4ExpandedInPoint)
                     : ((manifest.blockBounds && manifest.blockBounds.mp4ExpandedInPoint != null)
@@ -572,20 +644,31 @@
                     : ((manifest.extractedClip && manifest.extractedClip.extractedWorldSecMediaStart != null)
                         ? Number(manifest.extractedClip.extractedWorldSecMediaStart)
                         : worldStart);
-                const refStartSec = baseMediaStart + ((isFinite(theExIn) && theExIn > 0) ? theExIn : 0);
-                log("🚨 SRT_EMERGENCIA: base de temps = cleanFeed " + baseMediaStart.toFixed(1) + "s + inPoint " +
-                    ((isFinite(theExIn) && theExIn > 0) ? theExIn : 0) + "s = " + refStartSec.toFixed(1) + "s" +
-                    " → bloc a " + (worldStart - refStartSec).toFixed(2) + "s dins del MP4 del clip");
-                if (Math.abs(refStartSec - worldStart) < 0.001) {
-                    log("⚠️ SRT_EMERGENCIA: base = inici del bloc (sense handle). Revisa el manifest.");
+                const refStartSec = baseMediaStart;
+                const blockInMedia = worldStart - refStartSec;
+                // Contrast amb el manifest: `tlBlockInPointSec` = on cau l'inici del bloc
+                // dins del MP4. Si no quadra amb la base calculada, ho deixem al log
+                // (el símptoma seria exactament el de BUG #186: tot el bloc desplaçat).
+                const tlBlockInPt = (manifest.ref && manifest.ref.tlBlockInPointSec != null)
+                    ? Number(manifest.ref.tlBlockInPointSec) : NaN;
+                log("🚨 SRT_EMERGENCIA: base de temps = món " + refStartSec.toFixed(1) + "s (media 0)" +
+                    " → bloc a " + blockInMedia.toFixed(2) + "s dins del MP4 del clip" +
+                    " · manifest: tlBlockInPointSec=" + (isFinite(tlBlockInPt) ? tlBlockInPt.toFixed(2) + "s" : "N/D") +
+                    ", mp4ExpandedInPoint=" + (isFinite(theExIn) ? theExIn.toFixed(2) + "s (NO se suma: és coordenada de media)" : "N/D"));
+                if (isFinite(tlBlockInPt) && Math.abs(blockInMedia - tlBlockInPt) > 0.5) {
+                    log("⚠️ SRT_EMERGENCIA: desviació de " + (blockInMedia - tlBlockInPt).toFixed(2) +
+                        "s entre la base calculada i el manifest (tlBlockInPointSec) → revisa worldSecMediaStart", "WARN");
                 }
-                // (l'antic avís d'origen d'eix ja no cal: la base és ara l'inici del clip extret)
 
                 // 3. Programa → carpeta dels blocs de 15 min
                 const progMap = { TNM: 'migdia', TNV: 'vespre', TNC: 'comarques' };
                 const programa = progMap[(progData.wott || '').toUpperCase()];
-                if (!programa) { u.status("Programa no suportat per emergència", "warn"); return; }
-                const fecha = (dateDir || '').replace(/_/g, '-');
+                if (!programa) {
+                    u.status("Programa no suportat per emergència", "warn");
+                    log("⚠️ SRT_EMERGENCIA: wott '" + (progData.wott || '?') + "' sense carpeta de blocs (TNM/TNV/TNC)");
+                    return;
+                }
+                const fecha = (ctx.dateDir || '').replace(/_/g, '-');
                 const prefix = fecha + '_Telenot_cies_' + programa + '_';
                 const dir = this._srt15MinDir();
                 if (!dir) {
@@ -596,7 +679,11 @@
 
                 // 4. Llistar i seleccionar els arxius que solapen la finestra del bloc
                 const files = await u.readFolder(dir);
-                if (!files || files.length === 0) { u.status("No es pot llegir el directori de SRTs de 15 min", "warn"); return; }
+                if (!files || files.length === 0) {
+                    u.status("No es pot llegir el directori de SRTs de 15 min", "warn");
+                    log("⚠️ SRT_EMERGENCIA: carpeta de blocs inaccessible o buida: " + dir);
+                    return;
+                }
                 const candidates = [];
                 for (let i = 0; i < files.length; i++) {
                     const name = files[i].name || '';
@@ -628,8 +715,16 @@
                     }
                     candidates.sort(function (a, b) { return a.startSec - b.startSec; });
                 }
-                log("🚨 SRT_EMERGENCIA: " + candidates.length + " arxius de 15 min seleccionats");
-                if (candidates.length === 0) { u.status("No s'ha trobat cap SRT de 15 min per al bloc", "warn"); return; }
+                log("🚨 SRT_EMERGENCIA: " + candidates.length + " arxius de 15 min seleccionats" +
+                    (candidates.length
+                        ? " (" + candidates.map(function (c) { return c.name; }).join(' | ') + ")"
+                        : " · prefix '" + prefix + "' · " + files.length + " fitxers a " + dir));
+                if (candidates.length === 0) {
+                    u.status("No s'ha trobat cap SRT de 15 min per al bloc", "warn");
+                    log("⚠️ SRT_EMERGENCIA: cap .srt del bloc · prefix='" + prefix + "' · finestra [" +
+                        winStart.toFixed(1) + "s → " + winEnd.toFixed(1) + "s] · carpeta=" + dir);
+                    return;
+                }
 
                 // 5. Llegir, extreure i re-temporitzar el troç (concatena si cau entre arxius)
                 const all = [];
@@ -637,7 +732,11 @@
                     const cand = candidates[c];
                     // (2026-10-02) readTxt → ANSI: reparar el mojibake dels SRT UTF-8.
                     const content = u._fromMojibake(await callJSX(`IO.readTxt('${u.escape(cand.path)}')`), 'srt_emergencia');
-                    if (!content || content.indexOf('ERR') === 0) continue;
+                    if (!content || content.indexOf('ERR') === 0) {
+                        log("⚠️ SRT_EMERGENCIA: no s'ha pogut llegir " + cand.path + " (" +
+                            (content ? String(content).slice(0, 120) : 'buit') + ")");
+                        continue;
+                    }
                     const entries = FASTPASS_UI.Logic.SrtParser.srtToEntries(content);
                     for (let e = 0; e < entries.length; e++) {
                         const ent = entries[e];
@@ -652,14 +751,22 @@
                         all.push({ startSec: (ns < 0 ? 0 : ns), endSec: ne, texts: ent.texts.slice(), index: 0, timeStr: '' });
                     }
                 }
-                if (all.length === 0) { u.status("No s'han trobat subtítols dins del bloc", "warn"); return; }
+                if (all.length === 0) {
+                    u.status("No s'han trobat subtítols dins del bloc", "warn");
+                    log("⚠️ SRT_EMERGENCIA: cap entrada dins la finestra · fitxers llegits=" +
+                        candidates.length + " · base de temps=" + refStartSec.toFixed(1) + "s");
+                    return;
+                }
                 all.sort(function (a, b) { return a.startSec - b.startSec; });
                 for (let n = 0; n < all.length; n++) all[n].index = n + 1;
                 const srtContent = FASTPASS_UI.Logic.SrtParser.entriesToSrt(all);
                 log("🚨 SRT_EMERGENCIA: " + all.length + " entrades extretes");
 
                 // 6. Escriure temporal i carregar amb loadSrt (reutilitza WF/vídeo/marcadors)
-                const projFolder = await callJSX("Context.folder()");
+                // (2026-10-23 · BUG #185b) `projFolder` ja s'ha resolt al punt 2.
+                if (!projFolder) {
+                    try { projFolder = String(await callJSX("Context.folder()") || ''); } catch (eF2) { projFolder = ''; }
+                }
                 const base = this._srtName || 'emergencia';
                 const tempName = base + '_EMERGENCIA.srt';
                 const tempPath = ((projFolder && projFolder.indexOf('ERR') !== 0) ? projFolder : 'C:\\temp').replace(/[\\/]+$/, '') + '\\' + tempName;
@@ -674,6 +781,26 @@
                 log("💥 SRT_EMERGENCIA: " + e.message);
                 u.status("Error emergència SRT: " + e.message, "error");
             }
+        },
+
+        /**
+         * _projectCtxFromPath (BUG #185b): trau la DATA de treball i el BLOC de la
+         * carpeta del projecte obert (`…\<YYYY_MM_DD>\<V#>\`). Servix per a buscar el
+         * manifest correcte quan la data de treball del panell no coincidix amb el
+         * projecte obert (mode correcció: hui s'obri el projecte d'ahir).
+         * @param {string} folderPath - Carpeta del .prproj (`Context.folder()`)
+         * @returns {{dateDir:string, bloque:(string|null)}|null}
+         */
+        _projectCtxFromPath: function (folderPath) {
+            if (!folderPath) return null;
+            const parts = String(folderPath).replace(/\//g, '\\').split('\\');
+            for (let i = parts.length - 1; i >= 0; i--) {
+                if (/^\d{4}_\d{2}_\d{2}$/.test(parts[i])) {
+                    const bloc = (parts[i + 1] && /^V\d+$/i.test(parts[i + 1])) ? parts[i + 1].toUpperCase() : null;
+                    return { dateDir: parts[i], bloque: bloc };
+                }
+            }
+            return null;
         },
 
         /**
@@ -1486,9 +1613,12 @@
 
         /** _trackStyle: colors dels clips segons la taula que es veu. */
         _trackStyle: function () {
-            if (this._kind === 'SINT') return { fill: 'rgba(212,120,32,0.45)', stroke: 'rgba(255,210,150,0.95)', sel: 'rgba(255,190,90,0.85)' };
-            if (this._kind === 'MOD') return { fill: 'rgba(32,160,120,0.45)', stroke: 'rgba(170,255,225,0.95)', sel: 'rgba(120,255,200,0.85)' };
-            return { fill: 'rgba(143,74,212,0.45)', stroke: 'rgba(210,175,255,0.9)', sel: 'rgba(235,215,255,0.9)' };
+            // (BUG #188) `fillSint`/`strokeSint`: to propi de les entrades que el 🧩
+            // ha encaixat al buit (venen del SINT) → es distingixen de la resta.
+            var SINTF = { fillSint: 'rgba(212,120,32,0.55)', strokeSint: 'rgba(255,205,130,0.95)' };
+            if (this._kind === 'SINT') return { fill: 'rgba(212,120,32,0.45)', stroke: 'rgba(255,210,150,0.95)', sel: 'rgba(255,190,90,0.85)', fillSint: SINTF.fillSint, strokeSint: SINTF.strokeSint };
+            if (this._kind === 'MOD') return { fill: 'rgba(32,160,120,0.45)', stroke: 'rgba(170,255,225,0.95)', sel: 'rgba(120,255,200,0.85)', fillSint: SINTF.fillSint, strokeSint: SINTF.strokeSint };
+            return { fill: 'rgba(143,74,212,0.45)', stroke: 'rgba(210,175,255,0.9)', sel: 'rgba(235,215,255,0.9)', fillSint: SINTF.fillSint, strokeSint: SINTF.strokeSint };
         },
 
         /** _clipAtSec: index de l'entrada que cau davall `sec` (o -1). */
@@ -1544,7 +1674,7 @@
         /**
          * _setSelection: fixa la selecció (índexs vàlids i ordenats) i l'àncora
          * del Shift, i torna a pintar. Manté `_selIndex` = primer índex (per al
-         * codi que encara el llig: exportar, 🗑, missatges…).
+         * codi que encara el llig: exportar, Supr, missatges…).
          */
         _setSelection: function (list, anchor) {
             var valid = [];
@@ -1673,6 +1803,9 @@
                 originalEntries: P.cloneEntries(this._originalEntries),
                 markers: (this._markers || []).slice(),
                 originalMarkers: (this._originalMarkers || []).slice(),
+                // (BUG #189) eixe desplaçament ja està aplicat a `entries` i `markers`:
+                // si la vista torna a ser la viva cal saber-lo per a desar-los bé.
+                sintShiftSec: Number(this._sintShiftSec) || 0,
                 maxSec: this._maxSec,
                 editWinStart: this._editWinStart,
                 editWinEnd: this._editWinEnd,
@@ -1698,6 +1831,10 @@
             this._originalEntries = P.cloneEntries(v.originalEntries);
             this._markers = (v.markers || []).slice();
             this._originalMarkers = (v.originalMarkers || []).slice();
+            // (BUG #189) la instantania pot portar la taula SINT ja desplaçada: el
+            // desplaçament viatja amb ella per a poder desar els marcadors a l'eix
+            // del FITXER i no tornar-los a moure en el pròxim carregament.
+            this._sintShiftSec = Number(v.sintShiftSec) || 0;
             this._maxSec = v.maxSec || (this._entries.length ? this._entries[this._entries.length - 1].endSec + 10 : 120);
             this._editWinStart = (v.editWinStart != null) ? v.editWinStart : null;
             this._editWinEnd = (v.editWinEnd != null) ? v.editWinEnd : null;
@@ -1823,7 +1960,7 @@
             }
             // (F3.4, 2026-10-21) MULTI: esborra TOTS els clips seleccionats
             // (Ctrl/Shift+clic). Sense selecció → l'entrada davall el cabezal
-            // (comportament F3.1, per si es crida 🗑 sense haver clicat cap clip).
+            // (comportament F3.1, per si es crida des de Supr sense haver clicat cap clip).
             var idxs = this._selectedIndices();
             if (!idxs.length) {
                 var single = (this._selIndex >= 0 && this._selIndex < this._entries.length)
@@ -1914,19 +2051,99 @@
         },
 
         /**
+         * _applySintAlignment (BUG #189 · 2026-10-23): porta les entrades SINT a
+         * l'eix del SRT NORMAL (temps de MEDIA del clip).
+         *
+         * Els `.srt` sintetics no comencen al media 0 del clip: el seu 00:00:00 es
+         * l'inici del material del qual s'han generat. Mesurat en viu (22/10):
+         * -16,97 s al TN_COMARQUES V3 i -39,55 s al V1 (ELS_DIPOSTIS) — per aixo
+         * NO es pot usar una constant. Aci es MESURA amb les frases en comu
+         * (`SrtParser.estimateOffsetSec`) i es desplaça la taula SINT sencera
+         * (entrades, taula carregada, taula original, marcadors i `maxSec`).
+         *
+         * Es IDEMPOTENT: un colp ajustada, la mediana torna a ser ~0 i no es toca
+         * res mes; per aixo es pot cridar abans de cada fusio.
+         *
+         * @returns {Object|null} l'estimacio ({offsetSec,pairs,used,spreadSec,method})
+         *   o null si encara no hi ha les dos taules (NORMAL i SINT).
+         */
+        _applySintAlignment: function () {
+            var P = window.FASTPASS_UI.Logic.SrtParser;
+            if (!P || typeof P.estimateOffsetSec !== 'function' || typeof P.shiftEntries !== 'function') return null;
+            var baseView = this._views['NORMAL'] || null;
+            var base = baseView ? baseView.entries : (this._kind === 'NORMAL' ? this._entries : null);
+            if (!base || base.length === 0) return null;
+            var holder = (this._kind === 'SINT') ? this : (this._views['SINT'] || null);
+            if (!holder || !holder.entries || holder.entries.length === 0) return null;
+            var est = P.estimateOffsetSec(base, holder.entries);
+            var name = holder.name || this._srtName || '?';
+            if (est.method === 'fora-de-rang') {
+                log("⚠️ SINT_AJUST: desfasament mesurat de " + Number(est.offsetSecRaw).toFixed(1) +
+                    "s (" + est.pairs + " frases en comu) → NO es creible, NO s'ajusta el SINT «" + name + "»", "WARN");
+                return est;
+            }
+            var d = Number(est.offsetSec) || 0;
+            if (est.used < 3 || Math.abs(d) < 0.25) {
+                log("🎯 SINT_AJUST: res a desplaçar · " + est.pairs + " frases en comu, " + est.used +
+                    " usades · Δ=" + d.toFixed(2) + "s · SINT=" + name);
+                return est;
+            }
+            holder.entries = P.shiftEntries(holder.entries, d);
+            if (holder.loadedEntries && holder.loadedEntries.length) holder.loadedEntries = P.shiftEntries(holder.loadedEntries, d);
+            if (holder.originalEntries && holder.originalEntries.length) holder.originalEntries = P.shiftEntries(holder.originalEntries, d);
+            if (holder.markers && holder.markers.length) {
+                holder.markers = holder.markers.map(function (m) { return Math.max(0, m + d); });
+            }
+            if (holder.originalMarkers && holder.originalMarkers.length) {
+                holder.originalMarkers = holder.originalMarkers.map(function (m) { return Math.max(0, m + d); });
+            }
+            // El desplaçament s'ACUMULA: una segona fusió pot corregir un residual
+            // (p. ex. 0,8 s) i eixe total és el que cal desfer en desar els marcadors.
+            var shPrev = (holder === this) ? (Number(this._sintShiftSec) || 0) : (Number(holder.sintShiftSec) || 0);
+            var shNow = shPrev + d;
+            if (holder === this) this._sintShiftSec = shNow; else holder.sintShiftSec = shNow;
+            if (holder === this) {
+                // (_markers es reinicia just despres a loadSrt i es desplaça en
+                //  restaurar-los; ací NO s'han de tocar)
+                this._maxSec = this._entries.length
+                    ? this._entries[this._entries.length - 1].endSec + 10
+                    : Math.max(1, (Number(this._maxSec) || 0) + d);
+            } else if (holder.maxSec != null) {
+                holder.maxSec = Math.max(1, Number(holder.maxSec) + d);
+            }
+            var first = holder.entries[0], last = holder.entries[holder.entries.length - 1];
+            log("✅ SINT_AJUST: «" + name + "» desplaçat " + d.toFixed(2) + "s per a quadrar-lo amb el SRT normal" +
+                " · " + est.pairs + " frases en comu (" + est.used + " usades, dispersio " + est.spreadSec.toFixed(2) + "s)" +
+                " · ara " + holder.entries.length + " entrades de " + this._secToTimeStr(first.startSec) +
+                " a " + this._secToTimeStr(last.endSec));
+            return est;
+        },
+
+        /**
          * mergeSyntheticGaps (F3.3 · opcio B): reomple els BUITS del SRT normal
-         * amb les entrades SINTETIQUES que hi cauen, amb tolerancia
-         * (`general.srtSyntheticGapTolSec`, defecte 0,2 s).
+         * amb les entrades SINTETIQUES que hi cauen.
          *   - MAI toca les entrades existents (start/end/text queden igual).
-         *   - El resultat viu en una vista MOD (el NORMAL es conserva intacte).
+         *   - El resultat viu en una vista MOD, en la MATEIXA pista de la taula
+         *     (el NORMAL es conserva intacte) i NO s'exporta al timeline: allo es
+         *     fa a posta amb 💾 (BUG #188).
+         *   - (BUG #188) Si un SINT no hi cap exacte, s'ENCOGEIX fins a la vora del
+         *     buit (`general.srtSyntheticMaxTrimSec`, defecte 0,8 s) sense quedar-se
+         *     per davall de `general.srtSyntheticMinDurSec` (0,4 s).
          *   - Sense SINT carregat (Ctrl+clic a CARREGAR) o sense buits → avisa.
          * @returns {Promise<boolean>} true si s'ha afegit alguna entrada
          */
         mergeSyntheticGaps: async function () {
             var P = window.FASTPASS_UI.Logic.SrtParser;
+            // (BUG #189) Les dos taules s'han de creuar en el MATEIX eix de temps:
+            // el SINT es desplaça a l'eix de MEDIA del NORMAL abans de fusionar.
+            this._applySintAlignment();
             var baseView = this._views['NORMAL'] || null;
             var base = baseView ? baseView.entries : (this._kind === 'NORMAL' ? this._entries : null);
             var sint = (this._kind === 'SINT') ? this._entries : (this._views['SINT'] ? this._views['SINT'].entries : null);
+            // (2026-10-23) Nom del .srt sintètic en ús: al log ha de quedar clar D'ON
+            // surten les entrades afegides (cal poder verificar la càrrega dels SINT).
+            var sintName = (this._kind === 'SINT') ? (this._srtName || '')
+                : (this._views['SINT'] ? (this._views['SINT'].name || '') : '');
             if (!base || base.length === 0) {
                 getUtils().status("Cal el SRT NORMAL carregat per reomplir buits", "warn");
                 return false;
@@ -1937,11 +2154,39 @@
             }
             var cfg = (window.FASTPASS_UI.Config && window.FASTPASS_UI.Config.get) ? window.FASTPASS_UI.Config.get() : null;
             var tol = (cfg && cfg.srtSyntheticGapTolSec != null) ? Number(cfg.srtSyntheticGapTolSec) : 0.2;
-            var res = P.mergeSyntheticGaps(base, sint, { tolSec: tol });
+            // (BUG #188) Marge de RETALL: el sintetic s'encongeix fins al buit si el
+            // retall no passa de `maxTrim` i la durada final no baixa de `minDur`.
+            var minDur = (cfg && cfg.srtSyntheticMinDurSec != null) ? Number(cfg.srtSyntheticMinDurSec) : 0.4;
+            var maxTrim = (cfg && cfg.srtSyntheticMaxTrimSec != null) ? Number(cfg.srtSyntheticMaxTrimSec) : 0.8;
+            var res = P.mergeSyntheticGaps(base, sint, { tolSec: tol, minDurSec: minDur, maxTrimSec: maxTrim });
+            // (2026-10-23) GUARDA DE PERTINENÇA: el Scanner ja només deixa passar
+            // sintètics del MATEIX PROGRAMA (BUG #187), però pot ser el d'un ALTRE
+            // BLOC d'eixe programa (N2) i ompliria buits amb frases d'un altre guió.
+            // Mirem quin % de frases compartixen (sense mirar TC) i avisem si és molt baix.
+            var ovl = (typeof P.textOverlap === 'function') ? P.textOverlap(base, sint) : null;
+            if (ovl) {
+                log("📝 SRT_EDIT: SINT↔NORMAL comparteixen " + ovl.hits + "/" + ovl.total +
+                    " frases (" + ovl.pct + "%) · SINT=" + (sintName || '?'));
+                if (sint.length >= 10 && ovl.pct < 20) {
+                    log("⚠️ SRT_EDIT: el SINT «" + (sintName || '?') + "» només coincidix en el " + ovl.pct +
+                        "% de les frases → pot ser d'un ALTRE bloc/guio del mateix programa", "WARN");
+                    getUtils().status("⚠️ SINT poc coincident amb el SRT (" + ovl.pct + "%): mira el log abans de guardar", "warn");
+                }
+            }
             if (!res.added.length) {
+                // (2026-10-23) Desglossem els motius: 'solapa' = TC xocat; 'duplicat-text'
+                // = la mateixa frase ja hi era (comparació de text); 'fora-del-tram' = fora;
+                // (BUG #188) 'massa-curt' / 'no-cab' = el buit no dona per al sintetic.
+                var rTxt = res.rejected.filter(function (x) { return x.reason === 'duplicat-text'; }).length;
+                var rSol = res.rejected.filter(function (x) { return x.reason === 'solapa'; }).length;
+                var rCurt = res.rejected.filter(function (x) { return x.reason === 'massa-curt'; }).length;
+                var rNoCab = res.rejected.filter(function (x) { return x.reason === 'no-cab'; }).length;
                 getUtils().status("SINT: cap buit a reomplir (" + res.rejected.length + " entrades descartades)", "warn");
-                log("📝 SRT_EDIT: fusio SINT sense canvis · buits=" + res.gaps.length + " · descartades=" + res.rejected.length +
-                    " · tol=" + res.tolSec + "s");
+                log("📝 SRT_EDIT: fusio SINT sense canvis · SINT=" + (sintName || '?') +
+                    " · base=" + base.length + " · sint=" + sint.length +
+                    " · buits=" + res.gaps.length + " · descartades=" + res.rejected.length +
+                    " (solapa=" + rSol + ", duplicat-text=" + rTxt + ", massa-curt=" + rCurt + ", no-cab=" + rNoCab + ")" +
+                    " · tol=" + res.tolSec + "s · retall màx=" + res.maxTrimSec + "s · durada mín=" + res.minDurSec + "s");
                 return false;
             }
             // Guardar la taula viva abans de canviar de vista
@@ -1953,6 +2198,12 @@
             }
             this._entries = P.cloneEntries(res.entries);
             this._originalEntries = P.cloneEntries(res.entries);
+            // (BUG #188) QUINES entrades són NOVES (venen del SINT): a l'editor es
+            // pinten amb un to propi i NO s'exporta res sol: el timeline es toca
+            // només quan l'usuari prem 💾 (abans el 🧩 hi col·locava els clips).
+            this._gapAdded = P.cloneEntries(res.added);
+            log("🧩 SRT_EDIT: " + this._gapAdded.length + " entrades SINT encaixades als buits de la taula (" +
+                res.trimmed + " retallades) · MOD a l'editor, sense exportar");
             // Base del RESET ♻️: la taula NORMAL (la fusio no sobreescriu el fitxer)
             this._loadedEntries = P.cloneEntries(base);
             var mk = baseView ? (baseView.markers || []) : (this._markers || []);
@@ -1966,9 +2217,11 @@
             var detall = res.added.slice(0, 6).map(function (a) {
                 return this._secToTimeStr(a.startSec) + '→' + this._secToTimeStr(a.endSec) + ' «' + (a.texts || []).join(' ').substring(0, 40) + '»';
             }, this).join(' | ');
-            log("📝 SRT_EDIT: fusio SINT → " + res.added.length + " entrades afegides (tol " + res.tolSec + "s) · " +
+            log("📝 SRT_EDIT: fusio SINT → " + res.added.length + " entrades afegides (" + res.trimmed + " retallades · tol " + res.tolSec + "s, retall màx " + res.maxTrimSec + "s, durada mín " + res.minDurSec + "s) · " +
+                "SINT=" + (sintName || '?') + " (" + sint.length + " entrades) · " +
                 res.rejected.length + " descartades · " + (res.entries.length - base.length) + " noves de " + res.entries.length + " · " + detall);
-            getUtils().status("Reomplert: " + res.added.length + " entrades SINT en " + res.gaps.length + " buits (MOD)", "exito");
+            getUtils().status("Reomplert: " + res.added.length + " entrades SINT en " + res.gaps.length + " buits" +
+                (res.trimmed ? " (" + res.trimmed + " retallades)" : "") + " · MOD (prem 💾 per al timeline)", "exito");
             return true;
         },
 
@@ -2100,24 +2353,31 @@
                 var w = (e.endSec - e.startSec) * this._pixelsPerSec;
                 if (w < 2) w = 2;
                 var isSel = (sel.length > 0) && (sel.indexOf(i) >= 0);
-                ctx.fillStyle = st.fill;                  // lila / taronja (SINT) / verd (MOD)
+                // (BUG #188) Entrada SINT encaixada al buit: to propi + barra a dalt.
+                var fromSint = !!e.sint;
+                ctx.fillStyle = fromSint ? st.fillSint : st.fill;   // lila / taronja (SINT) / verd (MOD)
                 ctx.fillRect(x, by, w, bh);
                 if (isSel) {
                     // F3.1: el clip SELECCIONAT es veu de seguida (vel + marc blanc)
                     ctx.fillStyle = st.sel;
                     ctx.fillRect(x, by, w, bh);
                 }
+                if (fromSint && w >= 3) {
+                    ctx.fillStyle = st.strokeSint;
+                    ctx.fillRect(x, by, w, 2);
+                }
                 if (w >= 4) {
-                    ctx.strokeStyle = isSel ? '#ffffff' : st.stroke;
+                    ctx.strokeStyle = isSel ? '#ffffff' : (fromSint ? st.strokeSint : st.stroke);
                     ctx.lineWidth = isSel ? 2 : 1;
                     ctx.strokeRect(x + (isSel ? 1 : 0.5), by + (isSel ? 1 : 0), w - (isSel ? 2 : 1), bh - (isSel ? 2 : 0));
                 }
-                // Número d'entrada (i text si cap): ajuda a saber què s'esborra
+                // Número d'entrada: prou per saber quants clips hi ha i quin s'esborra.
+                // (2026-10-23) FORA el text del subtítol dins del clip: tapava la WF i,
+                // a 8 px, era il·legible. El text es llig a la vista de vídeo / taula.
                 if (w >= 26 && bh >= 18) {
                     ctx.fillStyle = isSel ? '#101010' : 'rgba(240,235,255,0.92)';
                     ctx.font = '8px monospace';
-                    var etiqueta = (i + 1) + (e.texts && e.texts.length ? ' ' + String(e.texts[0]).substring(0, 22) : '');
-                    ctx.fillText(etiqueta, x + 3, by + bh - 4);
+                    ctx.fillText(String(i + 1), x + 3, by + bh - 4);
                 }
             }
         },
@@ -2598,43 +2858,48 @@
         _persistMarkers: function () {
             try {
                 try { window.cep.fs.makedir("C:/temp"); } catch (e1) { }
-                var data = JSON.stringify({
-                    srtName: this._srtName,
-                    srtFingerprint: this._srtFingerprint || '',
-                    projectKey: this._projectKey || '',
-                    markers: this._markers.slice(),
-                    originalMarkers: (this._originalMarkers || []).slice(),
-                    updatedAt: new Date().toISOString()
-                });
+                var data = this._markersPayload();
                 var pathMarkers = this._markersFilePath();
                 var wRes = window.cep.fs.writeFile(pathMarkers, data);
                 // Si la carpeta del projecte (UNC) no es pot escriure amb cep.fs
                 // (alguns entorns no ho permeten), cau a C:/temp per no perdre els marcadors.
                 if (wRes && wRes.err !== 0 && String(pathMarkers).indexOf('C:/temp') !== 0) {
                     var safe = (this._srtName || 'srt').replace(/[^a-zA-Z0-9_-]/g, '_');
-                    window.cep.fs.writeFile("C:/temp/fastpass_srt_markers_" + safe + ".json", JSON.stringify({
-                        srtName: this._srtName,
-                        srtFingerprint: this._srtFingerprint || '',
-                        projectKey: this._projectKey || '',
-                        markers: this._markers.slice(),
-                        originalMarkers: (this._originalMarkers || []).slice(),
-                        updatedAt: new Date().toISOString()
-                    }));
+                    window.cep.fs.writeFile("C:/temp/fastpass_srt_markers_" + safe + ".json", data);
                 }
             } catch (e) {
                 try {
                     var safe2 = (this._srtName || 'srt').replace(/[^a-zA-Z0-9_-]/g, '_');
-                    window.cep.fs.writeFile("C:/temp/fastpass_srt_markers_" + safe2 + ".json",
-                        JSON.stringify({
-                            srtName: this._srtName,
-                            srtFingerprint: this._srtFingerprint || '',
-                            projectKey: this._projectKey || '',
-                            markers: this._markers.slice(),
-                            originalMarkers: (this._originalMarkers || []).slice(),
-                            updatedAt: new Date().toISOString()
-                        }));
+                    window.cep.fs.writeFile("C:/temp/fastpass_srt_markers_" + safe2 + ".json", this._markersPayload());
                 } catch (e2) { }
             }
+        },
+
+        /**
+         * _markersPayload: JSON dels marcadors per a disc.
+         *
+         * (BUG #189) A memoria els marcadors viuen a l'eix del SRT CARREGAT, pero
+         * si eixe SRT es un SINT que s'ha alineat (`_sintShiftSec`) l'eix ja no es
+         * el del FITXER. Al disc es desa SEMPRE en l'eix del fitxer (es desfa el
+         * desplacament) perque `_restoreMarkers` el torne a aplicar: si es desessin
+         * desplacats, cada recarrega els desplaçaria una altra volta.
+         * @returns {string} JSON a escriure
+         */
+        _markersPayload: function () {
+            var sh = Number(this._sintShiftSec) || 0;
+            var toFile = function (arr) {
+                var src = Array.isArray(arr) ? arr : [];
+                if (!sh) return src.slice();
+                return src.map(function (m) { return Math.round((Number(m) - sh) * 1000) / 1000; });
+            };
+            return JSON.stringify({
+                srtName: this._srtName,
+                srtFingerprint: this._srtFingerprint || '',
+                projectKey: this._projectKey || '',
+                markers: toFile(this._markers),
+                originalMarkers: toFile(this._originalMarkers),
+                updatedAt: new Date().toISOString()
+            });
         },
 
         _restoreMarkers: async function () {
@@ -2808,15 +3073,76 @@
             getUtils().status("AJUSTAT: " + this._entries.length + " entrades", "exito");
         },
 
+        /**
+         * _entriesToTimeline: taula en coordenades de MEDIA → entrades amb temps de
+         * TIMELINE (el .srt que es col·loca a Premiere s'interpreta en timeline).
+         * Conversió: timeline = media − `_axisOrigin` (IN del primer clip).
+         * @param {Array} entries - entrades {startSec,endSec,texts}
+         * @returns {Array} entrades amb startSec/endSec de timeline (les que acaben
+         *   abans del 0 es descarten)
+         */
+        _entriesToTimeline: function (entries) {
+            var origin = this._axisOrigin || 0;
+            var out = [];
+            var list = entries || [];
+            for (var i = 0; i < list.length; i++) {
+                var e = list[i];
+                var s = Number(e.startSec) - origin;
+                var en = Number(e.endSec) - origin;
+                if (!isFinite(s) || !isFinite(en) || en <= 0) continue;
+                out.push({
+                    index: e.index, timeStr: e.timeStr || '',
+                    texts: (e.texts || []).slice(),
+                    startSec: (s < 0) ? 0 : s, endSec: en
+                });
+            }
+            return out;
+        },
+
+        /**
+         * _existingSubRanges: intervals [s,e] (TIMELINE) dels clips de subtítol que JA
+         * hi ha a la seqüència del projecte, en TOTES les pistes caption.
+         * Servix per no tornar a escriure el que ja està col·locat (`onlyMissing`).
+         * @returns {Promise<Array<{t:number,s:number,e:number}>>}
+         */
+        _existingSubRanges: async function () {
+            var jsx = "(function(){try{var s=($.global.FASTPASS&&FASTPASS.Context)?FASTPASS.Context.getWorkSequence():app.project.activeSequence;if(!s)return'[]';"
+                + "var out=[];if(s.subtitleTracks){var n=s.subtitleTracks.numTracks||s.subtitleTracks.numItems||0;"
+                + "for(var t=0;t<n;t++){var tr=s.subtitleTracks[t];for(var i=0;i<tr.clips.numItems;i++){var c=tr.clips[i];"
+                + "try{out.push({t:t,s:c.start.seconds,e:c.end.seconds})}catch(e2){}}}}"
+                + "return JSON.stringify(out)}catch(e){return'ERR:'+e.message}})()";
+            try {
+                var raw = await callJSX(jsx);
+                if (!raw || String(raw).indexOf('ERR') === 0) {
+                    log("⚠️ SRT_EDIT: no s'han pogut llegir els subtítols del timeline (" +
+                        String(raw || '').slice(0, 120) + ")");
+                    return [];
+                }
+                var arr = JSON.parse(raw);
+                return Array.isArray(arr) ? arr : [];
+            } catch (e) {
+                log("⚠️ SRT_EDIT: _existingSubRanges: " + e.message);
+                return [];
+            }
+        },
+
         exportToPremiere: async function (opts) {
-            if (this._entries.length === 0) { getUtils().status("No hi ha entrades per exportar", "warn"); return; }
+            var o = opts || {};
+            // (F3.6, 2026-10-23 · BUG #186) Font de les entrades: per defecte la taula
+            // viva; `o.entries` permet exportar NOMÉS un subconjunt (p.ex. els clips
+            // SINT afegits als buits) sense tocar la resta.
+            var srcEntries = (o.entries && o.entries.length) ? o.entries : this._entries;
+            if (!srcEntries || srcEntries.length === 0) {
+                getUtils().status("No hi ha entrades per exportar", "warn");
+                return false;
+            }
             // (F3.2) Pista de destí: `opts.track` (0 = s1, 1 = s2). Per defecte els
             // SINTETICS van a S2 per poder tenir-los AL COSTAT del SRT normal sense
             // barrejar-los; NORMAL i MOD van a S1.
-            var o = opts || {};
             var trackIdx = (o.track != null) ? parseInt(o.track, 10) : ((this._kind === 'SINT') ? 1 : 0);
             if (!isFinite(trackIdx) || trackIdx < 0) trackIdx = 0;
-            log("📝 SRT_EDIT: exportant taula " + (this._kind || 'NORMAL') + " → pista S" + (trackIdx + 1));
+            log("📝 SRT_EDIT: exportant " + srcEntries.length + " entrades de la taula " + (this._kind || 'NORMAL') +
+                " → pista S" + (trackIdx + 1) + (o.onlyMissing ? " (NOMÉS BUITS: no toca els clips que ja hi ha)" : ""));
             this._hideEditor();
             var projectFolder = await callJSX("Context.folder()");
             if (!projectFolder || projectFolder.indexOf('ERR') === 0) projectFolder = "C:\\temp";
@@ -2835,17 +3161,34 @@
             // contigu a velocitat 1x, així que media - origin = timeline exacte).
             // (NO fem servir _tlAtMedia aquí perquè retorna el valor sense convertir
             //  quan el temps cau fora del darrer segment, inflant la durada del darrer clip.)
-            var origin = this._axisOrigin || 0;
-            var exportEntries = this._entries
-                .map(function (e) {
-                    var s = e.startSec - origin;
-                    var en = e.endSec - origin;
-                    return { index: e.index, timeStr: e.timeStr, texts: e.texts.slice(),
-                             startSec: (s < 0) ? 0 : s, endSec: en };
-                })
-                .filter(function (e) { return e.endSec > 0; });
+            var exportEntries = this._entriesToTimeline(srcEntries);
+            // (BUG #186 · 2026-10-23) EXPORTACIÓ NO DESTRUCTIVA (`onlyMissing`): les
+            // entrades que ja tenen un clip de subtítol al timeline (qualsevol pista) NO
+            // es tornen a escriure. Servix per AFEGIR al costat del SRT base sense
+            // esborrar-lo: era exactament la queixa ("ha eliminat els clips que hi havia").
+            if (o.onlyMissing) {
+                var exRanges = await this._existingSubRanges();
+                var tol = (o.tolSec != null && isFinite(Number(o.tolSec))) ? Number(o.tolSec) : 0.2;
+                var kept = [];
+                for (var q = 0; q < exportEntries.length; q++) {
+                    var eq = exportEntries[q];
+                    var dup = false;
+                    for (var r = 0; r < exRanges.length; r++) {
+                        if (eq.startSec < exRanges[r].e + tol && eq.endSec > exRanges[r].s - tol) { dup = true; break; }
+                    }
+                    if (!dup) kept.push(eq);
+                }
+                log("📝 SRT_EDIT: NOMÉS BUITS → " + kept.length + "/" + exportEntries.length +
+                    " entrades (la resta ja tenen clip al timeline · " + exRanges.length +
+                    " clips de subtítol existents · tol=" + tol + "s)");
+                exportEntries = kept;
+                if (exportEntries.length === 0) {
+                    getUtils().status("Cap entrada nova: el timeline ja les té totes", "warn");
+                    return false;
+                }
+            }
             if (exportEntries.length > 0) {
-                log("📝 SRT_EDIT: Exportant " + exportEntries.length + " entrades (de " + this._entries.length + "), timeline [" + exportEntries[0].startSec.toFixed(2) + "s → " + exportEntries[exportEntries.length - 1].endSec.toFixed(2) + "s]");
+                log("📝 SRT_EDIT: Exportant " + exportEntries.length + " entrades (de " + srcEntries.length + "), timeline [" + exportEntries[0].startSec.toFixed(2) + "s → " + exportEntries[exportEntries.length - 1].endSec.toFixed(2) + "s]");
             }
             var srtContent = window.FASTPASS_UI.Logic.SrtParser.entriesToSrt(exportEntries);
             if (!srtContent) { getUtils().status("Error generant SRT", "error"); return; }
@@ -2855,19 +3198,26 @@
             if (writeResult !== "OK") {
                 try { window.cep.fs.writeFile(modPath, srtContent); } catch(e) { getUtils().status("Error escrivint _MOD.srt", "error"); return; }
             }
-            // 1) Eliminar els clips de subtítols NOMES de la PISTA DE DESTÍ (F3.2:
-            //    exportar els SINT a S2 no pot esborrar el SRT normal de S1, ni al
-            //    revés). Abans es netejaven TOTES les pistes de subtítols.
+            // 1) Netejar NOMÉS el TRAM que s'escriurà, i només a la PISTA DE DESTÍ.
+            //    (BUG #186 · 2026-10-23) Abans s'esborraven TOTS els clips de la pista:
+            //    si el timeline ja tenia subtítols, una exportació els feia desaparéixer.
+            //    Ara només es substituïxen els que SOLAPEN amb el rang que es col·loca;
+            //    la resta del timeline queda intacta.
+            var fromTl = exportEntries[0].startSec;
+            var toTl = exportEntries[exportEntries.length - 1].endSec;
             try {
-                var cleanJsx = "(function(){try{var s=app.project.activeSequence;if(!s)return'ERR_NO_SEQ';"
-                    + "var removed=0,tt=" + trackIdx + ";if(s.subtitleTracks){var n=s.subtitleTracks.numTracks||s.subtitleTracks.numItems||0;"
+                var cleanJsx = "(function(){try{var s=($.global.FASTPASS&&FASTPASS.Context)?FASTPASS.Context.getWorkSequence():app.project.activeSequence;if(!s)return'ERR_NO_SEQ';"
+                    + "var removed=0,kept=0,tt=" + trackIdx + ",from=" + fromTl.toFixed(3) + ",to=" + toTl.toFixed(3) + ";"
+                    + "if(s.subtitleTracks){var n=s.subtitleTracks.numTracks||s.subtitleTracks.numItems||0;"
                     + "if(tt<n){var tr=s.subtitleTracks[tt];"
-                    + "for(var i=tr.clips.numItems-1;i>=0;i--){try{tr.clips[i].remove();removed++}catch(e2){}}}}"
-                    + "return'OK_removed_'+removed}catch(e){return'ERR:'+e.message}})()";
+                    + "for(var i=tr.clips.numItems-1;i>=0;i--){var c=tr.clips[i],cs=0,ce=0;"
+                    + "try{cs=c.start.seconds;ce=c.end.seconds}catch(e0){cs=-1;ce=-1}"
+                    + "if(ce>from&&cs<to){try{c.remove();removed++}catch(e2){}}else{kept++}}}}"
+                    + "return'OK_removed_'+removed+'_kept_'+kept}catch(e){return'ERR:'+e.message}})()";
                 var cleanResult = await callJSX(cleanJsx);
-                log("📝 SRT_EDIT: nets subtítols antics de S" + (trackIdx + 1) + ": " + cleanResult);
+                log("📝 SRT_EDIT: tram [" + fromTl.toFixed(2) + "s → " + toTl.toFixed(2) + "s] netejat a S" + (trackIdx + 1) + ": " + cleanResult);
             } catch(e) {
-                log("⚠️ SRT_EDIT: Error netejant subtítols antics: " + e.message);
+                log("⚠️ SRT_EDIT: Error netejant el tram de subtítols: " + e.message);
             }
 
             // 2) Eliminar els items _MOD.srt anteriors del projecte (recursiu). Si no es fa,
@@ -2893,11 +3243,22 @@
             }
             this._timelineSubs = null;
             if (captionResult === "OK" || String(captionResult).indexOf("OK_S") === 0) {
-                var tlFirst = this._tlAtMedia(this._entries[0].startSec);
+                // (F3.6 · 2026-10-23) ETIQUETA DE COLOR per als clips AFEGITS: cada
+                // exportació crea el seu propi .srt al projecte (`_MOD_<timestamp>`), així
+                // que pintar eixe item no afecta les altres taules ja col·locades.
+                var colLabel = (o.colorLabel != null) ? parseInt(o.colorLabel, 10) : NaN;
+                if (isFinite(colLabel) && colLabel >= 0) {
+                    var colRes = await callJSX("FASTPASS.Clips.setItemColorLabel('" + encodeURIComponent(modName) + "'," + colLabel + ")");
+                    log("🎨 SRT_EDIT: etiqueta de color " + colLabel + " a " + modName + " → " + colRes);
+                }
+                var tlFirst = this._tlAtMedia(srcEntries[0].startSec);
                 var onTrack = await this._detectExportTrack(tlFirst, trackIdx);
-                getUtils().status("Exportat: " + this._entries.length + " entrades → S" + onTrack, "exito");
+                getUtils().status("Exportat: " + exportEntries.length + " entrades → S" + onTrack, "exito");
                 log("✅ SRT_EDIT: Export OK " + modName + " (taula " + this._kind + " → S" + onTrack + ")");
-            } else { getUtils().status("Error col·locant subtítols: " + captionResult, "error"); }
+                return true;
+            }
+            getUtils().status("Error col·locant subtítols: " + captionResult, "error");
+            return false;
         },
 
         /**
@@ -2990,6 +3351,7 @@
             this._clearSelection(); this._kind = 'NORMAL'; this._views = {}; this._timelineSubs = null; this._timelineSubsAt = 0;
             this._waveformPeaks = null; this._waveformPPS = 480; this._wfCacheKey = ""; this._wfPixelHeights = null; this._isPlaying = false;
             this._waveformSegments = []; this._waveformMediaTag = ""; this._pollCount = 0;
+            this._gapAdded = [];   // (F3.6) res pendent d'exportar a S2
             this._wfMediaStart = 0; this._wfMediaEnd = 0;
             this._clearEditWindow();   // (#132)
             this._markers = []; this._originalMarkers = []; this._dragIdx = -1;

@@ -11,7 +11,7 @@ Extensió CEP **sense instal·lador**: CEP carrega qualsevol carpeta que hi hagi
 |----------|--------|
 | Sistema | Windows 10 / 11 (les rutes del projecte són UNC de xarxa Windows). |
 | Adobe Premiere Pro | Versió **14.0 o superior** (el manifest declara `PPRO [14.0, 99.0]`). |
-| Xarxa | Accés als recursos NAS del projecte (escaletes, `VERTICALITZACIO_INFORMATIUS`, projectes PROVES…). |
+| Xarxa | Accés als recursos NAS del projecte (rètols, subtítols de 15 min, exports, portades, projectes PROVES…). |
 | (Opcional) ffmpeg | Per als talls de precisió i conversions — vegeu §5. |
 
 ---

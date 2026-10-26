@@ -67,7 +67,6 @@
         function reset(dates) {
             Scan._wottDateCache = dates ? {} : null;
             Scan._wottProbeCache = null;
-            Scan._mp4ProbeCache = null;      // (2026-10-21 · #177) MP4 origen del bloc
             readdirCalls = 0;
             statCalls = 0;
             failMode = false;
@@ -206,57 +205,17 @@
                 Math.abs(rDom.dur - 1.00) < 1e-6 && Math.abs(rEst.dur - 6.20) < 1e-6,
                 'dom=' + (rDom && rDom.dur) + ' est=' + (rEst && rEst.dur));
 
-            // ── J. MP4 ORIGEN: la segona sonda dels 3 estats (2026-10-21 · #177) ──
-            // MASSA D'HORA (ni MP4 ni wotts) ≠ ESPERA (MP4 sí, wotts no) ≠ CREA.
-            // `mp4Today` ha de ser BARAT: noms per Node i stat NOMÉS dels candidats
-            // que no porten data al nom.
-            ok('#WOTT/14 Scanner.mp4Today carregat (sonda del MP4 origen, sense escaneig ExtendScript)',
-                !!(Scan && typeof Scan.mp4Today === 'function'), 'mp4Today=' + !!(Scan && Scan.mp4Today));
-            if (Scan && typeof Scan.mp4Today === 'function') {
-                var MV = 'Y:' + BS + 'VERT' + BS;
-                var ctxM = {
-                    config: { rutas: { verticalitzacio: MV } },
-                    progData: { archivo: 'TN_VESPRE', wott: 'TNV' },
-                    bloque: 'V1',
-                    dateDir: '2026_10_21'
-                };
-                var M_AVUI   = 'TN_VESPRE_V1_20261021_1200.mp4';
-                var M_AHIR   = 'TN_VESPRE_V1_20261020_1200.mp4';
-                var M_SENSE  = 'TN_VESPRE_V1_INGESTA.mp4';     // sense data al nom → birthtime
-                var M_ALTRE  = 'TN_MIGDIA_V1_20261021_1200.mp4'; // altre bloc → fora
-
-                files = {};
-                files[M_AVUI]  = localMs(2026, 10, 21, 12);
-                files[M_AHIR]  = localMs(2026, 10, 20, 12);
-                files[M_SENSE] = localMs(2026, 10, 21, 13);
-                files[M_ALTRE] = localMs(2026, 10, 21, 12);
-                reset(true);
-                var m1 = await Scan.mp4Today(ctxM);
-                ok('#WOTT/15 mp4Today: 2 MP4 del bloc+dia (nom amb data i nom sense data per birthtime)',
-                    m1.ok && m1.found && m1.via === 'node' && statCalls === 1,
-                    'ok=' + m1.ok + ' found=' + m1.found + ' via=' + m1.via + ' stats=' + statCalls);
-                var m2 = await Scan.mp4Today(ctxM);
-                ok('#WOTT/16 mp4Today: segona crida de memòria curta (0 readdir, 0 stats)',
-                    m2.found && readdirCalls === 1 && statCalls === 1,
-                    'readdir=' + readdirCalls + ' stats=' + statCalls);
-
-                files = {};
-                files[M_AHIR] = localMs(2026, 10, 20, 12);
-                reset(true);
-                var m3 = await Scan.mp4Today(ctxM);
-                ok('#WOTT/17 mp4Today: l MP4 d ahir no compta (ok però found=false → MASSA D\'HORA)',
-                    m3.ok === true && m3.found === false && !m3.name,
-                    'ok=' + m3.ok + ' found=' + m3.found);
-
-                files = {};
-                files[M_AVUI] = localMs(2026, 10, 21, 12);
-                reset(true);
-                failMode = true;
-                var m4 = await Scan.mp4Today(ctxM);
-                ok('#WOTT/18 mp4Today: si no es pot llistar → ok=false (no es pot afirmar MASSA D\'HORA)',
-                    m4.ok === false && m4.found === false, 'ok=' + m4.ok + ' via=' + (m4.via || '-'));
-                failMode = false;
-            }
+            // ── J. SONDES DEL NAS RETIRADES (2026-10-23) ──────────────────────
+            // El vídeo del projecte ix NOMÉS de la captura del cleanFeed i els
+            // subtítols, del .srt que viu al costat del .prproj. Han desaparegut
+            // de Scanner: `mediaAssets` (MP4/SRT del bloc), `srtFallback` (SRT de
+            // recanvi) i `mp4Today` (estat del MP4 origen del bloc).
+            ok('#WOTT/14 Scanner: fora les sondes del NAS (mediaAssets/srtFallback/mp4Today)',
+                Scan && Scan.mediaAssets === undefined && Scan.srtFallback === undefined &&
+                Scan.mp4Today === undefined && Scan._filterMediaByDate === undefined,
+                'mediaAssets=' + !!(Scan && Scan.mediaAssets) +
+                ' srtFallback=' + !!(Scan && Scan.srtFallback) +
+                ' mp4Today=' + !!(Scan && Scan.mp4Today));
 
             // ── K. ARRENCADA SENSE Ctrl = AVUI + 3 ESTATS (2026-10-21 · #177) ──
             // Sense Ctrl NO es pot carregar el projecte d'AHIR ni que el panell haja
@@ -266,13 +225,16 @@
             var iProj = ctxSrc.indexOf('St.projectDateDir && St.projectDateDir !== todayYmd');
             ok('#WOTT/19 _targetDateDir: sense Ctrl la data és AVUI (projectDateDir només amb Ctrl)',
                 iStrict > 0 && iProj > iStrict, 'strict=' + iStrict + ' projectDate=' + iProj);
-            ok('#WOTT/20 checkContext: ESPERA quan hi ha MP4 origen i encara no wotts (sonda _mediaToday)',
-                ctxSrc.indexOf('_mediaToday') > 0 && ctxSrc.indexOf("earlyState = 'ESPERANT'") > 0 &&
-                /else if \(mp4\.found\)/.test(ctxSrc),
+            ok('#WOTT/20 checkContext: la sonda de wotts és l ÚNICA (s ha retirat _mediaToday)',
+                ctxSrc.indexOf('_mediaToday') === -1 &&
+                ctxSrc.indexOf('const wots = await this._wottsToday(ctx)') > 0,
                 'media=' + (ctxSrc.indexOf('_mediaToday') > 0) +
-                ' esperant=' + (ctxSrc.indexOf("earlyState = 'ESPERANT'") > 0));
-            ok('#WOTT/21 checkContext: MASSA D\'HORA només si el llistat diu que NO hi ha MP4 (mp4.ok)',
-                /else if \(mp4\.ok\)/.test(ctxSrc) && ctxSrc.indexOf("earlyState = 'MASSA'") > 0);
+                ' wots=' + (ctxSrc.indexOf('this._wottsToday(ctx)') > 0));
+            ok('#WOTT/21 checkContext: MASSA D\'HORA només si la sonda diu que NO hi ha wotts',
+                ctxSrc.indexOf("earlyState = 'MASSA'") > 0 && ctxSrc.indexOf('else if (!wots.ok)') > 0 &&
+                ctxSrc.indexOf('mp4.found') === -1 && ctxSrc.indexOf('mp4.ok') === -1,
+                'massa=' + (ctxSrc.indexOf("earlyState = 'MASSA'") > 0) +
+                ' ko=' + (ctxSrc.indexOf('else if (!wots.ok)') > 0));
             ok('#WOTT/22 botó MAIN: etiquetes CREA / ESPERA (i cap rastre del vell "CREAR permès")',
                 ctxSrc.indexOf('btn.innerText = "CREA"') > 0 &&
                 ctxSrc.indexOf('btn.innerText = "ESPERA"') > 0 &&
@@ -282,9 +244,9 @@
                 /if \(placeEnd !== null && \(placeEnd - slot\.start\) > REV_FRAME \+ 0\.001\) \{/.test(chySrc) &&
                 /placeEnd = gridDown\(placeEnd - REV_FRAME\);/.test(chySrc));
             var idxW = await readRepo('index.html');
-            ok('#WOTT/24 cache-bust del #177/#182c/#183 (4_Context 30, flow_chyrons 85, Scanner 17)',
-                /4_Context\.js\?v=30/.test(idxW) && /flow_chyrons\.js\?v=85/.test(idxW) &&
-                /Scanner\.js\?v=17/.test(idxW),
+            ok('#WOTT/24 cache-bust al dia (4_Context, flow_chyrons, Scanner)',
+                /4_Context\.js\?v=31/.test(idxW) && /flow_chyrons\.js\?v=85/.test(idxW) &&
+                /Scanner\.js\?v=22/.test(idxW),
                 (idxW.match(/4_Context\.js\?v=\d+/) || '') + ' ' +
                 (idxW.match(/flow_chyrons\.js\?v=\d+/) || '') + ' ' +
                 (idxW.match(/Scanner\.js\?v=\d+/) || ''));
@@ -361,18 +323,17 @@
                 /if \(_ccInFlight\) \{/.test(ctxSrc) &&
                 /if \(_opts && _opts\.force\) _ccAgain = true;/.test(ctxSrc) &&
                 ctxSrc.indexOf('return await _ccInFlight;') > 0);
-            ok('#WOTT/28 sondes del NAS: espera limitada (PROBE_TIMEOUT_MS) i en PARAL·LEL',
+            ok('#WOTT/28 sonda de wotts: espera limitada (PROBE_TIMEOUT_MS) i sense sonda d MP4',
                 /PROBE_TIMEOUT_MS: 8000/.test(ctxSrc) &&
                 /this\._withTimeout\(sc\.wottsToday\(ctx\), this\.PROBE_TIMEOUT_MS/.test(ctxSrc) &&
-                /this\._withTimeout\(sc\.mp4Today\(ctx\), this\.PROBE_TIMEOUT_MS/.test(ctxSrc) &&
-                /Promise\.all\(\[this\._wottsToday\(ctx\), this\._mediaToday\(ctx\)\]\)/.test(ctxSrc) &&
-                ctxSrc.indexOf('const mp4 = await this._mediaToday(ctx)') === -1);
+                ctxSrc.indexOf('_mediaToday') === -1 &&
+                ctxSrc.indexOf('mp4Today') === -1);
             var scanSrc = await readRepo('js/logic/Scanner.js');
             ok('#WOTT/29 Scanner: dedupe (_probeInflight/_probeKey) i marques [SCAN] a l arrencada',
-                /_probeKey: function \(ctx, kind\)/.test(scanSrc) &&
+                /_probeKey: function \(ctx\)/.test(scanSrc) &&
                 /_probeInflight\[key\] = p;/.test(scanSrc) &&
                 scanSrc.indexOf("_bm('wotts · llistat (") > 0 &&
-                scanSrc.indexOf("_bm('MP4 · datació (") > 0 &&
+                scanSrc.indexOf("_bm('MP4 · ") === -1 &&
                 scanSrc.indexOf("_bm('wotts · datació (") > 0);
 
             // ── M. Ctrl+clic (AHIR) QUE «NO FEIA RES» (2026-10-22 · #181) ────────
@@ -552,8 +513,8 @@
                 /else if \(escReady\) \{/.test(ctxSrc) &&
                 ctxSrc.indexOf('CREA: escaleta local') > 0);
 
-            ok('#WOTT/39 cache-bust del #182 (4_Context 30 · Scanner 17)',
-                /4_Context\.js\?v=30/.test(idxW) && /Scanner\.js\?v=17/.test(idxW),
+            ok('#WOTT/39 cache-bust del #182 (4_Context 31 · Scanner 22)',
+                /4_Context\.js\?v=31/.test(idxW) && /Scanner\.js\?v=22/.test(idxW),
                 (idxW.match(/4_Context\.js\?v=\d+/) || '') + ' ' + (idxW.match(/Scanner\.js\?v=\d+/) || ''));
 
             // (2026-10-22 · #182) TESTIMONI al log: si el stat d'UNC no dóna cap data,

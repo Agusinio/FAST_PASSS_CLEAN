@@ -297,62 +297,91 @@
         /**
          * _srtCtx: Construeix el context {config, progData, bloque, dateDir} des dels
          * selectors del panell i de l'estat (mateixes fonts que MainButton/SrtEditor).
-         * @returns {Object|null}
+         *
+         * (2026-10-23 · BUG #187) LA DATA ÉS LA DEL PROJECTE OBERT, NO LA DEL RELLOTGE.
+         * `State.dateDir` és «avui» quasi sempre (`Context._targetDateDir` només mira el
+         * calendari), així que editant el projecte d'AHIR (`2026_10_22/V3`) el SINT es
+         * buscava a la carpeta amb data 2026_10_23: allí només hi havia sintètics de
+         * MATINS → es va carregar `MATINS_V5_GUIO_LA_PLOMA_…` en un bloc de TN_COMARQUES.
+         * Ordre de preferència (font de veritat primer):
+         *   1) path real del .prproj obert (`Context._resolveProjectDateDir`)
+         *   2) `State.projectDateDir` (data fixada en crear/obrir)
+         *   3) `State.dateDir` (data de treball del panell)
+         *   4) rellotge (`getFormattedDate`)
+         * @returns {Promise<Object|null>}
          */
-        _srtCtx: function () {
+        _srtCtx: async function () {
             const config = FASTPASS_UI.Config.get();
             const idProg = (document.getElementById('programa') || {}).value;
             const progData = config.mapeoProgramas && config.mapeoProgramas[idProg];
             if (!progData) return null;
             const bloque = (document.getElementById('bloc') || {}).value;
-            const dateDir = (FASTPASS_UI.State && FASTPASS_UI.State.dateDir) ||
-                getUtils().getFormattedDate().replace(/["\s]/g, "").trim();
+            const St = (window.FASTPASS_UI && window.FASTPASS_UI.State) ? window.FASTPASS_UI.State : {};
+            let dateDir = null, dateSrc = '';
+            // 1) Data REAL de la carpeta del projecte obert
+            try {
+                const Ctx = window.FASTPASS_UI.Core && window.FASTPASS_UI.Core.Context;
+                if (Ctx && typeof Ctx._resolveProjectDateDir === 'function') {
+                    const dReal = await Ctx._resolveProjectDateDir();
+                    if (dReal) { dateDir = dReal; dateSrc = 'projecte obert'; }
+                }
+            } catch (eD) {
+                log("⚠️ SRT_CTX: no s'ha pogut resoldre la data del projecte obert: " + eD.message);
+            }
+            // 2) Data fixada en crear/obrir el projecte
+            if (!dateDir && St.projectDateDir) { dateDir = St.projectDateDir; dateSrc = 'State.projectDateDir'; }
+            // 3) Data de treball del panell · 4) rellotge
+            if (!dateDir && St.dateDir) { dateDir = St.dateDir; dateSrc = 'State.dateDir (panell)'; }
+            if (!dateDir) {
+                dateDir = getUtils().getFormattedDate().replace(/["\s]/g, "").trim();
+                dateSrc = 'rellotge';
+            }
+            if (St.dateDir && St.dateDir !== dateDir) {
+                log("📅 SRT_CTX: data de treball = " + dateDir + " (" + dateSrc + "); el panell deia " +
+                    St.dateDir + " → mana el projecte obert", "INFO");
+            } else {
+                log("📅 SRT_CTX: data de treball = " + dateDir + " (" + dateSrc + ")", "INFO");
+            }
             return { config: config, progData: progData, programa: idProg, bloque: bloque, dateDir: dateDir };
         },
 
         /**
-         * runSrtFallback: Càrrega de subtítols de RECANVI quan el mecanisme principal
-         * (blocs de 15 min) no troba res.
-         * Busca el .SRT a la carpeta de verticalització (la MATEIXA on viuen els MP4 del
-         * bloc) amb relaxació progressiva de filtres (Scan.srtFallback) i el carrega a
-         * l'editor de subtítols amb SrtEditor.loadSrt (que llegeix el fitxer, munta la
-         * taula d'entrades, la waveform i els marcadors). NO importa res al projecte.
-         * @returns {boolean} true si s'ha carregat algun SRT
+         * _sintInMemoryPath (2026-10-23 · BUG #187): path del .srt SINT que hi ha a
+         * l'editor, tant si està VIU (`_kind='SINT'`) com guardat a `_views.SINT`.
+         * @returns {string} path o '' si no n'hi ha cap
          */
-        runSrtFallback: async function () {
-            log("🆘 SRT_FALLBACK: cercant .SRT a la carpeta de verticalització...");
-            try {
-                const ctx = this._srtCtx();
-                if (!ctx) { getUtils().status("Selecciona un programa", "warn"); return false; }
-                if (!window.SrtEditor || !window.SrtEditor.loadSrt) {
-                    getUtils().status("Error: SrtEditor no disponible", "error");
-                    return false;
-                }
-                const cand = await getScanner().srtFallback(ctx);
-                if (!cand) {
-                    // (2026-09-22) El fallback NO surt mai del dia de treball: si no hi ha cap
-                    // .SRT d'aquesta data, no es carrega res (abans podia carregar el d'AHIR).
-                    const fecha = String(ctx.dateDir || '').replace(/_/g, '-');
-                    getUtils().status("SRT: no hi ha cap .SRT del dia " + (fecha || '?') + " — no es carrega res", "warn");
-                    log("⚠️ SRT_FALLBACK: cap .SRT de la data " + (ctx.dateDir || "?") + " a " + (ctx.config.rutas.verticalitzacio || "?"));
-                    return false;
-                }
-                log("🆘 SRT_FALLBACK: N" + cand.level + " (" + cand.reason + ", " + cand.candidates +
-                    " candidat(s)) → " + cand.path);
-                const ok = await window.SrtEditor.loadSrt(cand.path);
-                if (ok) {
-                    getUtils().status("SRT carregat (fallback N" + cand.level + "): " + cand.name, "exito");
-                    log("✅ SRT_FALLBACK: carregat a l'editor: " + cand.name);
-                    return true;
-                }
-                getUtils().status("Fallback: no s'ha pogut carregar " + cand.name, "error");
-                return false;
-            } catch (e) {
-                log("💥 SRT_FALLBACK: " + e.message);
-                getUtils().handleError(e, "SrtFallback");
-                return false;
-            }
+        _sintInMemoryPath: function (ed) {
+            if (!ed) return '';
+            if (String(ed._kind || '').toUpperCase() === 'SINT' && ed._srtPath) return String(ed._srtPath);
+            const v = ed._views && ed._views['SINT'];
+            return (v && v.path) ? String(v.path) : '';
         },
+
+        /**
+         * _sintBelongsTo (2026-10-23 · BUG #187): el SINT que hi ha en memòria és del
+         * programa del panell? Sense esta guarda, un SINT carregat per error es
+         * reutilitzava indefinidament (`hasView('SINT')` → «recuperat de memòria»).
+         * @returns {{ok:boolean, name:string, motivo:string}}
+         */
+        _sintBelongsTo: function (ed, progData) {
+            const p = this._sintInMemoryPath(ed);
+            if (!p) return { ok: false, name: '', motivo: 'cap SINT en memòria' };
+            const name = p.split(/[\\\/]/).pop();
+            const scan = getScanner();
+            const tok = (scan && typeof scan._sintNameMatchesProg === 'function')
+                ? scan._sintNameMatchesProg(name, progData) : null;
+            if (tok) return { ok: true, name: name, motivo: 'programa ' + tok };
+            return {
+                ok: false,
+                name: name,
+                motivo: 'NO és del programa ' + String((progData && progData.archivo) || '?') + ' (' + name + ')'
+            };
+        },
+
+        // (2026-10-23) RETIRAT `runSrtFallback`: buscava el .SRT de recanvi a la carpeta
+        // de VERTICALITZACIO del NAS. Els subtitols del projecte surten dels blocs de
+        // 15 min (`SrtEditor.loadEmergencySrt`) o del .srt que viu al costat del .prproj.
+
 
         /**
          * runSrtReset (2026-09-22): Botó ♻️ (RESET / neteja subtítols).
@@ -360,58 +389,40 @@
          *      edicions, sense marcadors (esborrats de memòria **i del disc**, #138) i
          *      esborra els clips de subtítols de la seqüència
          *      (comportament de sempre: `SrtEditor.resetToOriginal`).
-         *   2. **TORNA A BUSCAR els .SRT DEL TEMA** del bloc i el carrega: mateix mecanisme
-         *      que el SCAN principal (`Scan.mediaAssets` amb el tema detectat → carpeta de
-         *      verticalització, prefix `{archivo}_{bloque}_` + data de treball) i, si no en
-         *      troba, el fallback del MATEIX DIA (`Scan.srtFallback`). Així el reset també
-         *      "refresca" quin subtítol toca, no només la taula.
-         * Mai surt del dia de treball (2026-09-22: prohibit carregar SRT d'un altre dia).
+         *   2. **TORNA A CARREGAR el mateix .srt** (el que viu al costat del .prproj o
+         *      l'emergència de 15 min) amb els marcadors del disc buidats; si no n'hi ha
+         *      cap, carrega l'emergència (`runSrtLoad`).
+         * (2026-10-23) Ja NO es busca cap .SRT a la carpeta de VERTICALITZACIÓ: eixa
+         * carpeta ha desaparegut del flux.
          */
         runSrtReset: async function () {
             const ed = window.SrtEditor;
             if (!ed || !ed.resetToOriginal) { getUtils().status("Error: SrtEditor no disponible", "error"); return; }
-            log("♻️ SRT_RESET: reiniciant subtítols i tornant a buscar els .SRT del tema...");
+            log("♻️ SRT_RESET: reiniciant subtítols i recarregant el .srt del projecte...");
 
             // 1) Estat inicial (taula, marcadors i clips de subtítols de la seqüència)
             try { await ed.resetToOriginal(); } catch (eR) { log("⚠️ SRT_RESET: " + eR.message, "WARN"); }
 
-            // 2) Tornar a buscar el .SRT del tema del bloc
+            // 2) Recarregar el fitxer que ja teníem (o l'emergència si no n'hi ha)
             try {
-                const ctx = this._srtCtx();
-                if (!ctx) { getUtils().status("Selecciona un programa", "warn"); return; }
-                const tema = (FASTPASS_UI.State && FASTPASS_UI.State.detectedTheme) || '';
-                log("🔎 SRT_RESET: buscant .SRT del tema" + (tema ? ' ("' + tema + '")' : '') +
-                    " · bloc " + (ctx.bloque || '?') + " · data " + (ctx.dateDir || '?'));
-
-                const media = await getScanner().mediaAssets(ctx, tema);
-                let cand = (media && media.srt) ? media.srt : null;
-                let via = 'mediaAssets';
-                if (!cand) {
-                    cand = await getScanner().srtFallback(ctx);
-                    via = 'fallback (dia de treball)';
-                }
-                if (!cand) {
-                    const fecha = String(ctx.dateDir || '').replace(/_/g, '-');
-                    getUtils().status("SRT reset · cap .SRT del tema amb data " + (fecha || '?') + " — no es carrega res", "warn");
-                    log("⚠️ SRT_RESET: cap .SRT del tema/bloc per a la data " + (ctx.dateDir || '?'));
+                const cur = String(ed._srtPath || '');
+                if (!cur) {
+                    log("ℹ️ SRT_RESET: no hi ha cap .srt carregat → es carrega l'emergència.");
+                    await this.runSrtLoad();
                     return;
                 }
                 if (!ed.loadSrt) { getUtils().status("Error: SrtEditor.loadSrt no disponible", "error"); return; }
-
-                log("♻️ SRT_RESET: " + via + " → " + cand.path);
+                log("♻️ SRT_RESET: recarregant " + cur);
                 // (2026-10-02 · BUG #138) Els marcadors s'han d'esborrar TAMBÉ al disc del
-                // .srt que es torna a carregar. `loadSrt` els restaura del fitxer persistit
-                // al projecte i, com que el RESET sol carregar un .srt DIFERENT del que hi
-                // havia obert (p. ex. l'emergència de 15 min → el .srt del tema), les
-                // marques velles tornaven a aparèixer i semblava que el RESET no les
-                // esborrés. El fitxer queda buit i la restauració se salta en aquesta càrrega.
-                if (ed._wipeMarkersFile) ed._wipeMarkersFile(cand.path);
-                const ok = await ed.loadSrt(cand.path, { skipMarkerRestore: true });
+                // .srt que es torna a carregar; si no, `loadSrt` els restaura del fitxer
+                // persistit i sembla que el RESET no els haja esborrat.
+                if (ed._wipeMarkersFile) ed._wipeMarkersFile(cur);
+                const ok = await ed.loadSrt(cur, { skipMarkerRestore: true });
                 if (ok) {
-                    getUtils().status("SRT resetejat i recarregat: " + cand.name, "exito");
-                    log("✅ SRT_RESET: carregat a l'editor: " + cand.name);
+                    getUtils().status("SRT resetejat i recarregat: " + cur.split(/[\\/]/).pop(), "exito");
+                    log("✅ SRT_RESET: carregat a l'editor: " + cur);
                 } else {
-                    getUtils().status("SRT reset · no s'ha pogut carregar " + cand.name, "error");
+                    getUtils().status("SRT reset · no s'ha pogut carregar " + cur, "error");
                 }
             } catch (e) {
                 log("💥 SRT_RESET: " + e.message);
@@ -421,29 +432,66 @@
 
         /**
          * runSrtLoad: Punt d'entrada del botó ⬇️ (CARREGAR).
-         *   1. Mecanisme PRINCIPAL: blocs de 15 min (SrtEditor.loadEmergencySrt).
-         *   2. Si no ha carregat res → FALLBACK (carpeta de verticalització).
-         * @param {boolean} [forceFallback] - true (Ctrl+clic) → va directe al fallback.
+         * Carrega els .SRT dels blocs de 15 min que solapen el bloc
+         * (`SrtEditor.loadEmergencySrt`, carpeta `rutas.subtitulos`) i els
+         * re-temporitza contra l'inici del clip extret. NO importa res al projecte.
+         * Si el fitxer carregat és DIFERENT del que hi havia, es buiden al disc els
+         * marcadors persistits d'eixe .srt (no arrosseguem marques d'un altre fitxer).
          */
-        runSrtLoad: async function (forceFallback) {
+        runSrtLoad: async function () {
             const ed = window.SrtEditor;
             if (!ed || !ed.loadSrt) { getUtils().status("Error: SrtEditor no disponible", "error"); return; }
-            if (!forceFallback) {
-                // El carregador d'emergència no retorna si ha reeixit → es compara el
-                // fitxer carregat ABANS i DESPRÉS (_srtPath el fixa loadSrt).
-                const before = String(ed._srtPath || '');
-                log("📥 SRT_LOAD: mecanisme principal (blocs de 15 min)...");
-                try { await ed.loadEmergencySrt(); } catch (eE) { log("⚠️ SRT_LOAD: emergència: " + eE.message); }
-                const after = String(ed._srtPath || '');
-                if (after && after !== before) {
-                    log("✅ SRT_LOAD: carregat amb els blocs de 15 min: " + after);
-                    return;
-                }
-                log("⚠️ SRT_LOAD: els blocs de 15 min no han carregat res → FALLBACK.");
-            } else {
-                log("📥 SRT_LOAD: Ctrl+clic → FALLBACK directe.");
+            // El carregador d'emergència no retorna si ha reeixit → es compara el
+            // fitxer carregat ABANS i DESPRÉS (_srtPath el fixa loadSrt).
+            const before = String(ed._srtPath || '');
+            log("📥 SRT_LOAD: blocs de 15 min...");
+            try {
+                await ed.loadEmergencySrt();
+            } catch (eE) {
+                log("⚠️ SRT_LOAD: " + eE.message);
+                getUtils().handleError(eE, "SrtLoad");
+                return;
             }
-            await this.runSrtFallback();
+            const after = String(ed._srtPath || '');
+            if (!after) {
+                log("⚠️ SRT_LOAD: no s'ha carregat cap .srt.");
+                return;
+            }
+            if (after !== before) {
+                if (ed._wipeMarkersFile) ed._wipeMarkersFile(after);
+                log("✅ SRT_LOAD: carregat " + after + " (fitxer nou → marcadors del disc buidats)");
+            } else {
+                log("ℹ️ SRT_LOAD: el fitxer carregat no ha canviat: " + after);
+            }
+        },
+
+        /**
+         * _sintMissText (2026-10-23 · BUG #190): missatge CURT i concret de per què
+         * no hi ha SINT per al bloc. Abans el 🧩 responia «revisa
+         * rutas.subtitulosSinteticos» i pareixia que el botó no feia res: el que
+         * passava és que eixe dia la carpeta només tenia sintètics d'un ALTRE
+         * programa (la guarda de #187 els descarta, i fa bé).
+         * El motiu el deixa `Scanner.srtSynthetic` a `_sintMiss`.
+         * @param {Object} ctx - { config, progData, bloque, dateDir }
+         * @returns {string}
+         */
+        _sintMissText: function (ctx) {
+            const prog = (ctx && ctx.progData && ctx.progData.archivo) ? String(ctx.progData.archivo) : '?';
+            const bloc = (ctx && ctx.bloque) ? ' ' + String(ctx.bloque) : '';
+            const fecha = (ctx && ctx.dateDir) ? String(ctx.dateDir).replace(/_/g, '-') : '?';
+            const sc = getScanner();
+            const miss = (sc && sc._sintMiss) ? sc._sintMiss : null;
+            let txt = "cap .srt sintètic de " + prog + bloc + " del " + fecha;
+            if (miss && miss.reason === 'altres-programes') {
+                const otros = (miss.aliens || []).map(function (n) { return String(n).split('_')[0]; })
+                    .filter(function (v, i, a) { return v && a.indexOf(v) === i; });
+                txt += " · eixe dia només n'hi ha de " + (otros.length ? otros.slice(0, 3).join('/') : 'altres programes');
+            } else if (miss && miss.reason === 'cap-del-dia') {
+                txt += " · a la carpeta no hi ha cap sintètic d'eixe dia";
+            } else if (miss && miss.reason === 'carpeta') {
+                txt += " · carpeta de sintètics inaccessible o buida";
+            }
+            return txt;
         },
 
         /**
@@ -452,14 +500,35 @@
          * l'editor amb marca PROPRIA (taronja, `_kind='SINT'`) i SENSE tocar el
          * SRT normal: la taula que es veia es guarda a l'editor (`_views.NORMAL`)
          * i el segon Ctrl+clic hi torna.
+         *
+         * (2026-10-23 · BUG #187) El SINT que es carrega és SEMPRE del MATEIX
+         * PROGRAMA i de la data del PROJECTE OBERT (`_srtCtx` + 
+         * `Scanner._sintNameMatchesProg`). Un SINT d'un altre programa que hi haja
+         * en memòria es descarta en comptes de reutilitzar-se.
          * @returns {Promise<boolean>} true si s'ha carregat (o s'ha tornat al NORMAL)
          */
         runSrtLoadSynthetic: async function () {
             const ed = window.SrtEditor;
             if (!ed || !ed.loadSrt) { getUtils().status("Error: SrtEditor no disponible", "error"); return false; }
             try {
-                // Ja s'esta veient el SINT → el Ctrl+clic alterna al SRT normal
-                if (ed._kind === 'SINT' && typeof ed.hasView === 'function' && ed.hasView('NORMAL')) {
+                // (2026-10-23 · BUG #187) El context es resol ABANS de decidir res: la
+                // data de treball ha de ser la del projecte obert i el SINT que hi haja
+                // en memòria ha de ser del MATEIX programa (si no, es descarta).
+                const ctx = await this._srtCtx();
+                if (!ctx) { getUtils().status("Selecciona un programa", "warn"); return false; }
+                const mem = this._sintBelongsTo(ed, ctx.progData);
+                if (mem.name && !mem.ok) {
+                    log("⚠️ SRT_SINT: el SINT en memòria «" + mem.name + "» " + mem.motivo +
+                        " → es descarta i es busca el del programa", "WARN");
+                    // Si s'estava veient, es torna al NORMAL (si hi és) i es buida la
+                    // instantània: `loadSrt(kind:'SINT')` la tornaria a desar/pitar.
+                    try {
+                        if (String(ed._kind || '').toUpperCase() === 'SINT' && ed.hasView('NORMAL')) ed.switchView('NORMAL');
+                    } catch (eSw) { log("⚠️ SRT_SINT: no s'ha pogut tornar al NORMAL: " + eSw.message); }
+                    try { if (ed._views) delete ed._views['SINT']; } catch (eDel) { }
+                }
+                // Ja s'esta veient el SINT (del programa) → el Ctrl+clic alterna al SRT normal
+                if (mem.ok && ed._kind === 'SINT' && typeof ed.hasView === 'function' && ed.hasView('NORMAL')) {
                     if (ed.switchView('NORMAL')) {
                         getUtils().status("SINT ocultat · tornat al SRT normal", "exito");
                         log("📥 SRT_SINT: tornat a la vista NORMAL");
@@ -468,22 +537,21 @@
                 }
                 // Ja hi ha una taula SINT en memoria (s'hi havia tornat al normal):
                 // es recupera TAL QUAL, sense rellegir el fitxer (conserva les edicions)
-                if (ed._kind !== 'SINT' && typeof ed.hasView === 'function' && ed.hasView('SINT')) {
+                if (mem.ok && ed._kind !== 'SINT' && typeof ed.hasView === 'function' && ed.hasView('SINT')) {
                     if (ed.switchView('SINT')) {
                         getUtils().status("SINT recuperat (sense rellegir)", "exito");
                         log("📥 SRT_SINT: vista SINT recuperada de memoria");
                         return true;
                     }
                 }
-                const ctx = this._srtCtx();
-                if (!ctx) { getUtils().status("Selecciona un programa", "warn"); return false; }
                 const cand = await getScanner().srtSynthetic(ctx);
                 if (!cand) {
                     const fecha = String(ctx.dateDir || '').replace(/_/g, '-');
-                    getUtils().status("SINT: cap .srt sintetic de " + (ctx.programa || '?') + ' ' + (ctx.bloque || '?') +
-                        " del dia " + (fecha || '?'), "warn");
-                    log("⚠️ SRT_SINT: cap sintetic del dia " + (ctx.dateDir || '?') + " a " +
-                        (ctx.config.rutas.subtitulosSinteticos || '?'));
+                    // (2026-10-23 · BUG #190) El motiu concret: programa + data + què hi
+                    // ha eixe dia a la carpeta (no un «revisa les rutes» genèric).
+                    getUtils().status("SINT: " + this._sintMissText(ctx), "warn");
+                    log("⚠️ SRT_SINT: " + this._sintMissText(ctx) + " (" +
+                        (ctx.config.rutas.subtitulosSinteticos || '?') + " · data " + (fecha || '?') + ")", "WARN");
                     return false;
                 }
                 log("📥 SRT_SINT: N" + cand.level + " (" + cand.reason + ", " + cand.candidates + " candidat(s)) → " + cand.path);
@@ -494,6 +562,7 @@
                     return true;
                 }
                 getUtils().status("SINT: no s'ha pogut carregar " + cand.name, "error");
+                log("⚠️ SRT_SINT: loadSrt ha fallat amb '" + cand.path + "' (mira la traça SRT_EDIT anterior)");
                 return false;
             } catch (e) {
                 log("💥 SRT_SINT: " + e.message);
@@ -505,15 +574,57 @@
         /**
          * runSrtFillGaps (F3.3 · opcio B): reomple els BUITS del SRT normal amb
          * les entrades sintetiques que hi cauen (tolerancia
-         * `general.srtSyntheticGapTolSec`). El resultat es una vista MOD: el SRT
-         * normal no es modifica i el fitxer original no es toca mai.
+         * `general.srtSyntheticGapTolSec`; retall maxim `general.srtSyntheticMaxTrimSec`
+         * i durada minima `general.srtSyntheticMinDurSec`). El resultat es una vista
+         * MOD **dins del mateix editor**: el SRT normal no es modifica, el fitxer
+         * original no es toca mai i el TIMELINE queda igual.
+         *
+         * (BUG #188 · 2026-10-23) El 🧩 NO exporta res: deixa la taula MOD a l'editor
+         * (els SINT encaixats es pinten amb un to propi) i és l'usuari qui decidix si
+         * l'exporta amb 💾. Abans exportava els «clips nous» a una pista de subtítols
+         * nova (S2) i el panell s'amagava: al timeline hi quedaven 3 clips solts i
+         * semblava que s'hagueren perdut la resta de subtítols («elimina la majoria»).
+         *
+         * (2026-10-23 · BUG #187) Un SINT d'un ALTRE programa mai és una base
+         * valida: si el que hi ha en memòria no és del programa del panell, es
+         * descarta i es rellegeix de la carpeta.
          */
         runSrtFillGaps: async function () {
             const ed = window.SrtEditor;
             if (!ed || !ed.mergeSyntheticGaps) { getUtils().status("Error: SrtEditor no disponible", "error"); return false; }
             try {
-                log("🧩 SRT_FILL: reomplint buits amb els SINT...");
-                return await ed.mergeSyntheticGaps();
+                // (2026-10-23) AUTOCARREGA: si els SINT no estan en memòria (l'usuari no
+                // ha fet Ctrl+clic a ⬇️), es carreguen ARA de `rutas.subtitulosSinteticos`.
+                // Així 🧩 va amb un sol clic i, si no hi ha res a la carpeta, el motiu
+                // queda escrit al log pel propi Scanner.
+                const ctx = await this._srtCtx();
+                if (!ctx) { getUtils().status("Selecciona un programa", "warn"); return false; }
+                const mem = this._sintBelongsTo(ed, ctx.progData);
+                if (mem.name && !mem.ok) {
+                    log("⚠️ SRT_FILL: el SINT en memòria «" + mem.name + "» " + mem.motivo +
+                        " → es descarta i es rellegeix de la carpeta", "WARN");
+                }
+                const hasSint = mem.ok;
+                if (!hasSint) {
+                    log("🧩 SRT_FILL: sense SINT del programa en memoria → carregant de la carpeta de sintetics...");
+                    const okSint = await this.runSrtLoadSynthetic();
+                    if (!okSint) {
+                        // (2026-10-23 · BUG #190) El motiu REAL (programa, data i què hi
+                        // ha eixe dia) en compte del genèric «revisa les rutes», que feia
+                        // pensar que el botó no responia.
+                        const motiu = this._sintMissText(ctx);
+                        getUtils().status("SINT: " + motiu + " → res a reomplir", "warn");
+                        getUtils().log("⚠️ SRT_FILL: " + motiu + " → no es reomple res (traces [SCAN:srtSynthetic])", "WARN");
+                        return false;
+                    }
+                }
+                log("🧩 SRT_FILL: reomplint buits amb els SINT (només taula, sense tocar el timeline)...");
+                const merged = await ed.mergeSyntheticGaps();
+                if (!merged) return false;
+                // (BUG #188) ACÍ S'ACABA: el timeline NO es toca. Els clips entren al
+                // timeline només amb 💾 (o 💾+Ctrl = només el que falta, a S2 amb color).
+                log("🧩 SRT_FILL: taula MOD a l'editor · el timeline no s'ha tocat (per a exportar: 💾)");
+                return true;
             } catch (e) {
                 log("💥 SRT_FILL: " + e.message);
                 getUtils().handleError(e, "SrtFillGaps");

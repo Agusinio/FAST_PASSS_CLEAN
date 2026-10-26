@@ -142,96 +142,10 @@
             return match ? match.name : null;
         },
 
-        mediaAssets: async function (ctx, temaHint) {
-            try {
-                const pathNAS = ctx.config.rutas.verticalitzacio;
-                const allFiles = await utils.readFolder(pathNAS);
-                // ── F1 (2026-10-01) · lectura FALLIDA ≠ carpeta buida ─────────────
-                // Sense això, un error/timeout del pont feia creure que el bloc no
-                // té MP4/SRT (i el flux decidia com si no hi hagués material).
-                if (!allFiles) {
-                    utils.log('❌ [SCAN:media] Lectura FALLIDA de la carpeta de verticalització (' + pathNAS + ').', 'ERROR');
-                    return { mp4: null, srt: null, failed: true };
-                }
-                if (allFiles.length === 0) return { mp4: null, srt: null };
-
-                var datePrefix = ctx.dateDir ? ctx.dateDir.replace(/_/g, '') : null;
-                var prefix = ctx.progData.archivo + '_' + ctx.bloque + '_';
-
-                var validFiles = this._filterMediaByDate(allFiles, datePrefix, prefix);
-                if (validFiles.length === 0) {
-                    // MECÀNICA D'INICI (2026-09-04): NO es reintenta sense filtre de data.
-                    // Si no hi ha MP4/SRT de la data de treball, es retorna buit (mai d'altre dia).
-                    utils.log('⚠️ [SCAN:media] Cap MP4/SRT amb data ' + datePrefix + '. Retornant buit (no es busca en altres dies).', 'DEBUG');
-                }
-
-                if (validFiles.length === 0) return { mp4: null, srt: null };
-
-                validFiles.sort(function (a, b) {
-                    var da = this._extractDateFromFileName(a.name);
-                    var db = this._extractDateFromFileName(b.name);
-                    return (db || '').localeCompare(da || '');
-                }.bind(this));
-
-                var getAsset = function (ext) {
-                    var upperExt = ext.toUpperCase();
-                    for (var i = 0; i < validFiles.length; i++) {
-                        if (validFiles[i].name.toUpperCase().endsWith(upperExt)) {
-                            return { name: validFiles[i].name, path: pathNAS + validFiles[i].name };
-                        }
-                    }
-                    return null;
-                };
-
-                var mp4 = getAsset('.MP4');
-                var srt = getAsset('.SRT');
-
-                // ─── AFINAR LA LOCALITZACIÓ DEL SRT ─────────────────────────────
-                // Dins d'un mateix bloc hi pot haver diversos .srt (una per notícia).
-                // Preferim el que coincideix amb el tema del projecte (si es coneix).
-                if (srt && temaHint && String(temaHint).trim().length > 1) {
-                    var normalizedTema = this._normalize(temaHint);
-                    for (var j = 0; j < validFiles.length; j++) {
-                        var candidate = validFiles[j].name;
-                        if (!candidate.toUpperCase().endsWith('.SRT')) continue;
-                        if (normalizedTema && this._normalize(candidate).indexOf(normalizedTema) !== -1) {
-                            srt = { name: candidate, path: pathNAS + candidate };
-                            utils.log('🎯 [SCAN:media] SRT coincident amb el tema "' + temaHint + '": ' + candidate, 'DEBUG');
-                            break;
-                        }
-                    }
-                }
-
-                return { mp4: mp4, srt: srt };
-            } catch (e) { return { mp4: null, srt: null }; }
-        },
-
-        _filterMediaByDate: function (files, datePrefix, nameFilter) {
-            if (!files || files.length === 0) return [];
-            var prefix = nameFilter.toUpperCase();
-            var dateTarget = datePrefix;
-            var self = this;
-            return files.filter(function (f) {
-                var name = f.name.toUpperCase();
-                if (name.indexOf(prefix) === -1) return false;
-                if (!name.endsWith('.MP4') && !name.endsWith('.SRT')) return false;
-                if (dateTarget) {
-                    var fileDate = self._extractDateFromFileName(f.name);
-                    if (!fileDate) {
-                        // Fallback: usar data de creació del fitxer (f.created)
-                        // per a fitxers que no tenen data al nom (ex: .SRT)
-                        if (f.created) {
-                            var d = new Date(f.created);
-                            var dd = ('0' + d.getDate()).slice(-2);
-                            var mm = ('0' + (d.getMonth() + 1)).slice(-2);
-                            fileDate = '' + d.getFullYear() + mm + dd;
-                        }
-                    }
-                    if (!fileDate || fileDate !== dateTarget) return false;
-                }
-                return true;
-            });
-        },
+        // (2026-10-23) RETIRAT `mediaAssets`: escanejava la carpeta de VERTICALITZACIÓ
+        // del NAS a la recerca del MP4/SRT del bloc. El vídeo del projecte ja no es
+        // busca enlloc: ix de la captura del cleanFeed (extracció ffmpeg amb els
+        // bounds calculats) i els subtítols, del .srt que viu al costat del .prproj.
 
         wotts: async function (ctx) {
             try {
@@ -370,15 +284,12 @@
         _wottDateCache: null,    // { NOM_EN_MAJUSCULES: 'YYYYMMDD' }
         _wottProbeCache: null,   // { clau: { at, res } } · TTL 5 s
         WOTT_PROBE_TTL_MS: 5000,
-        _mp4ProbeCache: null,    // { clau: { at, res } } · TTL 5 s (MP4 origen)
-        MP4_PROBE_TTL_MS: 5000,
         _probeInflight: null,    // { clau: Promise } · sonda en curs (dedupe)
 
-        /** _probeKey: clau d'una sonda (tipus + carpeta + bloc + dia de treball). */
-        _probeKey: function (ctx, kind) {
+        /** _probeKey: clau de la sonda de wotts (carpeta + bloc + dia de treball). */
+        _probeKey: function (ctx) {
             const r = (ctx && ctx.config && ctx.config.rutas) ? ctx.config.rutas : {};
-            const folder = (kind === 'mp4') ? (r.verticalitzacio || '') : (r.chyrons || '');
-            return kind + '|' + folder + '|' + ((ctx && ctx.bloque) || '') + '|' + ((ctx && ctx.dateDir) || '');
+            return 'wotts|' + (r.chyrons || '') + '|' + ((ctx && ctx.bloque) || '') + '|' + ((ctx && ctx.dateDir) || '');
         },
 
         // ── CACHÉ DE DATES PERSISTENT (2026-10-22 · #113) ──────────────────
@@ -489,7 +400,7 @@
             // pagar el MATEIX readdir + stats i s'encuaven unes darrere les
             // altres (log 22/10: 3 llistats de ~70 s). Ara la sonda en curs es
             // COMPARTEIX: una sola lectura per clau encara que la demanen 3 cops.
-            const key = this._probeKey(ctx, 'wotts');
+            const key = this._probeKey(ctx);
             if (!this._probeInflight) this._probeInflight = {};
             if (this._probeInflight[key]) {
                 utils.log('⏳ [SCAN:wottsToday] sonda en curs reaprofitada (' + key + ')', 'DEBUG');
@@ -609,138 +520,10 @@
             return out;
         },
 
-        /**
-         * mp4Today: hi ha el MP4 ORIGEN del BLOC i del DIA de treball?
-         *
-         * (2026-10-21 · #177 · estats d'arrencada) El botó distingeix tres
-         * situacions abans de crear: MASSA D'HORA (ni MP4 ni wotts), ESPERA (MP4
-         * però encara sense wotts) i CREA (wotts). Este sondeig respon només a la
-         * primera pregunta i HO FA BARAT: noms per Node (`readdir`, ~30 ms) i
-         * `birthtime` NOMÉS dels candidats (els noms no sempre porten data).
-         *
-         * PER QUÈ NO `mediaAssets`: eixe àtom llig la carpeta amb
-         * `Utils.readFolder`; en UNC això és un escaneig ExtendScript amb
-         * `length/modified/created` de CADA fitxer (el mateix que va costar 93 s a
-         * la portada). Ací només cal saber SI hi ha un .MP4 del bloc.
-         *
-         * @param {Object} ctx - { config, progData, bloque, dateDir }
-         * @returns {Promise<{ok:boolean, found:boolean, name:string, via:string}>}
-         *          `ok:false` = no s'ha pogut llistar → no es pot afirmar res.
-         */
-        mp4Today: async function (ctx) {
-            // Mateix dedupe que `wottsToday` (2026-10-22 · #113).
-            const key = this._probeKey(ctx, 'mp4');
-            if (!this._probeInflight) this._probeInflight = {};
-            if (this._probeInflight[key]) {
-                utils.log('⏳ [SCAN:mp4Today] sonda en curs reaprofitada (' + key + ')', 'DEBUG');
-                return await this._probeInflight[key];
-            }
-            const p = this._mp4TodayRun(ctx);
-            this._probeInflight[key] = p;
-            try { return await p; }
-            finally { delete this._probeInflight[key]; }
-        },
-
-        _mp4TodayRun: async function (ctx) {
-            const out = { ok: false, found: false, name: '', via: '' };
-            if (!ctx || !ctx.config || !ctx.config.rutas) return out;
-            const folder = ctx.config.rutas.verticalitzacio;
-            const dateTarget = ctx.dateDir ? String(ctx.dateDir).replace(/_/g, '') : null;
-            const prog = (ctx.progData && ctx.progData.archivo) ? String(ctx.progData.archivo).toUpperCase() : '';
-            const bloc = ctx.bloque ? String(ctx.bloque).toUpperCase() : '';
-            if (!folder || !dateTarget || !prog || !bloc) return out;
-            const prefix = prog + '_' + bloc + '_';
-            this._loadDateCache();      // #113: dates ja conegudes (sobreviuen a reinicis)
-            const _t0 = Date.now();
-
-            const cacheKey = folder + '|' + prefix + '|' + dateTarget;
-            if (!this._mp4ProbeCache) this._mp4ProbeCache = {};
-            const hit = this._mp4ProbeCache[cacheKey];
-            if (hit && (Date.now() - hit.at) < (this.MP4_PROBE_TTL_MS || 5000)) return hit.res;
-
-            // ── 1. NOMS (sense stats): Node → CEP → readFolder (JSX, últim recurs)
-            let names = null;
-            let createdByName = null;   // només el camí JSX ja porta `created`
-            try {
-                const fs = window.FASTPASS_UI.Utils._nodeFs();
-                if (fs && fs.promises && fs.promises.readdir) {
-                    names = await fs.promises.readdir(folder);
-                    out.via = 'node';
-                } else if (fs && fs.readdirSync) {
-                    names = fs.readdirSync(folder);
-                    out.via = 'node';
-                }
-            } catch (eN) { names = null; }
-
-            if (!names && window.cep && window.cep.fs && window.cep.fs.readdir) {
-                try {
-                    const rd = window.cep.fs.readdir(folder);
-                    if (rd && rd.err === 0 && rd.data) {
-                        names = rd.data.map(function (n) { return (typeof n === 'string') ? n : (n && n.name); });
-                        out.via = 'cep';
-                    }
-                } catch (eC) { names = null; }
-            }
-
-            if (!names) {
-                try {
-                    const all = await utils.readFolder(folder);
-                    if (all) {
-                        createdByName = {};
-                        for (let i = 0; i < all.length; i++) createdByName[all[i].name] = all[i].created || 0;
-                        names = all.map(function (f) { return f.name; });
-                        out.via = 'jsx';
-                    }
-                } catch (eJ) { names = null; }
-            }
-            if (!names) {
-                utils.log('❌ [SCAN:mp4Today] No s\'ha pogut llistar ' + folder + ' → estat del MP4 desconegut', 'ERROR');
-                return out;   // ok:false
-            }
-            _bm('MP4 · llistat (' + _ms(_t0) + ', ' + names.length + ' noms, via ' + (out.via || '?') + ')');
-
-            const cands = names.filter(function (n) {
-                const u = String(n || '').toUpperCase();
-                return u.indexOf(prefix) !== -1 && u.slice(-4) === '.MP4';
-            });
-            out.ok = true;                    // el llistat SÍ que ha funcionat
-            if (cands.length === 0) {
-                this._mp4ProbeCache[cacheKey] = { at: Date.now(), res: out };
-                return out;
-            }
-
-            // ── 2. DATACIÓ: nom (YYYYMMDD) → created (JSX) → birthtime (caché)
-            const dates = {};
-            const pending = [];
-            for (let k = 0; k < cands.length; k++) {
-                const n = cands[k];
-                const d8 = this._extractDateFromFileName(n);
-                if (d8) { dates[String(n).toUpperCase()] = d8; continue; }
-                const cr = createdByName ? this._localDate(createdByName[n]) : null;
-                if (cr) { dates[String(n).toUpperCase()] = cr; continue; }
-                pending.push(n);
-            }
-            if (pending.length > 0) {
-                // Mateixa caché de dates que els wotts: clau = NOM SENCER (els .MP4 i
-                // els .MOV no col·lideixen) i cada fitxer es data una sola vegada.
-                const _tD = Date.now();
-                await this._dateWotts(folder, pending);
-                _bm('MP4 · datació (' + _ms(_tD) + ', ' + pending.length + ' fitxer(s) nous)');
-                const cache = this._wottDateCache || {};
-                for (let p = 0; p < pending.length; p++) {
-                    const d8p = cache[String(pending[p]).toUpperCase()];
-                    if (d8p) dates[String(pending[p]).toUpperCase()] = d8p;
-                }
-            }
-
-            const todays = cands.filter(function (n) { return dates[String(n).toUpperCase()] === dateTarget; });
-            out.found = todays.length > 0;
-            out.name = todays.length > 0 ? String(todays[0]) : '';
-            this._mp4ProbeCache[cacheKey] = { at: Date.now(), res: out };
-            utils.log('🎬 [SCAN:mp4Today] ' + prefix + ' ' + dateTarget + ': ' + todays.length + '/' + cands.length +
-                ' MP4 origen (' + (out.via || '?') + ') → ' + (out.found ? 'hi és' : 'encara no'), 'DEBUG');
-            return out;
-        },
+        // (2026-10-23) RETIRAT `mp4Today`/`_mp4TodayRun`: sondava el MP4 origen del bloc
+        // a la carpeta de VERTICALITZACIO del NAS per decidir l'estat d'arrencada.
+        // El video del projecte ix NOMES de la captura del cleanFeed; si el bloc encara
+        // no te video, el projecte es crea sense V1 i es completa amb ACTUALITZAR.
 
         /**
          * _dateWotts: omple `_wottDateCache` (NOM → YYYYMMDD) pels noms indicats.
@@ -970,116 +753,84 @@
             } catch (e) { return []; }
         },
 
+        // (2026-10-23) RETIRAT `srtFallback`: buscava un .SRT de recanvi a la carpeta de
+        // VERTICALITZACIO del NAS. Els subtitols del projecte viuen al costat del .prproj
+        // (CARREGAR) o a la carpeta de sintetics (`srtSynthetic`).
+
         /**
-         * srtFallback: Cerca un .SRT de RECANVI a la carpeta de verticalització (la MATEIXA
-         * on viuen els MP4 del bloc) SENSE els filtres estrictes de Scan.mediaAssets.
-         *
-         * (2026-09-22) **SEMPRE dins de la DATA DE TREBALL.** Abans hi havia dos nivells sense
-         * filtre de data — «prefix (qualsevol data)» i «qualsevol .SRT de la carpeta» — que
-         * podien carregar subtítols D'UN ALTRE DIA: cas real, el TNC V1 del 22/09 va carregar
-         * el .SRT del 21/09 «EMPRESES DE LLEURE… LA CERDANYA» ✗. Ara, si no hi ha cap .SRT de
-         * la data de treball, NO es carrega res (es diu el motiu al log i al panell).
-         *
-         * Nivells (s'atura al primer amb candidats), tots filtrats per la data de treball:
-         *   N1: {archivo}_{bloque}_ + DATA de treball
-         *   N2: qualsevol .SRT de la DATA de treball
-         * Dins de cada nivell es tria el MÉS RECENT (data del nom/creació desc).
-         *
-         * @param {Object} ctx - { config, progData, bloque, dateDir }
-         * @returns {{name:string, path:string, level:number, reason:string, candidates:number}|null}
+         * _sintProgTokens: Tokens que identifiquen el PROGRAMA en el nom d'un .srt
+         * sintetic. S'accepten els dos codis del perfil (`archivo` i `wott`), perque
+         * la carpeta `SRT_SINTETICS` la nodrixen eines externes i el nom pot portar
+         * cualsevol dels dos (`TN_COMARQUES_V3_…` o `TNC_V3_…`).
+         * @param {Object} progData - Entrada de `mapeoProgramas`
+         * @returns {string[]} Tokens en MAJUSCULES (p.ex. ['TN_COMARQUES','TNC'])
          */
-        srtFallback: async function (ctx) {
-            try {
-                if (!ctx || !ctx.config || !ctx.config.rutas || !ctx.progData) return null;
-                var dir = String(ctx.config.rutas.verticalitzacio || '');
-                if (!dir) return null;
-                var last = dir.charAt(dir.length - 1);
-                if (last !== '\\' && last !== '/') dir += '\\';
+        _sintProgTokens: function (progData) {
+            var toks = [];
+            var push = function (v) {
+                var s = String(v || '').trim().toUpperCase();
+                if (s && toks.indexOf(s) === -1) toks.push(s);
+            };
+            push(progData && progData.archivo);
+            push(progData && progData.wott);
+            return toks;
+        },
 
-                var allFiles = await utils.readFolder(dir);
-                if (!allFiles || allFiles.length === 0) {
-                    utils.log('[SCAN:srtFallback] Carpeta inaccessible o buida: ' + dir, 'WARN');
-                    return null;
-                }
-                var srts = allFiles.filter(function (f) { return /\.srt$/i.test(f.name || ''); });
-                if (srts.length === 0) {
-                    utils.log('[SCAN:srtFallback] Cap .SRT a ' + dir, 'WARN');
-                    return null;
-                }
-
-                var self = this;
-                // Més recent primer: data del nom/creació (YYYYMMDD) desc, després created.
-                srts.sort(function (a, b) {
-                    var da = self._fileDateYYYYMMDD(a) || '';
-                    var db = self._fileDateYYYYMMDD(b) || '';
-                    if (da !== db) return db.localeCompare(da);
-                    return (b.created || 0) - (a.created || 0);
-                });
-
-                var dateTarget = ctx.dateDir ? String(ctx.dateDir).replace(/_/g, '') : null;
-                if (!dateTarget) {
-                    utils.log('[SCAN:srtFallback] Sense data de treball (dateDir) → NO es carrega cap .SRT (per seguretat).', 'WARN');
-                    return null;
-                }
-                var progUp = String(ctx.progData.archivo || '').toUpperCase();
-                var bloqueUp = String(ctx.bloque || '').toUpperCase();
-                var prefix = progUp + '_' + bloqueUp + '_';
-                var hasPrefix = function (f) { return progUp && (f.name || '').toUpperCase().indexOf(prefix) !== -1; };
-                var ofDate = function (f) { return self._fileDateYYYYMMDD(f) === dateTarget; };
-
-                // (2026-09-22) FILTRE ESTRICTE DE DATA: només .SRT del dia de treball.
-                var delDia = srts.filter(ofDate);
-                if (delDia.length === 0) {
-                    utils.log('[SCAN:srtFallback] Cap .SRT de la data ' + dateTarget + ' a ' + dir +
-                        ' (' + srts.length + ' .SRT d\'altres dies descartats). NO es carrega cap subtítol.', 'WARN');
-                    return null;
-                }
-
-                // (2026-09-23) NOMÉS N1: el .SRT ha de ser DEL PROGRAMA I DEL BLOC actuals i del dia
-                // de treball. L'antic N2 ("qualsevol .SRT del dia") s'ha ELIMINAT de soca-rel:
-                // si no hi ha el .SRT del bloc, NO es carrega res — s'avisa i prou (queixa de
-                // l'usuari: s'hi carregava un SRT de MATINS_V5 en un projecte TNC).
-                var levels = [
-                    { level: 1, reason: 'prefix programa_bloc + data de treball', list: delDia.filter(hasPrefix) }
-                ];
-                for (var i = 0; i < levels.length; i++) {
-                    var L = levels[i];
-                    if (L.list.length === 0) continue;
-                    var pickF = L.list[0];
-                    utils.log('[SCAN:srtFallback] N' + L.level + ' (' + L.reason + '): ' + L.list.length +
-                        ' candidat(s) · triat "' + pickF.name + '" (' + (self._fileDateYYYYMMDD(pickF) || 'sense data') + ')', 'INFO');
-                    return {
-                        name: pickF.name,
-                        path: dir + pickF.name,
-                        level: L.level,
-                        reason: L.reason,
-                        candidates: L.list.length
-                    };
-                }
-                return null;
-            } catch (e) {
-                utils.log('💥 [SCAN:srtFallback] ' + e.message, 'ERROR');
-                return null;
+        /**
+         * _sintNameMatchesProg: (2026-10-23 · BUG #187) El `.srt` sintetic és del
+         * MATEIX PROGRAMA que el bloc que s'esta editant?
+         *
+         * PER QUE ES MIRA NOMES EL PREFIX: els sintetics de la carpeta es diuen
+         * `<PROGRAMA>_<BLOC>_<titol>…_Subtitles.srt` (a voltes amb `YYYYMMDD_` al
+         * davant). Mirar el prefix (i no `indexOf` a tot el nom) evita que un titol
+         * que continga «MAT» o «TNC» faça passar per bo un fitxer d'un altre programa.
+         * @param {string} name - Nom (o path) del .srt
+         * @param {Object} progData - { archivo, wott }
+         * @returns {string|null} Token que ha casat, o null si és d'un altre programa
+         */
+        _sintNameMatchesProg: function (name, progData) {
+            var n = String(name || '').toUpperCase();
+            if (!n) return null;
+            // Path complet → nom solt; despres lleva el prefix de data opcional.
+            n = n.split('\\').pop().split('/').pop();
+            n = n.replace(/^\d{8}[_\-]/, '');
+            var toks = this._sintProgTokens(progData);
+            for (var i = 0; i < toks.length; i++) {
+                if (n.indexOf(toks[i] + '_') === 0) return toks[i];
             }
+            return null;
         },
 
         /**
          * srtSynthetic: SRT SINTETICS del dia de treball (F3.2).
          * Viuen a `rutas.subtitulosSinteticos` (per defecte `<subtitulos>/SINTETICS`).
-         * Mateix criteri de data que `srtFallback`: si un fitxer no es pot datar
+         * Mateix criteri de data que les altres sondes: si un fitxer no es pot datar
          * (nom sense YYYYMMDD i sense creacio) ES DESCARTA — mai subtitols d'un
          * altre dia dins del bloc.
          *
-         * Nivells (s'atura al primer amb candidats):
+         * (2026-10-23 · BUG #187) MATEIX PROGRAMA, SEMPRE: `dateDir` ha de ser la del
+         * PROJECTE OBERT (ho resol `flow_srt._srtCtx`) i el nom del .srt ha de
+         * començar pel codi del programa (`_sintNameMatchesProg`). Abans hi havia un
+         * N3 «qualsevol .srt de la data» que, en un bloc de `TN_COMARQUES V3`, va
+         * carregar `MATINS_V5_GUIO_LA_PLOMA_…` (0/68 frases en comú) i el 🧩 va
+         * col·locar al timeline subtítols d'un altre programa.
+         *
+         * Nivells (s'atura al primer amb candidats · tots dos filtren per programa):
          *   N1: `{archivo}_{bloque}_` + data de treball
          *   N2: `{archivo}_` (nomes programa) + data de treball
-         *   N3: qualsevol `.srt` de la data a la carpeta de sintetics
+         * Sense candidat del programa → `null` (i el motiu al log): mai material alié.
          *
          * @param {Object} ctx - { config, progData, bloque, dateDir }
          * @returns {{name:string, path:string, level:number, reason:string, candidates:number}|null}
          */
         srtSynthetic: async function (ctx) {
             try {
+                // (2026-10-23 · BUG #190) MOTIU PER AL PANELL: quan no hi ha cap
+                // candidat, la barra d'estat ha de poder dir EL PER QUÈ. El 🧩
+                // responia «revisa rutas.subtitulosSinteticos» tot i que la carpeta
+                // estava bé: eixe dia només hi havia sintetics d'un ALTRE programa
+                // (els descarta la guarda de #187) → pareixia que el botó no feia res.
+                this._sintMiss = null;
                 if (!ctx || !ctx.config || !ctx.config.rutas || !ctx.progData) return null;
                 var dir = String(ctx.config.rutas.subtitulosSinteticos || '');
                 if (!dir) {
@@ -1089,6 +840,7 @@
                 var allFiles = await utils.readFolder(dir);
                 if (!allFiles || allFiles.length === 0) {
                     utils.log('[SCAN:srtSynthetic] Carpeta inaccessible o buida: ' + dir, 'WARN');
+                    this._sintMiss = { reason: 'carpeta', date: null, dir: dir };
                     return null;
                 }
                 var srts = allFiles.filter(function (f) { return /\.srt$/i.test(f.name || ''); });
@@ -1106,6 +858,7 @@
                 if (delDia.length === 0) {
                     utils.log('[SCAN:srtSynthetic] Cap .SRT de la data ' + dateTarget + ' a ' + dir +
                         ' (' + srts.length + " d'altres dies descartats)", 'WARN');
+                    this._sintMiss = { reason: 'cap-del-dia', date: dateTarget, dir: dir, otros: srts.length };
                     return null;
                 }
                 delDia.sort(function (a, b) {
@@ -1118,12 +871,35 @@
                 var bloqueUp = String(ctx.bloque || '').toUpperCase();
                 var pBoth = archivoUp + '_' + bloqueUp + '_';
                 var pProg = archivoUp + '_';
-                var hasBoth = function (f) { return archivoUp && (f.name || '').toUpperCase().indexOf(pBoth) !== -1; };
-                var hasProg = function (f) { return archivoUp && (f.name || '').toUpperCase().indexOf(pProg) !== -1; };
+                // ── (2026-10-23 · BUG #187) GUARDA DURA DE PROGRAMA ───────────────
+                // Antes N3 tornava QUALSEVOL .srt de la data si no hi havia cap del
+                // programa: en el bloc `2026_10_22/V3` (TN_COMARQUES) es va carregar
+                // `MATINS_V5_GUIO_LA_PLOMA_…` — 0/68 frases en comú amb el SRT del
+                // bloc — i el 🧩 va col·locar al timeline subtítols d'un altre
+                // programa. Ara el programa es filtra ABANS de triar nivell.
+                var delProg = delDia.filter(function (f) { return !!self._sintNameMatchesProg(f.name, ctx.progData); });
+                if (delProg.length === 0) {
+                    var aliens = delDia.slice(0, 4).map(function (f) { return f.name; }).join(' | ');
+                    utils.log('[SCAN:srtSynthetic] Cap .srt sintetic del programa ' + (archivoUp || '?') +
+                        ' el ' + dateTarget + " → NO es carrega res (mai subtitols d'un altre programa). " +
+                        "Descartats " + delDia.length + ' del dia: ' + aliens + (delDia.length > 4 ? ' …' : ''), 'WARN');
+                    // (BUG #190) El motiu ha d'arribar a la barra d'estat del panell.
+                    this._sintMiss = {
+                        reason: 'altres-programes', date: dateTarget, dir: dir,
+                        programa: archivoUp, delDia: delDia.length,
+                        aliens: delDia.slice(0, 4).map(function (f) { return f.name; })
+                    };
+                    return null;
+                }
+                if (delProg.length !== delDia.length) {
+                    utils.log('[SCAN:srtSynthetic] ' + (delDia.length - delProg.length) +
+                        " .srt del dia descartats per programa (no comencen per " + (archivoUp || '?') +
+                        ' ni pel seu codi alternatiu)', 'INFO');
+                }
+                var hasBoth = function (f) { return !!bloqueUp && (f.name || '').toUpperCase().indexOf(pBoth) !== -1; };
                 var levels = [
-                    { level: 1, reason: 'prefix programa_bloc + data de treball', list: delDia.filter(hasBoth) },
-                    { level: 2, reason: 'prefix programa + data de treball', list: delDia.filter(hasProg) },
-                    { level: 3, reason: 'qualsevol sintetic de la data', list: delDia }
+                    { level: 1, reason: 'prefix ' + pBoth + ' + data de treball', list: delProg.filter(hasBoth) },
+                    { level: 2, reason: 'prefix ' + pProg + ' + data de treball (qualsevol bloc)', list: delProg.slice() }
                 ];
                 for (var i = 0; i < levels.length; i++) {
                     var L = levels[i];
@@ -1131,9 +907,22 @@
                     var pick = L.list[0];
                     utils.log('[SCAN:srtSynthetic] N' + L.level + ' (' + L.reason + '): ' + L.list.length +
                         ' candidat(s) · triat "' + pick.name + '" (' + (self._fileDateYYYYMMDD(pick) || 'sense data') + ')', 'INFO');
+                    // Els altres candidats DEL MATEIX PROGRAMA tambe queden al log: si
+                    // el triat no és el bloc correcte es pot veure d'on vindria.
+                    if (L.list.length > 1) {
+                        utils.log('[SCAN:srtSynthetic] N' + L.level + ' altres del programa: ' +
+                            L.list.slice(1, 6).map(function (f) { return f.name; }).join(' | ') +
+                            (L.list.length > 6 ? ' …' : ''), 'INFO');
+                    }
                     return {
                         name: pick.name,
-                        path: dir + pick.name,
+                        // (2026-10-23 · BUG #185) `readFolder` torna NOMS solts: cal
+                        // enganxar-hi el separador. Sense la barra el path quedava
+                        // `...\SRT_SINTETICSMATINS_V5_..._Subtitles.srt` (carpeta i
+                        // nom fusionats) → `IO.readTxt` fallava i el Ctrl+clic de ⬇️
+                        // "no carregava res" (al log només hi havia "SRT_EDIT:
+                        // Carregant ..." i cap "N entrades").
+                        path: String(dir).replace(/[\\/]+$/, '') + '\\' + pick.name,
                         level: L.level,
                         reason: L.reason,
                         candidates: L.list.length

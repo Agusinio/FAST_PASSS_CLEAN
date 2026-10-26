@@ -5,12 +5,17 @@
  * Genera una "foto" actualizada de la escaleta via API de digition.
  * No modifica nada en produccio (genera=false, force=false).
  *
- * Depen de: escaleta_config.js (ESCALETES_PATH)
- *           escaleta_io.js (load)
+ * Depen de: escaleta_io.js (load, findInFolder)
  *           Utils.callJSX
  *
  * Metodes:
- *   - fetchNewEscaleta(programArchivo, escaletaId, dateStr, timeStr, folderPath)
+ *   - fetchNewEscaleta(escaletaId, dateDir, programArchivo, blockId, folderPath)
+ *   - _estimateEscaletaIdFromLocal(programArchivo, dateDir, projectRoot)
+ *   - _invalidateSeries()
+ *
+ * (2026-10-23) La serie d'escaletaIds es dedueix de l'HISTORIAL LOCAL de
+ * projectes (…/<PROG>_PROJECTES/YYYY_MM_DD\V*\escaleta_*.json). Ja no es
+ * consulta la carpeta central d'escaletes del NAS.
  * ============================================================================
  */
 
@@ -253,63 +258,156 @@
         return n;
     };
 
+    /** SERIES_TTL_MS: memòria curta de la sèrie estimada (10 min). */
+    ER.SERIES_TTL_MS = 600000;
+    ER._seriesCache = {};   // { '<PROGRAMA>|<YYYYMMDD>': { at, res } }
+
+    /** _invalidateSeries: buida la memòria de sèries (força recalcular). */
+    ER._invalidateSeries = function () {
+        this._seriesCache = {};
+    };
+
     /**
-     * _estimateEscaletaIdFromHistory: Mira els IDs dels 2-3 dies anteriors
-     * (JSON VALIDS del programa al NAS) i estima el d'avui amb el pas per dia
-     * feiner. Els festius fan que el pas no sigui exacte, aixi que l'estimacio
-     * es nomes el PRIMER candidat: despres es proven els veins.
+     * _listNames: noms d'una carpeta (cep.fs.readdir → Utils.readFolder).
+     * @param {string} dir
+     * @returns {Promise<string[]|null>} null si no s'ha pogut llegir
+     */
+    ER._listNames = async function (dir) {
+        if (!dir) return null;
+        try {
+            if (window.cep && window.cep.fs && typeof window.cep.fs.readdir === 'function') {
+                var cepDir = String(dir).split(String.fromCharCode(47)).join(String.fromCharCode(92));
+                var r = window.cep.fs.readdir(cepDir);
+                if (r && r.err === 0 && r.data) return r.data.slice();
+            }
+        } catch (eC) { }
+        try {
+            var U = window.FASTPASS_UI && window.FASTPASS_UI.Utils;
+            if (U && typeof U.readFolder === 'function') {
+                var arr = await U.readFolder(dir);
+                if (arr) return arr.map(function (f) { return (typeof f === 'string') ? f : String((f && f.name) || ''); });
+            }
+        } catch (eU) { }
+        return null;
+    };
+
+    /**
+     * _stripSep: Lleva els separadors finals d'una ruta (sense expressions regulars).
+     * @param {string} p
+     * @returns {string}
+     */
+    ER._stripSep = function (p) {
+        var s = String(p || '');
+        var bs = String.fromCharCode(92);
+        while (s.length > 1) {
+            var ch = s.charAt(s.length - 1);
+            if (ch !== bs && ch !== '/') break;
+            s = s.substring(0, s.length - 1);
+        }
+        return s;
+    };
+
+    /**
+     * _estimateEscaletaIdFromLocal: Estima l'escaletaId d'AVUI a partir de les
+     * escaletes desades als projectes dels dies anteriors (HISTORIAL LOCAL).
+     *
+     * (2026-10-23) Abans es llistava la carpeta central d'escaletes del NAS.
+     * Amb el model local-first eixa carpeta no existeix: la sèrie es dedueix
+     * del MATEIX arbre de projectes.
+     *   1) directoris `YYYY_MM_DD` de `projectRoot` (desc, sense avui, màx. 5)
+     *   2) a cada dia, blocs `V*` → `escaleta_*.json` (FOTO primer, després NAS)
+     *   3) se'n llig `escaleta.id` fins a 3 mostres vàlides
+     * L'estimació és el PRIMER candidat: després es proven els veïns (+1/−1…).
+     *
+     * @param {string} programArchivo - Ex: "TN_MATI"
+     * @param {string} dateDir - Ex: "2026_10_23" (dia de treball)
+     * @param {string} projectRoot - Carpeta que conté els directoris YYYY_MM_DD
+     *        (…/<PROG>_PROJECTES)
      * @returns {Promise<{estimate:string, step:number, seen:Array}|null>}
      */
-    ER._estimateEscaletaIdFromHistory = async function (programArchivo, dateDir) {
+    ER._estimateEscaletaIdFromLocal = async function (programArchivo, dateDir, projectRoot) {
+        var datePrefix = String(dateDir || '').replace(/[^0-9]/g, '');   // YYYYMMDD (accepta 2026_10_23 i 2026-10-23)
+        var key = String(programArchivo || '').toUpperCase() + '|' + datePrefix;
+        this._seriesCache = this._seriesCache || {};
+        var hit = this._seriesCache[key];
+        if (hit && (Date.now() - hit.at) < this.SERIES_TTL_MS) return hit.res;
+        var res = null;
         try {
-            if (!this._listEscaletas || !this.load) return null;
-            var datePrefix = String(dateDir || '').replace(/_/g, '');   // per excloure avui
-            var listRes = await this._listEscaletas();
-            if (!listRes || !listRes.raw) return null;
-            var files = JSON.parse(listRes.raw);
-            var dir = listRes.path || this.ESCALETES_PATH || this.ESCALETES_PATH_DOMAIN || '';
-            var token = '_' + String(programArchivo).toUpperCase() + '_';
-            var cands = [];
-            for (var i = 0; i < files.length; i++) {
-                var f = files[i];
-                if (!f || f.isDir) continue;
-                var nm = String(f.name || '');
-                if (nm.toUpperCase().indexOf(token) === -1) continue;
-                var d8 = nm.substring(0, 8);
-                if (!/^\d{8}$/.test(d8)) continue;
-                if (datePrefix && d8 === datePrefix) continue;         // avui no compta
-                cands.push({ name: nm, path: dir.replace(/[\/\\]+$/, '') + '\\' + nm, date: d8 });
-            }
-            if (cands.length === 0) return null;
-            cands.sort(function (a, b) { return a.name < b.name ? 1 : (a.name > b.name ? -1 : 0); });  // mes nou primer
-            var seen = [];
-            for (var c = 0; c < cands.length && seen.length < 3; c++) {
+            res = await this._estimateSeriesNow(programArchivo, datePrefix, projectRoot);
+        } catch (e) {
+            log('⚠️ [ER:Fetch] Estimacio de serie (local) fallida: ' + e.message);
+            res = null;
+        }
+        this._seriesCache[key] = { at: Date.now(), res: res };
+        return res;
+    };
+
+    /**
+     * _estimateSeriesNow: feina bruta de l'estimació (sense memòria curta).
+     * @param {string} programArchivo
+     * @param {string} datePrefix - YYYYMMDD del dia de treball
+     * @param {string} projectRoot
+     * @returns {Promise<{estimate:string, step:number, seen:Array}|null>}
+     */
+    ER._estimateSeriesNow = async function (programArchivo, datePrefix, projectRoot) {
+        if (!projectRoot || !this.load || typeof this._listNames !== 'function') return null;
+        var top = await this._listNames(projectRoot);
+        if (!top || !top.length) return null;
+        var days = top.filter(function (n) { return /^\d{4}_\d{2}_\d{2}$/.test(String(n)); });
+        if (!days.length) return null;
+        days.sort();
+        days.reverse();
+        var seen = [];
+        var scanned = 0;
+        for (var i = 0; i < days.length && scanned < 5 && seen.length < 3; i++) {
+            var day = String(days[i]);
+            if (datePrefix && day.replace(/_/g, '') === datePrefix) continue;   // avui no compta
+            scanned++;
+            var dayPath = this._stripSep(projectRoot) + String.fromCharCode(92) + day;
+            var subs = await this._listNames(dayPath);
+            if (!subs || !subs.length) continue;
+            var blocks = subs.filter(function (n) { return /^V\d+$/i.test(String(n)); }).sort();
+            for (var bi = 0; bi < blocks.length && seen.length < 3; bi++) {
+                var blkPath = dayPath + String.fromCharCode(92) + blocks[bi];
+                var files = await this._listNames(blkPath);
+                if (!files || !files.length) continue;
+                var jsons = files.filter(function (n) {
+                    var s = String(n).toLowerCase();
+                    return s.indexOf('.json') === s.length - 5 && s.indexOf('escaleta') !== -1;
+                });
+                if (!jsons.length) continue;
+                // FOTO (escaleta_on_demand_*) primer; dins de cada grup, la mes nova.
+                jsons.sort(function (a, b) {
+                    var fa = String(a).indexOf('escaleta_on_demand') === 0 ? 0 : 1;
+                    var fb = String(b).indexOf('escaleta_on_demand') === 0 ? 0 : 1;
+                    if (fa !== fb) return fa - fb;
+                    return String(a) < String(b) ? 1 : (String(a) > String(b) ? -1 : 0);
+                });
                 var data = null;
-                try { data = await this.load(cands[c].path); } catch (eL) { data = null; }
-                if (!data || !data.escaleta || !data.escaleta.id) continue;   // error del motor o buit
+                for (var j = 0; j < jsons.length && !data; j++) {
+                    var cand = blkPath + String.fromCharCode(92) + jsons[j];
+                    try { data = await this.load(cand); } catch (eL) { data = null; }
+                    if (!data || !data.escaleta || !data.escaleta.id) data = null;
+                }
+                if (!data) continue;
                 var pr = this._escaletaIdParts(data.escaleta.id);
                 if (!pr) continue;
-                seen.push({ date: cands[c].date, id: data.escaleta.id, num: pr.num, prefix: pr.prefix });
+                seen.push({ date: day.replace(/_/g, ''), id: data.escaleta.id, num: pr.num, prefix: pr.prefix, block: blocks[bi] });
             }
-            if (seen.length < 2) return null;
-            var newest = seen[0], oldest = seen[seen.length - 1];
-            var days = this._weekdaysBetween(oldest.date, newest.date);
-            var realStep = (days > 0) ? ((newest.num - oldest.num) / days) : 1;
-            // Pas de referencia: +1 per dia FEINER (MATINS crea un rundown diari).
-            // El pas REAL pot ser mes gran (festius, rundowns extra) -> l'estimacio
-            // es nomes UN candidat mes i els veins (+1/-1/+2...) el cobreixen.
-            var dToday = this._weekdaysBetween(newest.date, datePrefix);
-            if (!(dToday > 0)) dToday = 1;
-            var estimateStr = newest.prefix + (newest.num + dToday);
-            log('🎯 [ER:Fetch] Serie ' + programArchivo + ': ' +
-                seen.map(function (s) { return s.date.substring(4) + '=' + s.id; }).join(' · ') +
-                ' | dies feiners des del darrer=' + dToday + ' | pas real≈' + realStep.toFixed(2) +
-                ' → estimat avui: ' + estimateStr);
-            return { estimate: estimateStr, step: realStep, seen: seen };
-        } catch (e) {
-            log('⚠️ [ER:Fetch] Estimacio de serie fallida: ' + e.message);
-            return null;
         }
+        if (seen.length === 0) return null;
+        seen.sort(function (a, b) { return a.date < b.date ? 1 : (a.date > b.date ? -1 : 0); });
+        var newest = seen[0], oldest = seen[seen.length - 1];
+        var daysBetween = this._weekdaysBetween(oldest.date, newest.date);
+        var realStep = (daysBetween > 0 && seen.length > 1) ? ((newest.num - oldest.num) / daysBetween) : 1;
+        var dToday = this._weekdaysBetween(newest.date, datePrefix);
+        if (!(dToday > 0)) dToday = 1;
+        var estStr = newest.prefix + (newest.num + dToday);
+        log('🎯 [ER:Fetch] Serie ' + programArchivo + ': ' +
+            seen.map(function (s) { return s.date.substring(4) + '=' + s.id; }).join(' · ') +
+            ' | dies feiners des del darrer=' + dToday + ' | pas real≈' + realStep.toFixed(2) +
+            ' → estimat avui: ' + estStr);
+        return { estimate: estStr, step: realStep, seen: seen };
     };
 
     /**
@@ -319,9 +417,9 @@
      * escaleta valida i en desa el JSON per no haver de repetir la crida.
      * @returns {Promise<{id:string, raw:string}|null>}
      */
-    ER._resolveEscaletaId = async function (programArchivo, baseId, dataStr, horaStr) {
+    ER._resolveEscaletaId = async function (programArchivo, baseId, dataStr, horaStr, projectRoot) {
         var est = null;
-        try { est = await this._estimateEscaletaIdFromHistory(programArchivo, baseId); } catch (e0) { est = null; }
+        try { est = await this._estimateEscaletaIdFromLocal(programArchivo, dataStr, projectRoot); } catch (e0) { est = null; }
         var list = [];
         var add = function (id) { if (id && list.indexOf(id) === -1) list.push(id); };
         add(baseId);
@@ -373,9 +471,10 @@
         var horaStr = null;
         try {
             var reader = window.FASTPASS_UI.EscaletaReader;
-            if (reader && reader.findLatest && reader.load) {
-                var datePrefixHora = dateDir ? dateDir.replace(/_/g, '') : null; // mateix dia que la foto
-                var meta = await reader.findLatest(programArchivo, blockId, datePrefixHora);
+            if (reader && reader.findInFolder && reader.load) {
+                // (2026-10-23 · LOCAL-FIRST) L'hora surt de l'escaleta del MATEIX
+                // directori del projecte (còpia prèvia o FOTO): el NAS ja no es mira.
+                var meta = await reader.findInFolder(folderPath, programArchivo);
                 if (meta) {
                     var jsonData = await reader.load(meta.path);
                     if (jsonData && jsonData.cleanFeed && jsonData.cleanFeed.mediaStart) {
@@ -430,8 +529,19 @@
         // Els rundowns de digition canvien (MATINS: un per dia feiner). Si el
         // JSON del dia diu "L'escaleta no existeix", es proven candidats de la
         // serie (+1/-1/+2...) fins trobar el bo, i es guarda la SEVA escaleta.
+        // projectRoot = carpeta que conte els directoris YYYY_MM_DD (â€¦/<PROG>_PROJECTES):
+        // folderPath es .../<PROG>_PROJECTES/YYYY_MM_DD/V*, aixi que es pugen dos nivells.
+        var _sep = String.fromCharCode(92);
+        var projectRoot = String(folderPath || '');
+        while (projectRoot.length > 1 && (projectRoot.charAt(projectRoot.length - 1) === _sep || projectRoot.charAt(projectRoot.length - 1) === '/')) {
+            projectRoot = projectRoot.substring(0, projectRoot.length - 1);
+        }
+        for (var _lv = 0; _lv < 2; _lv++) {
+            var _cut = Math.max(projectRoot.lastIndexOf(_sep), projectRoot.lastIndexOf('/'));
+            if (_cut > 0) projectRoot = projectRoot.substring(0, _cut);
+        }
         var probe = null;
-        try { probe = await this._resolveEscaletaId(programArchivo, escaletaId, dataStr, horaStr); } catch (ePr) { probe = null; }
+        try { probe = await this._resolveEscaletaId(programArchivo, escaletaId, dataStr, horaStr, projectRoot); } catch (ePr) { probe = null; }
         if (probe && probe.raw) {
             try {
                 var tsP = Date.now();

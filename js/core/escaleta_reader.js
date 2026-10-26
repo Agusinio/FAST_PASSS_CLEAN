@@ -5,11 +5,11 @@
  * Aquest fitxer actua com a pont de compatibilitat. Els mètodes reals es
  * troben als sub-mòduls carregats prèviament:
  *   escaleta_timecode.js  → parseDurada, tcToSeconds, secondsToTC, secondsToDuradaTC
- *   escaleta_config.js    → ESCALETES_PATH, ITEM_DURATION_OVERRIDES, applyDurationOverrides, ...
- *   escaleta_io.js        → findLatest, getStatus, load
+ *   escaleta_config.js    → ITEM_DURATION_OVERRIDES, applyDurationOverrides, _getHandleSecs, ...
+ *   escaleta_io.js        → findInFolder, ensureLocalCopy, lookupLocalStatus, load
  *   escaleta_items.js     → isItemEstructural, getItemEntradaSec, getItemSortidaSec, ...
  *   escaleta_bounds.js    → calcPrecisionTrimBounds, calcClipBounds, calcOnAirBounds, ...
- *   escaleta_fallback.js  → isBoundsOutOfCleanFeedRange, calcFallbackBoundsForBlockMedia
+ *   escaleta_fallback.js  → isBoundsOutOfCleanFeedRange
  *
  * Tots els sub-mòduls extenen FASTPASS_UI.EscaletaReader.
  * L'alias global window.EscaletaReader es manté per compatibilitat.

@@ -45,7 +45,6 @@
         * create: Crea un nou tema a partir d'una plantilla (Lògica verificada v2.6.0)
         * @param {Object}      ctx
         * @param {Object}      wottData
-        * @param {Object}      media
         * @param {Object}      paths
         * @param {Array}       portadaList
         * @param {string}      shortProg
@@ -67,7 +66,7 @@
             } catch (e) { utils.log(`⚠️ [PISTES·${tag}] ${e.message}`); }
         },
 
-        create: async function(ctx, wottData, media, paths, portadaList, shortProg, cleanFeedData) {
+        create: async function(ctx, wottData, paths, portadaList, shortProg, cleanFeedData) {
             const { plantillaPath, fullDestPath, folderPath, sanitizedTheme } = paths;
             const config = ctx.config;
 
@@ -85,17 +84,11 @@
             const openResult = await callJSX(jsxCommand);
             utils.log(`📤 Resultado de Project.open: ${openResult}`);
             
-            // 2. INGESTA GENERAL (Wotts, Media i Portada)
-            // Si tenemos cleanFeed, no ingerir el MP4 estándar
-            let mediaToIngest = media;
-            if (cleanFeedData && cleanFeedData.mediaPath && media && media.mp4) {
-                mediaToIngest = JSON.parse(JSON.stringify(media));
-                delete mediaToIngest.mp4;
-                if (isExtractedClip) {
-                    utils.log(`🎬 [EXTRACT] MP4 estàndard exclòs de la ingesta. S'importarà el clip local: ${cleanFeedData.mediaPath}`);
-                }
-            }
-            await this.ingestAssets(ctx, wottData, mediaToIngest, portadaList);
+            // 2. INGESTA GENERAL (Rètols i Portades)
+            // (2026-10-23) El vídeo NO es ingesta ací: el clip del cleanFeed
+            // (cleanFeedData.mediaPath) s'importa al pas 4a, i si no n'hi ha el
+            // projecte queda sense V1 fins a ACTUALITZAR.
+            await this.ingestAssets(ctx, wottData, portadaList);
 
             // 3. CLONAR I RENOMBRAR SEQÜÈNCIA
             const plantillaSeq = "OTT VERTICAL"; 
@@ -142,8 +135,9 @@
                     // exactament com abans. A més, es col·loquen marcadors d'IN i OUT
                     // a la seqüència per indicar visualment els punts detectats per
                     // l'algoritme calcPrecisionTrimBounds (sistema de 4 tiers IN / 3 tiers OUT).
-                    const isFallbackBlockMedia = cleanFeedData._isFallbackBlockMedia === true;
-                    utils.log(`📡 Usant ${isFallbackBlockMedia ? 'MP4 del bloc (FALLBACK)' : 'cleanFeed MP4 (amb marges)'}: ${cleanFeedData.mediaPath}`);
+                    // (2026-10-23) Ja no hi ha mode FALLBACK: `cleanFeedData.mediaPath` és
+                    // sempre el clip extret del cleanFeed.
+                    utils.log(`📡 Usant cleanFeed MP4 (amb marges): ${cleanFeedData.mediaPath}`);
 
                     // 4a. Importar el cleanFeed (si no està ja importat)
                     const cfPathForward = cleanFeedData.mediaPath.replace(/\\/g, "/");
@@ -154,11 +148,11 @@
                     const alreadyImported = items.some(i => i.name === cfName);
 
                     if (!alreadyImported) {
-                        utils.log(`📥 Important ${isFallbackBlockMedia ? 'MP4 del bloc' : 'cleanFeed'}: ${cfName}`);
+                        utils.log(`📥 Important cleanFeed: ${cfName}`);
                         await utils.importList([cfPathForward], "root");
                         await utils.delay(500);
                     } else {
-                        utils.log(`✅ ${isFallbackBlockMedia ? 'MP4 del bloc' : 'cleanFeed'} ja importat: ${cfName}`);
+                        utils.log(`✅ cleanFeed ja importat: ${cfName}`);
                     }
 
                     // 4b. Moure el CTI a 00:00 abans d'inserir el clip (per a que el cabezal
@@ -182,200 +176,167 @@
                     let clipDuration;
                     const escapedCfName = encodeURIComponent(cfName);
 
-                    if (isFallbackBlockMedia) {
-                        // ─── MODE FALLBACK: MP4 individual del bloc ───────────────────
-                        // S'insereix el clip complet sense trim perquè no coneixem
-                        // la duració exacta del fitxer. La duració del clip es llegeix
-                        // després de la inserció. Els sweet points es calculen amb
-                        // la duració real.
-                        utils.log(`🎬 [FALLBACK] Col·locant MP4 del bloc complet a V1 (sense trim)`);
-                        const insertRes = await callJSX(
-                            // keepAudio=true: el MP4 del bloc ÉS l'àudio de programa → cal
-                            // conservar el targeting perquè el seu àudio enllaçat caigui a A1.
-                            `Clips.insert('${escapedCfName}', 1, 0, null, 'video', true)`
-                        );
-                        if (insertRes && insertRes.indexOf('ERR') !== -1) {
-                            utils.log(`⚠️ Error insertant MP4 del bloc: ${insertRes}`);
-                        }
-
-                        // Llegir la duració real del clip inserit
-                        const clipDataRaw = await callJSX(`Clips.get(1, 0, 'video')`);
-                        let clipEnd = 0;
-                        try {
-                            const clipData = JSON.parse(clipDataRaw);
-                            clipEnd = clipData.end;
-                            clipDuration = clipData.end - clipData.start;
-                            utils.log(`📐 [FALLBACK] Clip inserit: start=0s end=${clipEnd.toFixed(2)}s durActual=${clipDuration.toFixed(2)}s`);
-                        } catch(e) {
-                            clipDuration = cleanFeedData.mp4Duration || 60;
-                            utils.log(`⚠️ [FALLBACK] No s'ha pogut llegir duració real del clip. Usant estimació: ${clipDuration.toFixed(2)}s`);
-                        }
-                        // (2026-09-25d) [DOMAINS] El MP4 del bloc s'insereix SENCER: el contingut
-                        // comença a 0 del fitxer i no hi ha handles → fileIn=0.
-                        cleanFeedData._plan = {
-                            domain: 'source/bloc-media',
-                            fileIn: 0, fileOut: clipDuration, clipDur: clipDuration,
-                            endPlanned: clipDuration, handle: 0
-                        };
-                    } else {
-                        // ─── MODE NORMAL: cleanFeed amb bounds calculats ──────────────
-                        // 4c. Insertar el MP4 a V1 amb insertWithBounds (recortat amb marges + handles)
-                        // Amb handles=3s, el source IN del clip és mp4ExpandedInPoint (sweet - 3s handle)
-                        // + globalOffset. L'offset global (tcOffset) s'aplica al clip origen per corregir
-                        // deriva d'ingesta, desplaçant el rang source del MP4 (on es llegeix el contingut
-                        // dins del fitxer). El clip es col·loca sempre a start=0 al timeline.
-                        const globalOffset = config.tcOffset || 0;
-                        // 🎛️ [IN-OFFSET 2026-09-04] Restar clipInOffset a l'IN (media origen)
-                        // del clip: el punt real d'inici del bloc està ~8-10s ABANS del que
-                        // el sistema calcula, així el clip s'insereix amb més marge per
-                        // davant. Només MODE NORMAL. Config: Config.get().clipInOffset.
-                        const clipInOffset = config.clipInOffset || 0;
-                        const zonaInOffset = config.zonaInOffset || 0;
-                        const handleSecs   = (config.general && config.general.handles) || config.handles || 20;
-                        // ═══ (2026-09-25) INVARIANT IN: clip.inPoint == corchete IN de la seqüència ═══
-                        // (queixa 2026-09-25: "el IN del clip està a 00:00 en lloc del corchete").
-                        // Amb el CLIP EXTRET, el contingut del bloc comença a file=handleSecs
-                        // (clipExpandedInPoint) → el clip ha de començar `handleSecs` MENYS el marge
-                        // que vulgui l'operador (zonaInOffset) DESPRÉS de l'inici del fitxer, i MAI
-                        // negatiu (clipInOffset restant-lo donava un IN negatiu → Premiere el
-                        // clampava a 00:00 i es perdia el handle de capçalera).
-                        const _fileIn  = (cleanFeedData.mp4ExpandedInPoint || 0);
-                        const _refIn   = (_fileIn > 0.5) ? _fileIn : handleSecs;
-                        const _rawInPt = _refIn + globalOffset - Math.max(clipInOffset, zonaInOffset);
-                        const mp4InPt  = Math.max(0.05, _rawInPt);
-                        let mp4OutPt = (cleanFeedData.mp4ExpandedOutPoint || 0) + globalOffset;  // expanded (amb handle), AMB offset
-                        // ═══ (2026-09-25) MAI MÉS ENLLÀ DE LA MEDIA REAL ══════════════════════════
-                        // El clip s'estirava fins a un OUT "planificat" que pot superar la durada
-                        // REAL del fitxer importat → cua amb ratlles (no hi ha media origen) i,
-                        // a més, el retrim fallava i l'IN quedava a 00:00. Es llegeix la durada
-                        // real de la media del clip (outPoint) i es clampa l'OUT.
-                        try {
-                            const _cRaw = await callJSX(`Clips.get(1, 0, 'video')`);
-                            const _c = JSON.parse(_cRaw || '{}');
-                            const _mediaDur = isFinite(Number(_c.outPoint)) ? Number(_c.outPoint) : null;
-                            if (_mediaDur !== null && _mediaDur > 0.5) {
-                                if (mp4OutPt > _mediaDur + 0.05) {
-                                    utils.log(`⚠️ [OUT·CLAMP] OUT planificat ${mp4OutPt.toFixed(2)}s > media real del clip ${_mediaDur.toFixed(2)}s → s'ajusta a ${_mediaDur.toFixed(2)}s (evita la cua sense media)`);
-                                    mp4OutPt = _mediaDur;
-                                }
-                                if (mp4InPt >= _mediaDur - 0.5) {
-                                    utils.log(`⚠️ [OUT·CLAMP] IN ${mp4InPt.toFixed(2)}s queda FORA de la media real (${_mediaDur.toFixed(2)}s) → el clip importat és massa curt (potser és d'una extracció vella): comprova el .bin/extracció`);
-                                }
+                    // (2026-10-23) Nomes hi ha un mode: el clip EXTRET del cleanFeed amb els
+                    // bounds calculats (mp4ExpandedInPoint/OutPoint). El mode FALLBACK (MP4
+                    // individual del bloc publicat pel pipeline de VERTICALITZACIO) ha desaparegut
+                    // amb eixa carpeta: si no hi ha captura, no es crea cap clip.
+                    // ─── MODE NORMAL: cleanFeed amb bounds calculats ──────────────
+                    // 4c. Insertar el MP4 a V1 amb insertWithBounds (recortat amb marges + handles)
+                    // Amb handles=3s, el source IN del clip és mp4ExpandedInPoint (sweet - 3s handle)
+                    // + globalOffset. L'offset global (tcOffset) s'aplica al clip origen per corregir
+                    // deriva d'ingesta, desplaçant el rang source del MP4 (on es llegeix el contingut
+                    // dins del fitxer). El clip es col·loca sempre a start=0 al timeline.
+                    const globalOffset = config.tcOffset || 0;
+                    // 🎛️ [IN-OFFSET 2026-09-04] Restar clipInOffset a l'IN (media origen)
+                    // del clip: el punt real d'inici del bloc està ~8-10s ABANS del que
+                    // el sistema calcula, així el clip s'insereix amb més marge per
+                    // davant. Només MODE NORMAL. Config: Config.get().clipInOffset.
+                    const clipInOffset = config.clipInOffset || 0;
+                    const zonaInOffset = config.zonaInOffset || 0;
+                    const handleSecs   = (config.general && config.general.handles) || config.handles || 20;
+                    // ═══ (2026-09-25) INVARIANT IN: clip.inPoint == corchete IN de la seqüència ═══
+                    // (queixa 2026-09-25: "el IN del clip està a 00:00 en lloc del corchete").
+                    // Amb el CLIP EXTRET, el contingut del bloc comença a file=handleSecs
+                    // (clipExpandedInPoint) → el clip ha de començar `handleSecs` MENYS el marge
+                    // que vulgui l'operador (zonaInOffset) DESPRÉS de l'inici del fitxer, i MAI
+                    // negatiu (clipInOffset restant-lo donava un IN negatiu → Premiere el
+                    // clampava a 00:00 i es perdia el handle de capçalera).
+                    const _fileIn  = (cleanFeedData.mp4ExpandedInPoint || 0);
+                    const _refIn   = (_fileIn > 0.5) ? _fileIn : handleSecs;
+                    const _rawInPt = _refIn + globalOffset - Math.max(clipInOffset, zonaInOffset);
+                    const mp4InPt  = Math.max(0.05, _rawInPt);
+                    let mp4OutPt = (cleanFeedData.mp4ExpandedOutPoint || 0) + globalOffset;  // expanded (amb handle), AMB offset
+                    // ═══ (2026-09-25) MAI MÉS ENLLÀ DE LA MEDIA REAL ══════════════════════════
+                    // El clip s'estirava fins a un OUT "planificat" que pot superar la durada
+                    // REAL del fitxer importat → cua amb ratlles (no hi ha media origen) i,
+                    // a més, el retrim fallava i l'IN quedava a 00:00. Es llegeix la durada
+                    // real de la media del clip (outPoint) i es clampa l'OUT.
+                    try {
+                        const _cRaw = await callJSX(`Clips.get(1, 0, 'video')`);
+                        const _c = JSON.parse(_cRaw || '{}');
+                        const _mediaDur = isFinite(Number(_c.outPoint)) ? Number(_c.outPoint) : null;
+                        if (_mediaDur !== null && _mediaDur > 0.5) {
+                            if (mp4OutPt > _mediaDur + 0.05) {
+                                utils.log(`⚠️ [OUT·CLAMP] OUT planificat ${mp4OutPt.toFixed(2)}s > media real del clip ${_mediaDur.toFixed(2)}s → s'ajusta a ${_mediaDur.toFixed(2)}s (evita la cua sense media)`);
+                                mp4OutPt = _mediaDur;
                             }
-                        } catch (eClamp) { /* noop */ }
-                        clipDuration = mp4OutPt - mp4InPt;
-                        if (_rawInPt < 0.05) {
-                            utils.log(`⚠️ [IN·CLAMP] IN calculat ${_rawInPt.toFixed(2)}s (negatiu) → CLAMPAT a ${mp4InPt.toFixed(2)}s. Revisa clipInOffset (${clipInOffset}s) / zonaInOffset (${zonaInOffset}s) / handle (${handleSecs}s).`);
-                        }
-                        utils.log(`🎬 Col·locant cleanFeed a V1 amb bounds: IN=${mp4InPt.toFixed(2)}s OUT=${mp4OutPt.toFixed(2)}s (start=0) | duradaEsperada=${clipDuration.toFixed(2)}s`);
-                        utils.log(`🔍 [LOG] cleanFeedData.mp4ExpandedInPoint (BASE, amb handle)=${(cleanFeedData.mp4ExpandedInPoint||0).toFixed(4)}s + globalOffset=${globalOffset}s = ${mp4InPt.toFixed(4)}s, mp4ExpandedOutPoint (BASE)=${(cleanFeedData.mp4ExpandedOutPoint||0).toFixed(4)}s + globalOffset=${globalOffset}s = ${mp4OutPt.toFixed(4)}s`);
-                        // (2026-09-23) INSERT + RIPPLE en lloc d'`insertWithBounds`: aquest fa
-                        // servir `overwriteClip` i, amb el MP4 acabat de re-extraure, s'enduia el
-                        // clip que hi hagués a V2 (comprovat al log: [PISTES·ABANS-INSERT] V2=1 →
-                        // [PISTES·DESPRES-INSERT] V2=0). Amb `Clips.insertClipItem` (= Track.insertClip
-                        // amb ripple) s'insereix desplaçant i NO es toca cap altra pista.
-                        const insRip = await callJSX(`Clips.insertClipItem('${escapedCfName}', 1, 0, 'video')`);
-                        utils.log(`🎬 Insert+RIPPLE a V1 → ${insRip}`);
-                        await utils.delay(400);
-                        // ═══ (2026-09-24) FIX CRÍTIC · RECORTE DEL CLIP ═══════════════════
-                        // `Clips.trimBounds` NO existeix al global JSX (jsx/main.jsx:425-560 no el
-                        // mapeja; sí que hi ha insertWithBounds/retrim/inPoint/start/end) → el
-                        // recorte fallava en SILENCI («ERR:Clips.trimBounds is not a function») i
-                        // el clip entrava SENCER (inPoint=0, outPoint=224.92s) mentre els corchetes
-                        // es posaven segons el pla → TOT el contingut ~12s a la dreta (10s de
-                        // clipInOffset que no s'aplicava + 2,04s de desfase del fitxer extret).
-                        // Queixa d'usuari 2026-09-24.
-                        // Àtoms emprats (TOTS exposats): Clips.retrim i, si no quadra, composició
-                        // Clips.inPoint + Clips.start + Clips.end.
-                        var clipInDelta = 0;                 // desviament real del inPoint vs el pla
-                        const endPlanned = mp4InPt + clipDuration;
-                        var tbRes = await callJSX(
-                            `Clips.retrim(1, 0, ${mp4InPt.toFixed(4)}, ${mp4OutPt.toFixed(4)}, ${endPlanned.toFixed(4)}, 'video')`
-                        );
-                        utils.log(`🎬 retrim V1 @0s IN=${mp4InPt.toFixed(2)}s OUT=${mp4OutPt.toFixed(2)}s → ${tbRes}`);
-                        await utils.delay(300);
-                        var trimOk = false;
-                        try {
-                            const chk = JSON.parse(await callJSX(`Clips.get(1, 0, 'video')`) || '{}');
-                            const inReal = Number(chk.inPoint);
-                            trimOk = isFinite(inReal) && Math.abs(inReal - mp4InPt) <= 0.25;
-                            utils.log(`📐 [TRIM-CHECK] inPoint real=${isFinite(inReal) ? inReal.toFixed(2) : '?'}s (pla=${mp4InPt.toFixed(2)}s) end=${Number(chk.end).toFixed(2)}s → ${trimOk ? 'OK' : 'MISMATCH'}`);
-                        } catch (eChk) {
-                            utils.log('⚠️ [TRIM-CHECK] No s\'ha pogut verificar el recorte: ' + eChk.message, 'WARN');
-                        }
-                        if (!trimOk) {
-                            utils.log('⚠️ [TRIM-CHECK] retrim no ha quadrat → composició Clips.inPoint + Clips.start + Clips.end', 'WARN');
-                            await callJSX(`Clips.inPoint(1, 0, ${mp4InPt.toFixed(4)}, 'video')`);
-                            await utils.delay(150);
-                            await callJSX(`Clips.start(1, 0, 0, 'video')`);
-                            await utils.delay(150);
-                            await callJSX(`Clips.end(1, 0, ${endPlanned.toFixed(4)}, 'video')`);
-                            await utils.delay(200);
-                            try {
-                                const chk2 = JSON.parse(await callJSX(`Clips.get(1, 0, 'video')`) || '{}');
-                                const inReal2 = Number(chk2.inPoint);
-                                trimOk = isFinite(inReal2) && Math.abs(inReal2 - mp4InPt) <= 0.25;
-                                utils.log(`📐 [TRIM-CHECK·2] inPoint real=${isFinite(inReal2) ? inReal2.toFixed(2) : '?'}s → ${trimOk ? 'OK' : 'ENCARA MISMATCH'}`);
-                            } catch (eChk2) { }
-                        }
-                        try {
-                            const cur = JSON.parse(await callJSX(`Clips.get(1, 0, 'video')`) || '{}');
-                            if (isFinite(Number(cur.inPoint))) clipInDelta = Number(cur.inPoint) - mp4InPt;
-                            // (2026-09-25c) [DOMAINS] Dades REALS del clip a V1 (base de l'ancoratge:
-                            // timelinePos = mediaSec − (wsms + clip.inPoint)).
-                            cleanFeedData._clipReal = {
-                                start: Number(cur.start), inPoint: Number(cur.inPoint),
-                                outPoint: Number(cur.outPoint), end: Number(cur.end)
-                            };
-                        } catch (eD) { }
-                        if (Math.abs(clipInDelta) > 0.25) {
-                            utils.log('🔴 [TRIM-CHECK] El clip NO té el inPoint del pla (desviament ' + clipInDelta.toFixed(2) + 's) → els corchetes de seqüència es desplaçaran ' + (-clipInDelta).toFixed(2) + 's per mantenir la peça alineada.', 'ERROR');
-                            getUtils().status('⚠️ Recorte de clip incomplet: corchetes ajustats (' + clipInDelta.toFixed(1) + 's)', 'warn');
-                        }
-                        // (2026-09-24) ÀUDIO: el clip inserit porta el seu àudio a A1, però el
-                        // recorte del VÍDEO no mou l'àudio (clips desenllaçats) → quedava un
-                        // desfase de clipInOffset (10s) entre àudio i vídeo (queixa 2026-09-24).
-                        // S'aplica el MATEIX in/out a l'àudio amb els àtoms exposats.
-                        try {
-                            const aAt = await callJSX(`Clips.at(1, 0, 'audio')`);
-                            var aIdx = 0;
-                            try {
-                                const aObj = JSON.parse(aAt || '{}');
-                                if (aObj && aObj.index !== undefined && aObj.index !== null) aIdx = aObj.index;
-                            } catch (eA) { }
-                            const aRes = await callJSX(`Clips.retrim(1, ${aIdx}, ${mp4InPt.toFixed(4)}, ${mp4OutPt.toFixed(4)}, ${endPlanned.toFixed(4)}, 'audio')`);
-                            utils.log(`🎬 [AUDIO] retrim A1[${aIdx}] IN=${mp4InPt.toFixed(2)}s OUT=${mp4OutPt.toFixed(2)}s → ${aRes}`);
-                            await utils.delay(250);
-                            const aChk = JSON.parse(await callJSX(`Clips.get(1, ${aIdx}, 'audio')`) || '{}');
-                            const aIn = Number(aChk.inPoint), aEnd = Number(aChk.end);
-                            const aOk = isFinite(aIn) && Math.abs(aIn - mp4InPt) <= 0.25;
-                            utils.log(`📐 [AUDIO-TRIM-CHECK] A1[${aIdx}] inPoint=${isFinite(aIn) ? aIn.toFixed(2) : '?'}s (pla=${mp4InPt.toFixed(2)}s) end=${isFinite(aEnd) ? aEnd.toFixed(2) : '?'}s → ${aOk ? 'OK' : 'MISMATCH'}`);
-                            if (!aOk) {
-                                await callJSX(`Clips.inPoint(1, ${aIdx}, ${mp4InPt.toFixed(4)}, 'audio')`);
-                                await utils.delay(150);
-                                await callJSX(`Clips.start(1, ${aIdx}, 0, 'audio')`);
-                                await utils.delay(150);
-                                await callJSX(`Clips.end(1, ${aIdx}, ${endPlanned.toFixed(4)}, 'audio')`);
-                                await utils.delay(200);
-                                const aChk2 = JSON.parse(await callJSX(`Clips.get(1, ${aIdx}, 'audio')`) || '{}');
-                                utils.log(`📐 [AUDIO-TRIM-CHECK·2] A1[${aIdx}] inPoint=${Number(aChk2.inPoint).toFixed(2)}s end=${Number(aChk2.end).toFixed(2)}s`);
+                            if (mp4InPt >= _mediaDur - 0.5) {
+                                utils.log(`⚠️ [OUT·CLAMP] IN ${mp4InPt.toFixed(2)}s queda FORA de la media real (${_mediaDur.toFixed(2)}s) → el clip importat és massa curt (potser és d'una extracció vella): comprova el .bin/extracció`);
                             }
-                        } catch (eAud) {
-                            utils.log('⚠️ [AUDIO] No s\'ha pogut recortar l\'àudio: ' + eAud.message, 'WARN');
                         }
-                        // (2026-09-25c) 🗑️ `Clips.trimAudioA2` NO està exposat pel bridge JSX (log:
-                        // "ERR:Clips.trimAudioA2 is not a function" ✗ a cada execució). Com que la
-                        // capa JSX està TANCADA, s'elimina la crida: era un no-op que embrutava el
-                        // log amb un ERROR vermell i falsejava el diagnòstic.
-                        // (2026-09-25d) [DOMAINS] PLA en domini FITXER: es declara AQUÍ perquè
-                        // mp4InPt/mp4OutPt/endPlanned viuen en aquesta branca (fer-ho a fora donava
-                        // "mp4InPt is not defined" i trencava el flux ABANS del corchete ✗).
-                        cleanFeedData._plan = {
-                            domain: 'fitxer-extret',
-                            fileIn: mp4InPt, fileOut: mp4OutPt, clipDur: clipDuration,
-                            endPlanned: endPlanned, handle: handleSecs
-                        };
+                    } catch (eClamp) { /* noop */ }
+                    clipDuration = mp4OutPt - mp4InPt;
+                    if (_rawInPt < 0.05) {
+                        utils.log(`⚠️ [IN·CLAMP] IN calculat ${_rawInPt.toFixed(2)}s (negatiu) → CLAMPAT a ${mp4InPt.toFixed(2)}s. Revisa clipInOffset (${clipInOffset}s) / zonaInOffset (${zonaInOffset}s) / handle (${handleSecs}s).`);
                     }
+                    utils.log(`🎬 Col·locant cleanFeed a V1 amb bounds: IN=${mp4InPt.toFixed(2)}s OUT=${mp4OutPt.toFixed(2)}s (start=0) | duradaEsperada=${clipDuration.toFixed(2)}s`);
+                    utils.log(`🔍 [LOG] cleanFeedData.mp4ExpandedInPoint (BASE, amb handle)=${(cleanFeedData.mp4ExpandedInPoint||0).toFixed(4)}s + globalOffset=${globalOffset}s = ${mp4InPt.toFixed(4)}s, mp4ExpandedOutPoint (BASE)=${(cleanFeedData.mp4ExpandedOutPoint||0).toFixed(4)}s + globalOffset=${globalOffset}s = ${mp4OutPt.toFixed(4)}s`);
+                    // (2026-09-23) INSERT + RIPPLE en lloc d'`insertWithBounds`: aquest fa
+                    // servir `overwriteClip` i, amb el MP4 acabat de re-extraure, s'enduia el
+                    // clip que hi hagués a V2 (comprovat al log: [PISTES·ABANS-INSERT] V2=1 →
+                    // [PISTES·DESPRES-INSERT] V2=0). Amb `Clips.insertClipItem` (= Track.insertClip
+                    // amb ripple) s'insereix desplaçant i NO es toca cap altra pista.
+                    const insRip = await callJSX(`Clips.insertClipItem('${escapedCfName}', 1, 0, 'video')`);
+                    utils.log(`🎬 Insert+RIPPLE a V1 → ${insRip}`);
+                    await utils.delay(400);
+                    // ═══ (2026-09-24) FIX CRÍTIC · RECORTE DEL CLIP ═══════════════════
+                    // `Clips.trimBounds` NO existeix al global JSX (jsx/main.jsx:425-560 no el
+                    // mapeja; sí que hi ha insertWithBounds/retrim/inPoint/start/end) → el
+                    // recorte fallava en SILENCI («ERR:Clips.trimBounds is not a function») i
+                    // el clip entrava SENCER (inPoint=0, outPoint=224.92s) mentre els corchetes
+                    // es posaven segons el pla → TOT el contingut ~12s a la dreta (10s de
+                    // clipInOffset que no s'aplicava + 2,04s de desfase del fitxer extret).
+                    // Queixa d'usuari 2026-09-24.
+                    // Àtoms emprats (TOTS exposats): Clips.retrim i, si no quadra, composició
+                    // Clips.inPoint + Clips.start + Clips.end.
+                    var clipInDelta = 0;                 // desviament real del inPoint vs el pla
+                    const endPlanned = mp4InPt + clipDuration;
+                    var tbRes = await callJSX(
+                        `Clips.retrim(1, 0, ${mp4InPt.toFixed(4)}, ${mp4OutPt.toFixed(4)}, ${endPlanned.toFixed(4)}, 'video')`
+                    );
+                    utils.log(`🎬 retrim V1 @0s IN=${mp4InPt.toFixed(2)}s OUT=${mp4OutPt.toFixed(2)}s → ${tbRes}`);
+                    await utils.delay(300);
+                    var trimOk = false;
+                    try {
+                        const chk = JSON.parse(await callJSX(`Clips.get(1, 0, 'video')`) || '{}');
+                        const inReal = Number(chk.inPoint);
+                        trimOk = isFinite(inReal) && Math.abs(inReal - mp4InPt) <= 0.25;
+                        utils.log(`📐 [TRIM-CHECK] inPoint real=${isFinite(inReal) ? inReal.toFixed(2) : '?'}s (pla=${mp4InPt.toFixed(2)}s) end=${Number(chk.end).toFixed(2)}s → ${trimOk ? 'OK' : 'MISMATCH'}`);
+                    } catch (eChk) {
+                        utils.log('⚠️ [TRIM-CHECK] No s\'ha pogut verificar el recorte: ' + eChk.message, 'WARN');
+                    }
+                    if (!trimOk) {
+                        utils.log('⚠️ [TRIM-CHECK] retrim no ha quadrat → composició Clips.inPoint + Clips.start + Clips.end', 'WARN');
+                        await callJSX(`Clips.inPoint(1, 0, ${mp4InPt.toFixed(4)}, 'video')`);
+                        await utils.delay(150);
+                        await callJSX(`Clips.start(1, 0, 0, 'video')`);
+                        await utils.delay(150);
+                        await callJSX(`Clips.end(1, 0, ${endPlanned.toFixed(4)}, 'video')`);
+                        await utils.delay(200);
+                        try {
+                            const chk2 = JSON.parse(await callJSX(`Clips.get(1, 0, 'video')`) || '{}');
+                            const inReal2 = Number(chk2.inPoint);
+                            trimOk = isFinite(inReal2) && Math.abs(inReal2 - mp4InPt) <= 0.25;
+                            utils.log(`📐 [TRIM-CHECK·2] inPoint real=${isFinite(inReal2) ? inReal2.toFixed(2) : '?'}s → ${trimOk ? 'OK' : 'ENCARA MISMATCH'}`);
+                        } catch (eChk2) { }
+                    }
+                    try {
+                        const cur = JSON.parse(await callJSX(`Clips.get(1, 0, 'video')`) || '{}');
+                        if (isFinite(Number(cur.inPoint))) clipInDelta = Number(cur.inPoint) - mp4InPt;
+                        // (2026-09-25c) [DOMAINS] Dades REALS del clip a V1 (base de l'ancoratge:
+                        // timelinePos = mediaSec − (wsms + clip.inPoint)).
+                        cleanFeedData._clipReal = {
+                            start: Number(cur.start), inPoint: Number(cur.inPoint),
+                            outPoint: Number(cur.outPoint), end: Number(cur.end)
+                        };
+                    } catch (eD) { }
+                    if (Math.abs(clipInDelta) > 0.25) {
+                        utils.log('🔴 [TRIM-CHECK] El clip NO té el inPoint del pla (desviament ' + clipInDelta.toFixed(2) + 's) → els corchetes de seqüència es desplaçaran ' + (-clipInDelta).toFixed(2) + 's per mantenir la peça alineada.', 'ERROR');
+                        getUtils().status('⚠️ Recorte de clip incomplet: corchetes ajustats (' + clipInDelta.toFixed(1) + 's)', 'warn');
+                    }
+                    // (2026-09-24) ÀUDIO: el clip inserit porta el seu àudio a A1, però el
+                    // recorte del VÍDEO no mou l'àudio (clips desenllaçats) → quedava un
+                    // desfase de clipInOffset (10s) entre àudio i vídeo (queixa 2026-09-24).
+                    // S'aplica el MATEIX in/out a l'àudio amb els àtoms exposats.
+                    try {
+                        const aAt = await callJSX(`Clips.at(1, 0, 'audio')`);
+                        var aIdx = 0;
+                        try {
+                            const aObj = JSON.parse(aAt || '{}');
+                            if (aObj && aObj.index !== undefined && aObj.index !== null) aIdx = aObj.index;
+                        } catch (eA) { }
+                        const aRes = await callJSX(`Clips.retrim(1, ${aIdx}, ${mp4InPt.toFixed(4)}, ${mp4OutPt.toFixed(4)}, ${endPlanned.toFixed(4)}, 'audio')`);
+                        utils.log(`🎬 [AUDIO] retrim A1[${aIdx}] IN=${mp4InPt.toFixed(2)}s OUT=${mp4OutPt.toFixed(2)}s → ${aRes}`);
+                        await utils.delay(250);
+                        const aChk = JSON.parse(await callJSX(`Clips.get(1, ${aIdx}, 'audio')`) || '{}');
+                        const aIn = Number(aChk.inPoint), aEnd = Number(aChk.end);
+                        const aOk = isFinite(aIn) && Math.abs(aIn - mp4InPt) <= 0.25;
+                        utils.log(`📐 [AUDIO-TRIM-CHECK] A1[${aIdx}] inPoint=${isFinite(aIn) ? aIn.toFixed(2) : '?'}s (pla=${mp4InPt.toFixed(2)}s) end=${isFinite(aEnd) ? aEnd.toFixed(2) : '?'}s → ${aOk ? 'OK' : 'MISMATCH'}`);
+                        if (!aOk) {
+                            await callJSX(`Clips.inPoint(1, ${aIdx}, ${mp4InPt.toFixed(4)}, 'audio')`);
+                            await utils.delay(150);
+                            await callJSX(`Clips.start(1, ${aIdx}, 0, 'audio')`);
+                            await utils.delay(150);
+                            await callJSX(`Clips.end(1, ${aIdx}, ${endPlanned.toFixed(4)}, 'audio')`);
+                            await utils.delay(200);
+                            const aChk2 = JSON.parse(await callJSX(`Clips.get(1, ${aIdx}, 'audio')`) || '{}');
+                            utils.log(`📐 [AUDIO-TRIM-CHECK·2] A1[${aIdx}] inPoint=${Number(aChk2.inPoint).toFixed(2)}s end=${Number(aChk2.end).toFixed(2)}s`);
+                        }
+                    } catch (eAud) {
+                        utils.log('⚠️ [AUDIO] No s\'ha pogut recortar l\'àudio: ' + eAud.message, 'WARN');
+                    }
+                    // (2026-09-25c) 🗑️ `Clips.trimAudioA2` NO està exposat pel bridge JSX (log:
+                    // "ERR:Clips.trimAudioA2 is not a function" ✗ a cada execució). Com que la
+                    // capa JSX està TANCADA, s'elimina la crida: era un no-op que embrutava el
+                    // log amb un ERROR vermell i falsejava el diagnòstic.
+                    // (2026-09-25d) [DOMAINS] PLA en domini FITXER: es declara AQUÍ perquè
+                    // mp4InPt/mp4OutPt/endPlanned viuen en aquesta branca (fer-ho a fora donava
+                    // "mp4InPt is not defined" i trencava el flux ABANS del corchete ✗).
+                    cleanFeedData._plan = {
+                        domain: 'fitxer-extret',
+                        fileIn: mp4InPt, fileOut: mp4OutPt, clipDur: clipDuration,
+                        endPlanned: endPlanned, handle: handleSecs
+                    };
                     // (2026-09-23) Estat de les pistes JUST després d'inserir el MP4 del bloc.
                     await this._logPistas('DESPRES-INSERT');
 
@@ -389,7 +350,7 @@
                     // (sweetSeqIn) restant zonaInOffset (per defecte 10s) perquè quedi més a
                     // prop de l'inici real del bloc. Només en mode normal (no fallback).
                     // Config: Config.get().zonaInOffset.
-                    const zonaInAdj = (isFallbackBlockMedia) ? 0 : (config.zonaInOffset || 0);
+                    const zonaInAdj = config.zonaInOffset || 0;
                     // (2026-09-24) Blindatge: si el recorte del clip no s'ha pogut aplicar del tot
                     // (clipInDelta = inPoint real − inPoint del pla), els corchetes es desplacen el
                     // mateix valor perquè la peça segueixi alineada amb el material.
@@ -405,13 +366,12 @@
                     // (2026-09-25b) Igual que l'IN: sense _deltaIn (només geometria del clip).
                     const sweetSeqOut = Math.max(sweetSeqIn + 1, clipDuration - h);
                     // (2026-09-25d) [DOMAINS] Completeu el PLA amb la geometria del corchete (aquest
-                    // àmbit). El domini FITXER (fileIn/fileOut) s'omple dins la branca MODE NORMAL /
-                    // FALLBACK, que és on existeixen aquestes variables.
+                    // àmbit). El domini FITXER (fileIn/fileOut) s'ha omplert a la branca 4c.
                     cleanFeedData._plan = Object.assign(
-                        cleanFeedData._plan || { domain: isFallbackBlockMedia ? 'source/bloc-media' : 'fitxer-extret' },
+                        cleanFeedData._plan || { domain: 'fitxer-extret' },
                         { sweetSeqIn: sweetSeqIn, sweetSeqOut: sweetSeqOut, handle: h, clipDur: clipDuration }
                     );
-                    utils.log(`📍 [DEBUG] IN/OUT de seqüència (sweet points): seqIN=${sweetSeqIn.toFixed(2)}s seqOUT=${sweetSeqOut.toFixed(2)}s (durada=${clipDuration.toFixed(2)}s, handleSecs=${h}s${isFallbackBlockMedia ? ', mode=fallback' : ''})`);
+                    utils.log(`📍 [DEBUG] IN/OUT de seqüència (sweet points): seqIN=${sweetSeqIn.toFixed(2)}s seqOUT=${sweetSeqOut.toFixed(2)}s (durada=${clipDuration.toFixed(2)}s, handleSecs=${h}s)`);
                     const rangeRes = await callJSX(`Timeline.range(${sweetSeqIn.toFixed(4)}, ${sweetSeqOut.toFixed(4)})`);
                     utils.log(`🔍 Timeline.range resultat=${rangeRes}`);
 
@@ -501,24 +461,12 @@
 
 
         /**
-         * ingestAssets: Centralitza l'escaneig i ingesta de materials (Wotts, MP4, SRT, Portada).
+         * ingestAssets: Centralitza la ingesta de materials del NAS (rètols i portades).
+         * (2026-10-23) Ja NO ingesta MP4/SRT: el vídeo ix del cleanFeed (Project.create)
+         * i els subtítols viuen al costat del .prproj (SrtEditor CARREGAR/EXPORTAR).
          */
-        ingestAssets: async function (ctx, wottData, media, portadas, opts) { // <--- Nombre unificado
+        ingestAssets: async function (ctx, wottData, portadas) {
             utils.log("🎞️ [SYNC] Iniciant ingesta segmentada...");
-            // ── GUARDA "CAPA JA PRESENT" (només en ACTUALITZAR/LOAD/GO) ────────
-            // Si el projecte ja té el clip de vídeo de treball a V1 i/o subtítols
-            // montats, no cal importar MP4/SRT "equivalents" encara que el nom no
-            // coincideixi (els fitxers d'emergència poden tenir noms diferents).
-            const skipMedia = !!(opts && opts.skipMediaIfLayerPresent);
-            let capaVideoPresent = false;
-            let capaSrtPresent = false;
-            if (skipMedia) {
-                try { capaVideoPresent = (await callJSX("hasClips(1, 'video')")) === "true"; } catch (eCv) { }
-                try { capaSrtPresent = (await callJSX("hasClips(1, 'subtitle')")) === "true"; } catch (eCs) { }
-                if (capaVideoPresent || capaSrtPresent) {
-                    utils.log(`[INGEST] Capa ja present al projecte (vídeo=${capaVideoPresent}, subtítols=${capaSrtPresent}). No es reimportaran MP4/SRT equivalents.`, 'INFO');
-                }
-            }
 
             // ── FILTRE FINAL DE SEGURETAT (2026-09-07) ─────────────────────────
             // Mecanisme ÚNIC d'ingesta: passi pel camí que passi (NEW, UPDATE, GO,
@@ -568,7 +516,7 @@
 
             // Obtener archivos ya presentes en el proyecto
             const existing = await this._getExistingAssets();
-            utils.log(`🔍 Assets existentes: ${existing.wotts.length} wotts, ${existing.media.length} media, ${existing.portadas.length} portadas`);
+            utils.log(`🔍 Assets existentes: ${existing.wotts.length} wotts, ${existing.portadas.length} portadas`);
 
             // A. RÈTOLS (Wotts) -> Bin CHY
             if (wottData && wottData.list && wottData.list.length > 0) {
@@ -641,80 +589,9 @@
                 }
             }
         
-            // B. MEDIA ASSETS (MP4 / SRT) -> Root
-            const mediaList = [];
-
-            // (TO DO UPDATE #1) NO reimportar el MP4 si ja existeix un clip al projecte.
-            // A més, en actualitzar, si la CAPA de vídeo ja és present a V1 no es
-            // reimporta cap MP4 equivalent encara que el nom no coincideixi.
-            // BUG (2026-09-16): aquí hi havia un `if (... !mp4Exists ...)` ABANS de la
-            // declaració de `mp4Exists` (let, més avall) → "Cannot access 'mp4Exists'
-            // before initialization" i el flotge de CREAR/ACTUALITZAR s'aturava sense
-            // importar el MP4. La comprovació viu ara una sola vegada, després de calcular-lo.
-            let mp4Exists = false;
-            if (media?.mp4?.path) {
-                const mp4Enc = encodeURIComponent(media.mp4.name);
-                const mp4Found = await callJSX(`FASTPASS.Project.find('${mp4Enc}')`);
-                mp4Exists = !!mp4Found && mp4Found !== 'null' && mp4Found.indexOf('null') !== 0;
-                if (!mp4Exists) {
-                    const lastDot = media.mp4.name.lastIndexOf('.');
-                    if (lastDot > 0) {
-                        const mp4FoundNoExt = await callJSX(`FASTPASS.Project.find('${encodeURIComponent(media.mp4.name.substring(0, lastDot))}')`);
-                        mp4Exists = !!mp4FoundNoExt && mp4FoundNoExt !== 'null' && mp4FoundNoExt.indexOf('null') !== 0;
-                    }
-                }
-            }
-            if (media?.mp4?.path && !mp4Exists && !(skipMedia && capaVideoPresent)) {
-                mediaList.push(media.mp4.path.replace(/\\/g, "/"));
-            }
-
-            // SRT: es copia SEMPRE al directori del projecte (font única local).
-            // Així CARREGAR troba exactament un .srt al costat del .prproj,
-            // sense dependre del bin de Premiere (que pot tenir .srt residuals).
-            let srtImportPath = null;
-            // En actualitzar, si la capa de subtítols ja és present al projecte no es
-            // copia ni s'importa cap SRT equivalent (el nom pot no coincidir).
-            if (skipMedia && capaSrtPresent && media?.srt?.path) {
-                utils.log("🟡 [INGEST] Ja hi ha subtítols montats al projecte. No s'importa el SRT equivalent.", 'INFO');
-            }
-            if (media?.srt?.path && !(skipMedia && capaSrtPresent)) {
-                const destFolder = (window.FASTPASS_UI.Utils.workFolder(ctx))
-                    .replace(/\\/g, "/").replace(/\/+$/, "");
-                const localSrt = destFolder + "/" + media.srt.name;
-                const copyResult = await this._copySrtToProjectFolder(media.srt.path, localSrt);
-                if (copyResult === "OK") {
-                    srtImportPath = localSrt;
-                    utils.log(`📥 SRT copiat al directori del projecte: ${localSrt}`);
-
-                    // ── PROJECTE NOU: Netejar marcadors persistits d'una sessió anterior ──
-                    // El SrtEditor restaura els marcadors des de C:/temp/fastpass_srt_markers_<nom>.json
-                    // quan el nom del SRT coincideix. En un projecte nou volem començar de zero.
-                    try {
-                        const srtBase = media.srt.name.replace(/\.srt$/i, '');
-                        const safeName = srtBase.replace(/[^a-zA-Z0-9_-]/g, '_');
-                        const markersFile = "C:/temp/fastpass_srt_markers_" + safeName + ".json";
-                        const rmRes = await callJSX(`IO.remove('${markersFile.replace(/\\/g, '/')}')`);
-                        if (rmRes !== 'NOT_EXISTS') {
-                            utils.log(`🧹 Marcadors SRT anteriors eliminats (${rmRes}): ${markersFile}`);
-                        }
-                    } catch (eClean) {
-                        utils.log(`⚠️ No s'han pogut netejar marcadors SRT: ${eClean.message}`, "WARN");
-                    }
-                } else {
-                    srtImportPath = media.srt.path.replace(/\\/g, "/");
-                    utils.log(`⚠️ No s'ha pogut copiar el SRT al projecte (${copyResult}). S'importarà des del NAS.`);
-                }
-                if (!existing.media.includes(media.srt.name)) {
-                    mediaList.push(srtImportPath);
-                }
-            }
-
-            if (mediaList.length > 0) {
-                utils.log(`📥 Ingestant assets media al ROOT...`);
-                await utils.importList(mediaList, "root");
-            } else if (media?.mp4 || media?.srt) {
-                utils.log("✅ Los assets de media ya están en el proyecto. Se omite importación.");
-            }
+        // (2026-10-23) RETIRAT el bloc B (ingesta de MP4/SRT del NAS): el video del
+        // projecte es el clip extret del cleanFeed (Project.create) i el .srt viu al
+        // costat del .prproj (SrtEditor).
         
             // C. PORTADES (Múltiples PNGs) -> Bin PORTADES
             if (portadas && portadas.length > 0) {
@@ -775,7 +652,7 @@
 
         /**
          * _getExistingAssets: Obtiene los nombres de archivos ya presentes en los bins del proyecto.
-         * Retorna un objeto { wotts: [...], media: [...], portadas: [...] }.
+         * Retorna un objeto { wotts: [...], portadas: [...] }.
          */
         _getExistingAssets: async function() {
             try {
@@ -789,32 +666,15 @@
                 const portadasItems = JSON.parse(portadasItemsRaw || "[]");
                 const portadas = portadasItems.map(item => item.name);
 
-                // Media (MP4/SRT) están en root; obtener todos los items del root
-                const rootItemsRaw = await callJSX("FASTPASS.Project.items('')");
-                const rootItems = JSON.parse(rootItemsRaw || "[]");
-                const media = rootItems.map(item => item.name);
-
-                return { wotts, media, portadas };
+                return { wotts, portadas };
             } catch (e) {
                 utils.log("⚠️ Error obteniendo assets existentes: " + e.message, "WARN");
-                return { wotts: [], media: [], portadas: [] };
+                return { wotts: [], portadas: [] };
             }
         },
 
-        /**
-         * _copySrtToProjectFolder: Copia el .srt al directori del projecte via JSX (File.copy).
-         * @returns {Promise<string>} "OK" si s'ha copiat, o "ERR:..." en cas contrari.
-         */
-        _copySrtToProjectFolder: async function (src, dst) {
-            try {
-                const srcEsc = String(src).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
-                const dstEsc = String(dst).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
-                const jsx = "(function(){try{var s=new File('" + srcEsc + "');var d=new File('" + dstEsc + "');if(!s.exists)return'ERR_SRC_NOT_FOUND';if(d.exists){try{d.remove()}catch(e){}}var ok=s.copy(d);return ok?'OK':'ERR_COPY'}catch(e){return'ERR:'+e.message}})()";
-                return await callJSX(jsx);
-            } catch (e) {
-                return "ERR:" + e.message;
-            }
-        },
+        // (2026-10-23) RETIRAT `_copySrtToProjectFolder`: el .srt ja no arriba del NAS;
+        // l'editor SRT treballa amb el fitxer que viu al costat del .prproj.
 
         /**
          * lock: Crea el fitxer .lock per marcar la propietat del projecte.

@@ -1,9 +1,9 @@
 # Registre de bugs i funcionalitats
 
-Projecte **FAST >>> PASS** - versio **2.9.5 (LIPO-PRO)** - cataleg actualitzat: 2026-10-22
+Projecte **FAST >>> PASS** - versio **2.9.5 (LIPO-PRO)** - cataleg actualitzat: 2026-10-23
 
 Aquest fitxer es genera automaticament des del cataleg viu del projecte (`features.json`).
-Total: 117 entrades - **111 resoltes/tancades** - 6 en curs o pendents.
+Total: 119 entrades - **111 resoltes/tancades** - 8 en curs o pendents.
 
 ---
 
@@ -30,7 +30,7 @@ Total: 117 entrades - **111 resoltes/tancades** - 6 en curs o pendents.
 
 ## 2. Bugs resolts (detall)
 
-Ordre cronologic pel numero d incident. 106 entrades.
+Ordre cronologic pel numero d incident. 108 entrades.
 
 ### #8 - resolt (2026-05-28)
 
@@ -1553,6 +1553,102 @@ capturar, ja no usa `_v6FreeTC` per al `TEMP_TC`, té la guarda de cobertura i l
 `Snapshots/freeze_titulillo_*.png` ha de pesar **~20 KB**, no ~1 MB.
 
 
+
+### #189 - implementat_pendent_test (2026-10-23)
+
+**SIMPTOMA**: en fusionar els SINT amb 🧩 (o en carregar-los, Ctrl+clic), **cada subtítol
+sintètic eixia ~40 s ABANS del lloc** on tocava — l'usuari ho descrivia com «el subtítol és
+d'un moment anterior». Al TNC **V1 del 22/10** (ELS_DIPOSTIS) el decalatge era de **-39,55 s**;
+al **V3** de la mateixa data, de **-16,97 s**.
+
+**CAUSA ARREL**: el `.srt` sintètic (Whisper/Subtitles) **no comença al media 0 del clip**: el seu
+`00:00:00` és l'inici del material amb què s'ha generat (la peça sencera, o un tros de programa
+que la conté). El SRT NORMAL, en canvi, viu en **temps de MEDIA del clip** (l'extracte amb
+handles). Fusionar-los tal qual desplaçava cada entrada SINT eixa diferència cap arrere — i ací
+**no hi ha cap constant**: depèn de cada peça i de cada extracte (16,97 s vs 39,55 s).
+
+**SOLUCIO** (tot JS; `jsx/**` intacte):
+
+1. `js/logic/10_Srt_Logic.js` · **`estimateOffsetSec(base, sint)`** nou: empareixa les frases que
+   apareixen EXACTAMENT als dos (text normalitzat: minúscules, sense accents ni puntuació) i
+   calcula `base.startSec - sint.startSec`; el desfasament és la **MEDIANA** (robusta a frases
+   repetides o mal aparellades), refinada quedant-se les mostres a ±2,5 s d'eixa mediana. Retorna
+   `{offsetSec, offsetSecRaw, pairs, used, spreadSec, method}` amb `method` = `cap` (sense
+   parelles) · `text` (≥3 mostres) · `text-febol` (<3) · `fora-de-rang` (>900 s: no es creu i **no
+   s'aplica**). Al costat, `_median` i **`shiftEntries(entries, d)`**, que desplaça la taula sense
+   mutar-la, **descarta** el que cau del tot abans del 0 i **retalla** a 0 el que el creua (un .srt
+   amb temps negatius no és vàlid ni per a Premiere ni per a l'exportador).
+2. `js/editor/srt_editor.js` · **`_applySintAlignment()`**: mesura i desplaça la taula SINT
+   (entrades, `loadedEntries`, `originalEntries`, marcadors i `maxSec`) a l'eix del NORMAL.
+   S'anomena **en carregar** qualsevol de les dos taules (`loadSrt`, després de reposar
+   `_sintShiftSec`) i **a l'inici de `mergeSyntheticGaps`**; només actua amb ≥3 mostres i
+   |Δ| ≥ 0,25 s (idempotent: un colp alineada, la mediana torna a ser ~0).
+3. `js/editor/srt_editor.js` · **marcadors**: els restaurats després de l'alineació es desplacen
+   amb `_sintShiftSec` i **es desen a disc en l'eix del FITXER** (`_markersPayload` desfà el
+   desplaçament) perquè en tornar a carregar no es moga dos voltes. El desplaçament **viatja amb
+   la instantania de la vista** (`sintShiftSec` a `_snapshotView`/`_applyView`) i **s'acumula** si
+   una segona fusió corregeix un residual.
+4. Cache-busts: `10_Srt_Logic.js?v=22`, `srt_editor.js?v=86`.
+
+**MESURA EN VIU** (fitxers reals del NAS, 22/10) · el residu és `|Δ|` després d'aplicar el
+desplaçament:
+
+| Peça | SINT | parelles | Δ mesurat | residu (med / màx) |
+| --- | --- | --- | --- | --- |
+| TN_COMARQUES V1 · ELS_DIPOSTIS | `TN_COMARQUES_V1_ELS_DIPOSTIS_…_Subtitles.srt` | 7 (7 usades) | **-39,55 s** | 0,26 / 0,89 s |
+| TN_COMARQUES V3 · PEREJAUME | `TN_COMARQUES_V3_TE_foto_…_CEC_Subtitles.srt` | 11 (9 usades) | **-16,97 s** | 0,84 / 6,57 s |
+
+**VALIDACIO**: `bin/check_all.ps1 -Only js,smoke` → **ALL GREEN | js 61/61 | smoke 445/445 |
+jsx intacte**. Proves noves: `#F3/53` (`estimateOffsetSec` mesura 40 s), `#F3/54` (`shiftEntries`
+desplaça i descarta), `#F3/55` (retall a 0), `#F3/56` (alineat cau al BUIT correcte; sense ajust,
+al d'abans), `#F3/57` (sense frases en comú → 0), `#F3/58` (l'editor alinea abans de fusionar),
+`#F3/59` (marcadors desats a l'eix del fitxer), `#F3/60` (el desplaçament viatja amb la vista i
+s'acumula). `#F3/25` i `#175/20` actualitzats als cache-busts.
+
+**PENDENT DE VALIDAR EN VIU**: recarregar el panell (v=86), carregar el NORMAL + Ctrl+clic als SINT,
+🧩 i comprovar que al log ix `✅ SINT_AJUST: «…» desplaçat -39.55s …` i que cada sintètic cau al
+buit que li toca (no un buit abans). En tornar a carregar el mateix SINT, els marcadors han de
+quedar-se on eren.
+
+### #190 - implementat_pendent_test (2026-10-23)
+
+**SIMPTOMA**: al clicar 🧩 (REOMLIR) **no passava res**: cap avís clar al panell. Al
+`FASTPASS.log` del projecte hi havia `⚠️ SRT_SINT: cap sintetic del programa TN_COMARQUES per a
+2026_10_23` i `⚠️ SRT_FILL: sense SINT → no es reomple res`, però la barra d'estat deia
+«SINT: no s'ha pogut carregar (revisa rutas.subtitulosSinteticos)» — un missatge que apunta a la
+**configuració de rutes** quan el que passava era una altra cosa. L'usuari ho va descriure com
+«ara al clicar en puzzle no passa res; no sé si no carrega el fitxer des de sintètics o què».
+
+**CAUSA ARREL** (mesurada en viu al bloc `02_COMARQUES_PROJECTES/2026_10_23/V1`): el flux SÍ que
+corria —al log hi ha `🔘 [DISPATCH] Srt.runSrtFillGaps`, `🧩 SRT_FILL: sense SINT del programa en
+memoria → carregant de la carpeta de sintetics...` i `[SCAN:srtSynthetic]`—; el que no hi havia era
+**cap `.srt` sintètic de TN_COMARQUES**. La carpeta `rutas.subtitulosSinteticos` tenia **54 .srt** i
+només **4 del 23/10**, tots de `MATINS_*`: la guarda de programa del #187 els descarta (i ha de
+fer-ho, són d'un altre programa), `Scanner.srtSynthetic` tornava `null` i `runSrtFillGaps`
+responia amb el missatge genèric de rutes. No era cap regressió del #189 (eixe dia no es va
+carregar cap SINT: al log no hi ha cap `SINT_AJUST`), sinó un **diagnòstic enganyós** que feia
+indistinguible «el botó no escolta» de «eixe dia no hi ha sintètics d'este programa».
+
+**SOLUCIO** (tot JS; `jsx/**` intacte):
+
+1. `js/logic/Scanner.js` · **`srtSynthetic`** deixa el motiu a **`_sintMiss`** (es reinicia a cada
+   crida): `{reason:'altres-programes', date, dir, programa, delDia, aliens[]}` quan eixa data
+   només té sintètics d'un ALTRE programa; `{reason:'cap-del-dia', date, dir, otros}` quan no n'hi
+   ha cap d'eixa data; `{reason:'carpeta', dir}` quan la carpeta és inaccessible o buida.
+2. `js/workflows/flow_srt.js` · **`_sintMissText(ctx)`** nou: munta el missatge concret («cap .srt
+   sintètic de TN_COMARQUES V1 del 2026-10-23 · eixe dia només n'hi ha de MATINS») i el fan servir
+   **`runSrtFillGaps`** (barra d'estat + `⚠️ SRT_FILL: … → no es reomple res`) i
+   **`runSrtLoadSynthetic`** (Ctrl+clic). Fora el «revisa rutas.subtitulosSinteticos».
+3. Cache-busts: `Scanner.js?v=21 → 22`, `flow_srt.js?v=18 → 19`.
+
+**VALIDACIO**: `bin/check_all.ps1 -Only js,smoke` → **ALL GREEN | js 61/61 | smoke 446/446 | jsx
+intacte**. Prova nova `#F3/61` (`_sintMiss` amb els 3 motius + `_sintMissText` usat als dos fluxos
++ el missatge vell JA no hi és); `#F3/25`, `#WOTT/24` i `#WOTT/39` actualitzats als cache-busts
+nous.
+
+**NOTA OPERATIVA**: amb eixe missatge, quan el 🧩 no fa res la barra d'estat ja diu si falta el SINT
+del programa o si la carpeta no es pot llegir. El 23/10, per al V1 de TN_COMARQUES, cal
+generar/pujar el sintètic de la peça (`TN_COMARQUES_…_Subtitles.srt`) a `SRT_SINTETICS`.
 
 ## 3. Bugs en curs / pendents
 

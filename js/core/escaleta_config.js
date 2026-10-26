@@ -7,7 +7,6 @@
  * Depèn de: escaleta_timecode.js (parseDurada, secondsToDuradaTC)
  *
  * Mètodes:
- *   - ESCALETES_PATH
  *   - _getHandleSecs()
  *   - ITEM_DURATION_OVERRIDES
  *   - _detectProgramKey(data)
@@ -30,35 +29,6 @@
     // ----------------------------------------------------------------
     // 1. CONSTANTS DE CONFIGURACIÓ
     // ----------------------------------------------------------------
-
-    /**
-     * Ruta d'escaletes al servidor (F2 · 2026-10-21).
-     * ABANS era una constant FIXA aci. Ara ve de la configuracio de l'usuari
-     * (`Profile.json` -> rutas.escaletes) i es llig EN CADA ACCES, perque canviar
-     * la ruta a la finestra de configuracio tinga efecte sense reiniciar el panell.
-     * Es mantenen els MATEIXOS noms (ESCALETES_PATH / ESCALETES_PATH_DOMAIN)
-     * perque escaleta_io.js i escaleta_fetch.js els lligen com a propietats.
-     */
-    function _rutaConfig(clau) {
-        try {
-            var cfg = window.FASTPASS_UI.Config && window.FASTPASS_UI.Config.get();
-            var rutas = (cfg && cfg.rutas) || {};
-            return rutas[clau] || '';
-        } catch (e) { return ''; }
-    }
-
-    Object.defineProperty(ER, 'ESCALETES_PATH', {
-        get: function () { return _rutaConfig('escaletes'); },
-        enumerable: true, configurable: true
-    });
-
-    /**
-     * Fallback pel nom de domini (antics equips on la IP podia variar).
-     */
-    Object.defineProperty(ER, 'ESCALETES_PATH_DOMAIN', {
-        get: function () { return _rutaConfig('escaletesDomini'); },
-        enumerable: true, configurable: true
-    });
 
     /**
      * Handles en segons (marge de seguretat al voltant del TC d'emissió).
@@ -274,5 +244,5 @@
     FASTPASS_UI.EscaletaReader = ER;
     window.FASTPASS_UI = FASTPASS_UI;
 
-    log('[ER:Config] Sub-mòdul inicialitzat (ESCALETES_PATH, _getHandleSecs, ITEM_DURATION_OVERRIDES, applyDurationOverrides)');
+    log('[ER:Config] Sub-mòdul inicialitzat (_getHandleSecs, ITEM_DURATION_OVERRIDES, applyDurationOverrides)');
 })();

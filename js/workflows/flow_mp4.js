@@ -68,11 +68,16 @@
             const cfg = FASTPASS_UI.Config.get();
             const trackIdx = cfg.tracks.video.mp4; // pista on està el clip del bloc
 
-            // 1. Obtenir dades de l'escaleta actual (carregar JSON més recent)
-            const programArchivo = "TN_VESPRE"; // TODO: obtenir del context
-            const latest = await reader.findLatest(programArchivo, blockId);
+            // 1. Agafar l'escaleta del DIRECTORI DEL PROJECTE (model local-first).
+            // (2026-10-23) Abans es demanava al NAS un llistat d'escaletes, que ja no existeix.
+            const ctx = (window.FASTPASS_UI.State && window.FASTPASS_UI.State.ctx) || null;
+            if (!ctx) {
+                log('⚠️ [DEBUG] Sense context de projecte (obre un projecte del dia)');
+                return;
+            }
+            const latest = await reader.ensureLocalCopy(ctx);
             if (!latest) {
-                log(`⚠️ No s'ha trobat JSON d'escaleta per a ${programArchivo}/${blockId}`);
+                log(`⚠️ No s'ha trobat escaleta al directori del projecte (${ctx.dateDir || '?'}/${blockId})`);
                 return;
             }
             const data = await reader.load(latest.path);

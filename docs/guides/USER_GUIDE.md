@@ -1,50 +1,34 @@
-# 📖 GUIA D'USUARI - FAST >>> PASS (v2.9.5+)
+# 📖 GUIA D'USUARI (RESUM DERIVAT) — FAST >>> PASS (v2.9.5)
 
-Benvingut al sistema d'edició tàctica **FAST >>> PASS**. Aquest document detalla com utilitzar el panel per agilitzar el muntatge de notícies i verticalització de continguts.
+> ⚠️ **Document derivat.** El procediment complet (checklist, troubleshooting i regles d'or)
+> és [`MASTER_MANUAL_RAPID.md`](MASTER_MANUAL_RAPID.md); el detall de cada botó, a
+> [`MASTER_FUNCIONALITATS.md`](MASTER_FUNCIONALITATS.md). Última revisió: **2026-10-23**.
 
----
+## 1. Preparació (una volta)
+`⚙️` Setup → **Nom de l'Editor (Nick)** (`autor`: identifica el teu `.lock` i el nom de les
+exportacions) · **7 rutes d'infraestructura** · **3 destins d'exportació** (admeten
+`{project}`) · **mapa de pistes i programes** · un `.epr` vertical vàlid a `presets\`.
 
-## ⚙️ 1. SETUP I CONFIGURACIÓ INICIAL
-Abans de començar, assegura't que el context és el correcte:
+## 2. Cicle d'un bloc
+1. **PROG + BLOC** al panell.
+2. **`📷 FOTO`** (quan el bloc s'ha emés o està acabant). `Ctrl` = foto d'AHIR.
+3. Espera que **MAIN** passe a **`CREA`** (poll de 15 s; un clic força el repintat).
+4. **`CREA`**: projecte nou, rètols al Bin CHY, portada al Bin PORTADES i clip del bloc a V1.
+   - Si el bloc cau **fora del cleanFeed**, el projecte es crea **sense V1**: completa'l amb **`ACTUAL.`**.
+5. Verifica els **bounds**, prem **`IN`** i **`OUT & GO`**.
+6. Verifica els **marcadors**.
+7. **`🎯 COL·LOCAR`**: conductor, Tema-Títol (+ transicions del titulillo), Lloc/Nom, Resto,
+   traduccions, IPD i grafismes MAPA.
+8. Retocs: **slider PAN**, **KEYFRAME**, **IPD/IPD+/🪟🪟**, **🎨/🗺️/🗿**, **↔️** traduccions,
+   **🔀** intro LLARGA/CURTA.
+9. **Subtítols**: `⬇️` carregar → editar a l'editor (marcadors = acordió) → `💾` exportar.
+10. **`📹`** vídeo · **`🖼️`** portada · **`✅`** validar (guarda, tanca i lleva el lock).
 
-1.  **Icona Engranatge (⚙️)**: Obre el modal per definir les rutes del NAS.
-2.  **PROG / BLOC**: Tria el programa i el bloc d'emissió. Això activa els filtres intel·ligents per trobar el material.
-3.  **Botó NOU**: Analitza el NAS, crea el projecte en xarxa i importa automàticament el vídeo brut (V1), rètols (V2) i subtítols.
+## 3. Recorda
+- **TEST (`🧪`)** només servix per provar fases: en **TREBALL (`👤`)** `OUT & GO` fa el pipeline complet.
+- El **slider** actua sobre el **clip seleccionat** i s'ha d'**armar** amb un clic a la zona.
+- El **SRT** viu a l'editor: al timeline només arriba amb **`💾 GUARDAR`**.
+- Si una ruta falla, primer el **🧪** del Setup; després mira `FASTPASS.log`.
 
----
+© 2026 FAST >>> PASS | User Guide (resum v2.0)
 
-## 🎬 2. EDICIÓ RÀPIDA (VÍDEO)
-Eines per al "rough cut" i el re-enquadrament:
-
-- **IN / OUT**: Retalls ràpids tipus "Ripple Trim" per ajustar l'inici i el final de la peça.
-- **NAVEGACIÓ (◀ / ▶)**: Salts ràpids entre talls de la pista activa.
-- **Slider (Posició X)**: Re-enquadrament horitzontal en temps real per al format 9:16. Doble clic per centrar (304px).
-- **TROSEJA**: Divisió automàtica del clip en segments segons l'anàlisi de pauses.
-
----
-
-## 🎨 3. GRÀFICS I RÈTOLS (THE MAGIC)
-La potència d'automatització del sistema:
-
-- **RÈTOLS / ACTUALITZAR**: Botó intel·ligent que llegeix els rètols (Wotts) importats i els col·loca al timeline sincronitzats amb el timestamp original.
-- **SNAP**: Imanació automàtica dels rètols al tall de vídeo més proper per evitar talls desplaçats.
-- **FONS 16:9**: Escala automàtica al 47% i col·locació de fons decoratiu per a vídeos horitzontals.
-
----
-
-## 📝 4. SUBTÍTOLS (SRT)
-Gestió eficient del text:
-
-- **PREPARAR**: Bloqueja pistes de vídeo/àudio per treballar segur sobre la pista de text (S1).
-- **AJUSTAR**: Selecciona clips de subtítols i prem aquest botó per estirar-los o encollir-los proporcionalment fins a la posició del cabezal.
-- **IN / OUT**: Ajust manual dels punts de text.
-
----
-
-## 📤 5. FINALITZACIÓ I RENDER
-- **PORTADA**: Genera un PNG instantani del frame actual i el desa a la carpeta de portades del NAS.
-- **VÍDEO**: Envia la seqüència a Adobe Media Encoder (AME) amb el preset vertical oficial.
-- **CLOSE**: Desa i tanca el projecte de forma segura.
-
----
-© 2026 FAST >>> PASS | User Guide v1.0

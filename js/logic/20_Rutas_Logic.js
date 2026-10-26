@@ -14,11 +14,14 @@
  *   El prova bin/smoke/fp_probe_rutas.js.
  *
  * TOKENS
- *   {autor} {prog} {archivo} {wott} {bloque} {fecha} {tema} {base}
+ *   {autor} {prog} {archivo} {wott} {bloque} {fecha} {tema} {base} {project}
  *   - {fecha} accepta YYYY_MM_DD, YYYY-MM-DD i DD_MM_YYYY -> YYYY_MM_DD
  *   - {base} es la carpeta arrel dels projectes (rutas.projectes/destino_base)
  *   - {prog} es l'ID del programa (TNV), {archivo} el nom d'arxiu (TN_VESPRE),
  *     {wott} el prefix de wott (TNV), {tema} el tema ja sanejat
+ *   - {project} es el NOM DEL PROJECTE (.prproj) tal com el genera
+ *     Config.getProjectName: <archivo>_<bloque>_<autor>_<MMYYYY>_<tema>
+ *     (s'usa a les rutes d'exportacio: {base}\{project}, render1/render2...)
  *
  * CRITERI
  *   `resolve()` (produccio) NO deixa mai un {token} dins d'una ruta: si no hi ha
@@ -34,7 +37,7 @@
     var BS = String.fromCharCode(92);          // barra invertida
     var BS2 = BS + BS;                         // prefix UNC (\\servidor\recurs)
 
-    var TOKENS = ['autor', 'prog', 'archivo', 'wott', 'bloque', 'fecha', 'tema', 'base'];
+    var TOKENS = ['autor', 'prog', 'archivo', 'wott', 'bloque', 'fecha', 'tema', 'base', 'project'];
 
     function isObj(v) { return !!v && typeof v === 'object' && !Array.isArray(v); }
     function pad2(n) { n = parseInt(n, 10); return ((n < 10) ? '0' : '') + n; }
@@ -96,6 +99,25 @@
     }
 
     /**
+     * projectOf: NOM DEL PROJECTE (.prproj) derivat del context. Formula IDENTICA
+     * a Config.getProjectName: <archivo>_<bloque>_<autor>_<MMYYYY>_<tema>.
+     * Si falta el tema no s'inventa res (el token queda sense valor i
+     * resolveDetailed ho diu): una ruta d'exportacio no ha d'acabar en una
+     * carpeta compartida per tots els temes.
+     * @param {Object} v - valors ja resolts de valuesOf
+     * @returns {string}
+     */
+    function projectOf(v) {
+        var tema = str(v.tema).trim();
+        if (!tema) return '';
+        var parts = [str(v.archivo), str(v.bloque), (str(v.autor).trim() || 'USER')];
+        var f = str(v.fecha).split('_');
+        if (f.length === 3) parts.push(f[1] + f[0]);      // MMYYYY (com getProjectName)
+        parts.push(tema);
+        return parts.join('_');
+    }
+
+    /**
      * valuesOf: valors dels tokens a partir del context.
      * El context pot vindre de dos llocs i accepta els dos noms de cada camp:
      *   - ctx.progData = {id, archivo, wott} (el mateix objecte de 4_Context)
@@ -103,11 +125,12 @@
      *   - ctx.fecha o ctx.dateDir ('2026_10_21')
      *   - ctx.tema o ctx.sanitizedTema
      *   - ctx.base o ctx.destinoBase (Config.resolvePath hi posa el de la config)
+     * `project` es DERIVAT dels altres (no ve del context).
      */
     function valuesOf(ctx) {
         var c = ctx || {};
         var prog = c.progData || {};
-        return {
+        var vals = {
             autor: str(c.autor),
             prog: (c.prog != null ? str(c.prog) : str(prog.id)),
             archivo: (c.archivo != null ? str(c.archivo) : str(prog.archivo)),
@@ -117,6 +140,8 @@
             tema: str(c.tema != null ? c.tema : c.sanitizedTema),
             base: str(c.base != null ? c.base : c.destinoBase)
         };
+        vals.project = projectOf(vals);
+        return vals;
     }
 
     /**
@@ -207,29 +232,29 @@
 
     /**
      * normalizeRutas: alies i rutes DERIVADES.
-     * Un Profile.json desplegat abans de F2 no porta `projectes`, `grafismos`,
-     * `subtitulos`, `subtitulosSinteticos` ni `escaletes`: es deriven de
-     * `vertical` i `destino_base` perque res deixe de funcionar en actualitzar.
+     * (2026-10-23) `destino_base` es l'AUTORITATIVA (es la clau que desa la
+     * finestra de configuracio) i es reflecteix a `projectes`, que es el nom
+     * historic amb que la llig la resta del codi.
+     * S'han RETIRAT les rutes derivades de la carpeta antiga de media i les
+     * carpetes d'escaletes del NAS: cap consumidor les fa servir.
      */
     function normalizeRutas(rutas) {
         var r = isObj(rutas) ? rutas : {};
         var out = {};
         for (var k in r) { if (own(r, k)) out[k] = r[k]; }
 
-        // 1) projectes <-> destino_base (son la MATEIXA ruta, dos noms)
-        out.projectes = firstNonEmpty(out.projectes, out.destino_base);
-        out.destino_base = firstNonEmpty(out.destino_base, out.projectes);
+        // 0) Claus mortes: un Profile.json vell no les ha de reintroduir.
+        delete out.vertical;
+        delete out.escaletes;
+        delete out.escaletes_domini;
 
-        // 2) derivades de la base de verticalitzacio
-        var vert = firstNonEmpty(out.vertical);
-        if (!str(out.escaletes).trim()) out.escaletes = (vert ? join(vert, 'ESCALETES') : '');
-        if (!str(out.escaletes_domini).trim()) out.escaletes_domini = firstNonEmpty(out.escaletes);
-        if (!str(out.grafismos).trim()) out.grafismos = (vert ? join(vert, 'ZZZ_GRAFISME') : '');
-        if (!str(out.subtitulos).trim()) out.subtitulos = (vert ? join(vert, 'SRT_MP4_PER_TEMPS_15MINUTS') : '');
-        if (!str(out.subtitulosSinteticos).trim()) {
-            out.subtitulosSinteticos = str(out.subtitulos).trim()
-                ? join(out.subtitulos, 'SINTETICS')
-                : (vert ? join(vert, 'SRT_SINTETICS') : '');
+        // 1) destino_base <-> projectes (son la MATEIXA ruta, dos noms)
+        out.destino_base = firstNonEmpty(out.destino_base, out.projectes);
+        out.projectes = firstNonEmpty(out.destino_base, out.projectes);
+
+        // 2) subtitulosSinteticos: es deriva de subtitulos (mai de vertical)
+        if (!str(out.subtitulosSinteticos).trim() && str(out.subtitulos).trim()) {
+            out.subtitulosSinteticos = join(out.subtitulos, 'SINTETICS');
         }
 
         // 3) forma canonica de TOTES les rutes. IMPORTANT: es RESPECTA el

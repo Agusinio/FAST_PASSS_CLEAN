@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="ca">
 <head>
     <meta charset="UTF-8">
@@ -78,17 +78,17 @@
             <div class="section-content">
                 <div class="video-tactical-layout">
                     <div class="video-row-top">
-                        <button id="btnIn" class="secondary btn-sq-std btn-destructivo">IN</button>
+                        <button id="btnIn" class="secondary btn-sq-std btn-destructivo" title="IN: retalla la capçalera del clip de V1 fins al cabezal, desplaça l'OUT de la seqüència els mateixos frames, recol·loca els marcadors i deixa el CTI a 0. Si retalla més de 30 s avisa (sense bloquejar).">IN</button>
                         <button id="btnScene" class="secondary btn-wide-flex btn-destructivo test-only" title="TROSSEJA: divideix el clip de V1 als talls de contingut (Cut.runScene). És la fase 2 del pipeline OUT &amp; GO: aquest botó només surt a la pantalla de TEST per poder provar-la per separat">TROSSEJA</button>
-                        <button id="btnOut" class="secondary btn-wide-flex btn-destructivo" title="OUT &amp; GO: tanca el bloc, trosseja els talls, col·loca els marcadors i els chyrons (tot el pipeline)">OUT &amp; GO</button>
-                        <button id="btnKey" class="secondary btn-sq-double-high btn-destructivo">KEYFRAME</button>
+                        <button id="btnOut" class="secondary btn-wide-flex btn-destructivo" title="OUT &amp; GO: tanca el bloc (retall + V2 a l'OUT + neteja de V3 en amunt i d'àudio), trosseja els talls i, en TREBALL, encadena les 8 fases de marcadors (Dedu → Prev → Correl → Density → Inferits → Ordre → GF → Vermells) i desa el snapshot. Els chyrons NO es col·loquen ací: van amb 🎯 COL·LOCAR.">OUT &amp; GO</button>
+                        <button id="btnKey" class="secondary btn-sq-double-high btn-destructivo" title="KEYFRAME: afig o lleva un keyframe al clip SELECCIONAT a l'instant del cabezal (si el clip és un PNG/JPG de fons, s'ignora). El mode SLIDER/KEYFRAME seguix el clip. Ctrl+clic = probe del límit de Position (diagnòstic).">KEYFRAME</button>
                     </div>
                     <div class="video-row-bottom">
-                        <button id="btnPrevClip" class="secondary btn-sq-std">◀</button>
-                        <div class="slider-zone" id="sliderZone" title="Clica per activar/desactivar el reencuadre manual">
+                        <button id="btnPrevClip" class="secondary btn-sq-std" title="Salta al CENTRE del clip anterior de V1 (i refresca el slider)">◀</button>
+                        <div class="slider-zone" id="sliderZone" title="Clica per armar/desarmar el reencuadre manual: actua sobre el clip SELECCIONAT. Es desarma en clicar qualsevol altre control (◀ ▶ i KEYFRAME no el desarmen).">
                             <input type="range" id="slider-move" min="-1000" max="1000" value="0" disabled>
                         </div>
-                        <button id="btnNextClip" class="secondary btn-sq-std">▶</button>
+                        <button id="btnNextClip" class="secondary btn-sq-std" title="Salta al CENTRE del clip següent de V1 (i refresca el slider)">▶</button>
                     </div>
                 </div>
             </div>
@@ -122,11 +122,11 @@
             <div class="section-content">
                  <div class="graphics-strip cols-3">
                     <button id="btnGrafIpd" class="secondary" title="IPD (zoom 144% + posició) · Ctrl+clic: repassa els clips IPD dels marcadors">IPD</button>
-                    <button id="btnGrafIpdPlus" class="secondary" title="IPD+ · Doble finestra VERTICAL: dues parts de la imatge (una a dalt i una a baix) amb fons a sota. Mateixa maquinària que la Doble Finestra (V4/V5 + fons V3) amb un altre perfil de Motion">IPD+</button>
-                    <button id="btnGrafDoblePantalla" class="secondary icon-only doble" title="Doble pantalla (horitzontal)">🪟🪟</button>
+                    <button id="btnGrafIpdPlus" class="secondary" title="IPD+ · doble finestra VERTICAL (toggle per INTERVAL): l'interval és la SELECCIÓ de V1 (o el clip de V1 sota el cabezal); V2 es retalla i s'aparca a V3, V1 es duplica a V2 i es reparteixen les capes (V1 INFERIOR · V2 SUPERIOR). Ctrl+clic = reset de l'estat del flux.">IPD+</button>
+                    <button id="btnGrafDoblePantalla" class="secondary icon-only doble" title="Doble pantalla (horitzontal): en un clic V1→V4, duplicat a V5 i fons a V3 amb el cicle PAS0→PAS4. Ctrl+clic = RESET de la Doble Finestra.">🪟🪟</button>
                     <button id="btnMapaImport" class="secondary icon-only" title="Mapa: importa els grafismes del tema a la pista de grafismes DES DEL CABEZAL. L'espai hàbil el marca el clip SELECCIONAT al timeline (o el clip de V1 sota el cabezal) i al final hi va un congelat de 3 s. L'ítem de l'escaleta (coincidència de nom) és el del marcador anterior al cabezal. Per als marcadors GF de l'escaleta: botó GF (TEST) o pipeline OUT &amp; GO">🎨</button>
-                    <button id="btnGrafMapa" class="secondary icon-only" title="Mapa zoom">🗺️</button>
-                    <button id="btnGrafTotem" class="secondary icon-only" title="Tòtem">🗿</button>
+                    <button id="btnGrafMapa" class="secondary icon-only" title="MAPA ZOOM: puja el clip SELECCIONAT a V4, posa el fons genèric a V3 dins del seu rang i aplica escala 48% + Y=447 (la X es deixa al slider)">🗺️</button>
+                    <button id="btnGrafTotem" class="secondary icon-only" title="TÒTEM: només canvia l'escala X del clip seleccionat (Scale Width 126%, Uniform Scale desactivat); la Y i la posició no es toquen">🗿</button>
                  </div>
             </div>
         </div>
@@ -139,11 +139,10 @@
             <div class="section-label" title="Subtítols"><span class="lbl-full">SUBTÍTOLS</span><span class="lbl-short">SUB</span></div>
             <div class="section-content">
                  <div class="graphics-strip cols-3">
-                    <button id="btnSrtLoad" class="secondary icon-only" title="Carrega el SRT del dia (blocs de 15 min; si no hi ha res, fallback al .SRT de la carpeta de verticalització). Ctrl+clic = SUBTÍTOLS SINTÈTICS del dia (2n Ctrl+clic = tornar al SRT normal). Alt+clic = fallback directe">⬇️</button>
-                    <button id="btnSrtExport" class="secondary icon-only" title="Exporta el SRT a la pista de subtítols S1 (els SINTÈTICS hi van sols a S2). Ctrl+clic = força S2">💾</button>
-                    <button id="btnSrtReset" class="secondary icon-only" style="background:#5a2a2a; color:#f99;" title="RESET: restaura el subtítol (torna a buscar el .SRT del tema del bloc, sempre del dia de treball) i neteja els subtítols de la seqüència">♻️</button>
-                    <button id="btnSrtFill" class="secondary icon-only" title="🧩 REOMLIR: afegeix al SRT normal NOMÉS les entrades sintètiques que cauen dins d'un BUIT (Ctrl+clic a ⬇️ per carregar-les abans). Tolerància: general.srtSyntheticGapTolSec (0,2 s). El resultat és una vista MOD: el SRT normal no es modifica">🧩</button>
-                    <button id="btnSrtDel" class="secondary icon-only" title="🗑 ESBORRAR: treu de la taula el subtítol seleccionat al timeline de l'editor (clic al clip, o el que hi ha davall el cabezal). Si ja està exportat, pregunta si també s'ha d'esborrar del timeline (mai altres pistes). Supr/Backspace fan el mateix">🗑️</button>
+                    <button id="btnSrtLoad" class="secondary icon-only" title="CARREGAR: obri a l'editor el SRT del bloc de 15 min del dia (l'únic mecanisme de càrrega). Ctrl+clic = SUBTÍTOLS SINTÈTICS del MATEIX PROGRAMA i de la data del PROJECTE OBERT (2n Ctrl+clic = tornar al SRT normal).">⬇️</button>
+                    <button id="btnSrtExport" class="secondary icon-only" title="GUARDAR: exporta la taula de l'editor a la pista de subtítols (S1; els SINT a S2) com a _MOD_<timestamp>.srt. NOMÉS substituïx els clips del tram que escriu (no esborra la resta del timeline). Ctrl+clic = AFEGIR NOMÉS EL QUE FALTA: no reescriu el que ja té clip, ho col·loca a S2 i ho pinta amb una altra etiqueta de color.">💾</button>
+                    <button id="btnSrtReset" class="secondary icon-only" style="background:#5a2a2a; color:#f99;" title="RESET: torna la taula i els marcadors al seu estat inicial (memòria i disc), trau els subtítols de la seqüència i RECARREGA el mateix .srt (si no n'hi havia cap, l'emergència de 15 min)">♻️</button>
+                    <button id="btnSrtFill" class="secondary icon-only" title="🧩 REOMLIR: carrega els SINT del MATEIX PROGRAMA i de la data del PROJECTE OBERT (si no ho estan) i afegeix al SRT normal NOMÉS les entrades sintètiques que hi falten —comparant TC (±tolerància) I text—, dins d'un BUIT. Si un SINT no hi cap exacte s'ENCOGEIX fins a la vora del buit (retall màxim general.srtSyntheticMaxTrimSec 0,8 s; durada mínima general.srtSyntheticMinDurSec 0,4 s) · tolerància general.srtSyntheticGapTolSec 0,2 s. El resultat és una vista MOD dins del MATEIX editor (les afegides es pinten amb un to propi) i NO toca el timeline: per a col·locar-les, 💾.">🧩</button>
                     <button id="btnSrtIn" class="secondary" title="IN del subtítol seleccionat">IN</button>
                     <button id="btnSrtOut" class="secondary" title="OUT del subtítol seleccionat">OUT</button>
                  </div>
@@ -155,9 +154,9 @@
             <div class="section-label" title="Render"><span class="lbl-full">RENDER</span><span class="lbl-short">REN</span></div>
             <div class="section-content">
                  <div class="graphics-strip cols-3">
-                    <button id="btnRenderVideo" class="secondary icon-only" title="Render / exporta el vídeo">📹</button>
-                    <button id="btnRenderPortada" class="secondary icon-only" title="Render / exporta la portada">🖼️</button>
-                    <button id="btnRenderClose" class="secondary icon-only" title="Tanca la peça">✅</button>
+                    <button id="btnRenderVideo" class="secondary icon-only" title="VÍDEO: render directe de Premiere (preset .epr) retallant la cua a l'OUT. Exporta a render1 i copia a render2. Nom: PROG_TEMA_HH_MM.mp4">📹</button>
+                    <button id="btnRenderPortada" class="secondary icon-only" title="PORTADA: exporta un PNG del frame davall del cabezal (amb zona neta temporal) a la carpeta de portades, amb el MATEIX nom que el vídeo. Tarda 10-30 s">🖼️</button>
+                    <button id="btnRenderClose" class="secondary icon-only" title="VALIDAR: desa el projecte, el tanca i elimina el .lock (allibera el treball per a un altre editor)">✅</button>
                  </div>
             </div>
         </div>
@@ -225,29 +224,29 @@
     <!-- SCRIPTS with version cachebuster -->
     <script src="js/lib/CSInterface.js"></script>
     <script src="js/core/utils.js?v=28"></script>
-    <script src="js/logic/20_Rutas_Logic.js?v=1"></script>
-    <script src="js/core/11_Configuracio.js?v=40"></script>
+    <script src="js/logic/20_Rutas_Logic.js?v=2"></script>
+    <script src="js/core/11_Configuracio.js?v=44"></script>
     <script src="js/core/escaleta_timecode.js?v=5"></script>
-    <script src="js/core/escaleta_config.js?v=8"></script>
-    <script src="js/core/escaleta_io.js?v=19"></script>
+    <script src="js/core/escaleta_config.js?v=9"></script>
+    <script src="js/core/escaleta_io.js?v=21"></script>
     <script src="js/core/escaleta_items.js?v=6"></script>
     <script src="js/core/escaleta_bounds.js?v=20"></script>
-    <script src="js/core/escaleta_fallback.js?v=6"></script>
-    <script src="js/core/escaleta_fetch.js?v=12"></script>
-    <script src="js/core/escaleta_reader.js?v=5"></script>
+    <script src="js/core/escaleta_fallback.js?v=7"></script>
+    <script src="js/core/escaleta_fetch.js?v=13"></script>
+    <script src="js/core/escaleta_reader.js?v=6"></script>
     <script src="js/core/session_manifest.js?v=8"></script>
 <script src="js/core/analysis_center.js?v=1"></script>
     <script src="js/core/state.js?v=5"></script>
     <script src="js/inspectors/1_SourceAssets.js?v=5"></script>
-    <script src="js/logic/Scanner.js?v=17"></script>
+    <script src="js/logic/Scanner.js?v=22"></script>
     <script src="js/inspectors/2_App.js?v=5"></script>
     <script src="js/inspectors/3_Session.js?v=5"></script>
-    <script src="js/core/4_Context.js?v=30"></script>
-    <script src="js/logic/3_Project_Logic.js?v=31"></script>
+    <script src="js/core/4_Context.js?v=31"></script>
+    <script src="js/logic/3_Project_Logic.js?v=32"></script>
     <script src="js/logic/5_Tracks_Logic.js?v=5"></script>
     <script src="js/logic/6_Clips_Logic.js?v=7"></script>
     <script src="js/logic/7_KF_Logic.js?v=5"></script>
-    <script src="js/logic/10_Srt_Logic.js?v=17"></script>
+    <script src="js/logic/10_Srt_Logic.js?v=22"></script>
     <script src="js/logic/13_Parse.js?v=5"></script>
     <script src="js/logic/14_Assembly_Logic.js?v=6"></script>
     <script src="js/logic/15_FFmpeg_Logic.js?v=12"></script>
@@ -258,20 +257,20 @@
     <!-- (2026-10-21 · RESET) Esborrat ABSOLUT i verificat de la carpeta del bloc (entrada per entrada, reintents) -->
     <script src="js/logic/19_Fs_Wipe.js?v=2"></script>
     <script src="js/core/assembly_context.js?v=10"></script>
-    <script src="js/workflows/flow_mp4.js?v=6"></script>
+    <script src="js/workflows/flow_mp4.js?v=7"></script>
     <script src="js/workflows/flow_markers.js?v=67"></script>
     <script src="js/workflows/flow_chyrons.js?v=85"></script>
     <script src="js/workflows/flow_graphics.js?v=26"></script>
-    <script src="js/workflows/flow_mainButton.js?v=36"></script>
+    <script src="js/workflows/flow_mainButton.js?v=38"></script>
     <script src="js/workflows/flow_cut.js?v=19"></script>
-    <script src="js/workflows/flow_srt.js?v=12"></script>
-    <script src="js/workflows/flow_render.js?v=36"></script>
+    <script src="js/workflows/flow_srt.js?v=19"></script>
+    <script src="js/workflows/flow_render.js?v=37"></script>
     <script src="js/workflows/flow_KF.js?v=10"></script>
     <script src="js/workflows/flow_config.js?v=12"></script>
     <script src="js/workflows/flow_assembly.js?v=8"></script>
 <script src="js/workflows/flow_mapa.js?v=25"></script>
     <script src="js/core/project_registry.js?v=5"></script>
-    <script src="js/editor/srt_editor.js?v=79"></script>
-    <script src="js/main.js?v=87"></script>
+    <script src="js/editor/srt_editor.js?v=86"></script>
+    <script src="js/main.js?v=92"></script>
 </body>
 </html>

@@ -254,6 +254,41 @@
     FASTPASS_UI.Workflows.Render = {
 
         /**
+         * _rutaExport: resol una ruta d'EXPORTACIÓ (render1 / render2 / portadas) amb
+         * els {tokens} del bloc actual (Config.resolvePath → Logic.Rutas).
+         * (2026-10-23) Les tres rutes d'exportació accepten `{project}` (el nom del
+         * .prproj): així cada projecte pot tindre la seua carpeta de publicació.
+         * Si la ruta no porta cap '{' es retorna tal qual (cap cost per a les fixes).
+         * @param {string} tpl
+         * @returns {string} ruta Windows (sense tokens) o la plantilla original si falla
+         */
+        _rutaExport: function (tpl) {
+            const raw = String(tpl || '').trim();
+            if (!raw || raw.indexOf('{') < 0) return raw;
+            try {
+                const cfg = FASTPASS_UI.Config;
+                const all = cfg.get();
+                const st = window.FASTPASS_UI.State || {};
+                const idProg = (document.getElementById('programa') || {}).value;
+                const progData = st.progData || ((all.mapeoProgramas && all.mapeoProgramas[idProg]) || null);
+                const bloque = st.bloque || ((document.getElementById('bloc') || {}).value) || '';
+                const out = cfg.resolvePath(raw, {
+                    autor: all.autor,
+                    progData: progData || {},
+                    bloque: bloque,
+                    dateDir: st.dateDir || '',
+                    tema: st.detectedTheme || st.masterTheme || '',
+                    base: (all.rutas && all.rutas.destino_base) || ''
+                });
+                log('🗺️ [Render] Ruta d\'exportació resolta: ' + raw + ' → ' + out);
+                return out;
+            } catch (e) {
+                log('⚠️ [Render] No s\'ha pogut resoldre la ruta d\'exportació "' + raw + '": ' + e.message, 'WARN');
+                return raw;
+            }
+        },
+
+        /**
          * MP4: Renderitza la seqüència activa amb el preset vertical (render DIRECTE de
          * Premiere, sense AME) DIRECTAMENT a la carpeta de publicació (2026-10-09,
          * `rutas.render1` = EXPORTS PROVISIONALS) i tot seguit en COPIA una a
@@ -271,7 +306,7 @@
                 // Ordre: 1) rutas.render1 · 2) carpeta del projecte · 3) workFolder.
                 // (Abans l'exportació es feia a la carpeta del projecte i després es
                 // copiava; ara ja no cal el viatge d'anada.)
-                let outputDir = String((config.rutas && config.rutas.render1) || '').trim();
+                let outputDir = this._rutaExport(config.rutas && config.rutas.render1);
                 if (outputDir) {
                     log('📤 [Render] Destí del render = carpeta de publicació (rutas.render1): ' + outputDir);
                 } else {
@@ -470,8 +505,8 @@
             const res = { ok: 0, copied: 0, inPlace: 0, fail: 0, details: [] };
             const rutas = (config && config.rutas) ? config.rutas : {};
             const dests = [
-                { label: 'PUB1 · EXPORTS PROVISIONALS', dir: rutas.render1 },
-                { label: 'PUB2 · 608-1080',             dir: rutas.render2 }
+                { label: 'PUB1 · EXPORTS PROVISIONALS', dir: this._rutaExport(rutas.render1) },
+                { label: 'PUB2 · 608-1080',             dir: this._rutaExport(rutas.render2) }
             ];
             const norm = (p) => String(p || '').replace(/\//g, '\\').replace(/\\+$/, '');
             const srcFolder = norm(srcDir);
@@ -1028,7 +1063,7 @@
                     log(`⚠️ [Portada] Context.folder() no vàlid ("${projFolder}") → recurs alternatiu: ${outDir}`, "WARN");
                 }
                 // 🛡️ DESTÍ = carpeta de portades publicades (AAA_PORTADES).
-                const portadesDir = norm(config.rutas && config.rutas.portadas);
+                const portadesDir = norm(this._rutaExport(config.rutas && config.rutas.portadas));
                 const pngDir = portadesDir || outDir;
                 if (!portadesDir) {
                     log(`⚠️ [Portada] Sense "rutas.portadas" a la config → el PNG anirà a la carpeta del projecte (${outDir})`, "WARN");
@@ -1049,7 +1084,7 @@
                 const lastOk = !!(lastBase && (!refPrefix || lastBase.toUpperCase().indexOf(refPrefix) === 0));
                 // Carpeta de publicació = on runVideo hi ha deixat el MP4 (rutas.render1).
                 // Només s'hi llegeix si State no porta el nom (cap llistat NAS innecessari).
-                const pubDir = norm(config.rutas && config.rutas.render1) || outDir;
+                const pubDir = norm(this._rutaExport(config.rutas && config.rutas.render1)) || outDir;
                 let files = null;
                 if (!lastOk) {
                     try { files = await utils.readFolder(pubDir); } catch (eL) { log("⚠️ [Portada] No puc llistar la carpeta: " + eL.message, "WARN"); }

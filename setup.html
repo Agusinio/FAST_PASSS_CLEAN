@@ -46,12 +46,9 @@
         <div class="card">
             <h2>Rutes de Xarxa (Infraestructura)</h2>
             <div class="input-group"><label>Plantilla del Canal</label><div class="path-box"><input type="text" id="path-plantilla"><button class="btn-browse" title="Prova aquesta ruta" onclick="provaRuta('path-plantilla')">🧪</button><button class="btn-browse" onclick="browseFile('path-plantilla')">📁</button></div></div>
-            <div class="input-group"><label>Repositori Media (MP4/SRT)</label><div class="path-box"><input type="text" id="path-vertical"><button class="btn-browse" title="Prova aquesta ruta" onclick="provaRuta('path-vertical')">🧪</button><button class="btn-browse" onclick="browseFolder('path-vertical')">📁</button></div></div>
             <div class="input-group"><label>Motor Rètols (Wott/MOV)</label><div class="path-box"><input type="text" id="path-chyrons"><button class="btn-browse" title="Prova aquesta ruta" onclick="provaRuta('path-chyrons')">🧪</button><button class="btn-browse" onclick="browseFolder('path-chyrons')">📁</button></div></div>
             <div class="input-group"><label>Biblioteca Conductors</label><div class="path-box"><input type="text" id="path-conductors"><button class="btn-browse" title="Prova aquesta ruta" onclick="provaRuta('path-conductors')">🧪</button><button class="btn-browse" onclick="browseFolder('path-conductors')">📁</button></div></div>
             <div class="input-group"><label>Projectes (destí dels blocs)</label><div class="path-box"><input type="text" id="path-destino_base"><button class="btn-browse" title="Prova aquesta ruta" onclick="provaRuta('path-destino_base')">🧪</button><button class="btn-browse" onclick="browseFolder('path-destino_base')">📁</button></div></div>
-            <div class="input-group"><label>Escaletes (digition)</label><div class="path-box"><input type="text" id="path-escaletes"><button class="btn-browse" title="Prova aquesta ruta" onclick="provaRuta('path-escaletes')">🧪</button><button class="btn-browse" onclick="browseFolder('path-escaletes')">📁</button></div></div>
-            <div class="input-group"><label>Escaletes · Domini (alternativa)</label><div class="path-box"><input type="text" id="path-escaletes_domini"><button class="btn-browse" title="Prova aquesta ruta" onclick="provaRuta('path-escaletes_domini')">🧪</button><button class="btn-browse" onclick="browseFolder('path-escaletes_domini')">📁</button></div></div>
             <div class="input-group"><label>Grafismes (MAPA del dia)</label><div class="path-box"><input type="text" id="path-grafismos"><button class="btn-browse" title="Prova aquesta ruta" onclick="provaRuta('path-grafismos')">🧪</button><button class="btn-browse" onclick="browseFolder('path-grafismos')">📁</button></div></div>
             <div class="input-group"><label>Subtítols 15 min (SRT emergència)</label><div class="path-box"><input type="text" id="path-subtitulos"><button class="btn-browse" title="Prova aquesta ruta" onclick="provaRuta('path-subtitulos')">🧪</button><button class="btn-browse" onclick="browseFolder('path-subtitulos')">📁</button></div></div>
             <div class="input-group"><label>Subtítols sintètics</label><div class="path-box"><input type="text" id="path-subtitulosSinteticos"><button class="btn-browse" title="Prova aquesta ruta" onclick="provaRuta('path-subtitulosSinteticos')">🧪</button><button class="btn-browse" onclick="browseFolder('path-subtitulosSinteticos')">📁</button></div></div>
@@ -60,6 +57,7 @@
 
         <div class="card">
             <h2>Destins d'Exportació (Render)</h2>
+            <div class="hint">Aquestes tres rutes accepten <code>{project}</code> (nom del .prproj): p. ex. <code>C:\PUB\{project}</code> crea una carpeta per projecte.</div>
             <div class="input-group"><label>Carpeta Publicació 1</label><div class="path-box"><input type="text" id="path-render1"><button class="btn-browse" onclick="browseFolder('path-render1')">📁</button></div></div>
             <div class="input-group"><label>Carpeta Publicació 2</label><div class="path-box"><input type="text" id="path-render2"><button class="btn-browse" onclick="browseFolder('path-render2')">📁</button></div></div>
             <div class="input-group"><label>Carpeta Portades (PNG)</label><div class="path-box"><input type="text" id="path-portadas"><button class="btn-browse" onclick="browseFolder('path-portadas')">📁</button></div></div>
@@ -71,6 +69,7 @@
                 Es poden usar a qualsevol ruta:
                 <code>{autor}</code> <code>{prog}</code> <code>{archivo}</code> <code>{wott}</code>
                 <code>{bloque}</code> <code>{fecha}</code> (YYYY_MM_DD) <code>{tema}</code> <code>{base}</code>
+                <code>{project}</code> (= <code>{archivo}_{bloque}_{autor}_{MMYYYY}_{tema}</code>)
             </div>
             <div class="path-box">
                 <input type="text" id="tpl-prova" value="{base}\{archivo}\{fecha}">
@@ -193,7 +192,6 @@
             // vigent del panell (rutes derivades), perque el camp no isca buit.
             var FALLBACK = {
                 projectes: 'projectes', destino_base: 'projectes',
-                escaletes: 'escaletes', escaletes_domini: 'escaletesDomini',
                 grafismos: 'grafismos', subtitulos: 'subtitulos',
                 subtitulosSinteticos: 'subtitulosSinteticos'
             };
@@ -358,6 +356,15 @@
             document.querySelectorAll('input[id^="path-"]').forEach(function(el) {
                 currentProfile.rutas[el.id.replace(/^path-/, '')] = el.value;
             });
+            // (2026-10-23) `destino_base` i `projectes` són la MATEIXA carpeta: el camp
+            // del DOM és `path-destino_base` i `projectes` n'és l'alies històric (el llig
+            // utils.workFolder). S'espeguen SEMPRE perquè no divergeixin al Profile.json.
+            currentProfile.rutas.projectes = currentProfile.rutas.destino_base || '';
+            // Claus mortes (carpeta de VERTICALITZACIÓ i escaletes del NAS): si el
+            // Profile.json és vell, s'esborren en desar.
+            delete currentProfile.rutas.vertical;
+            delete currentProfile.rutas.escaletes;
+            delete currentProfile.rutas.escaletes_domini;
 
             const profilePath = getProfilePath();
 
@@ -460,6 +467,8 @@
                 fecha: fecha,
                 tema: 'TEMA_EXEMPLE',
                 base: elBase ? elBase.value : ''
+                // NOTA: `{project}` NO s'ha de passar: el deriva Logic.Rutas.valuesOf
+                // (archivo_bloque_autor_MMYYYY_tema) a partir d'aquests mateixos camps.
             };
         }
 

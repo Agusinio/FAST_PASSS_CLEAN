@@ -121,27 +121,30 @@
             'DEF.autor=' + DEF.general.autor);
 
         var nr = R.normalizeRutas({ vertical: 'C:' + BS + 'V', destino_base: 'C:' + BS + 'P' });
-        ok('#F2/14 normalizeRutas: escaletes/grafismes/subtitols DERIVATS de `vertical`',
-            eq(nr.escaletes, 'C:' + BS + 'V' + BS + 'ESCALETES') &&
-            eq(nr.grafismos, 'C:' + BS + 'V' + BS + 'ZZZ_GRAFISME') &&
-            eq(nr.subtitulos, 'C:' + BS + 'V' + BS + 'SRT_MP4_PER_TEMPS_15MINUTS'),
-            'escaletes=' + nr.escaletes + ' | grafismes=' + nr.grafismos);
-        ok('#F2/15 normalizeRutas: `projectes` <-> `destino_base` i sintetics derivats',
-            eq(nr.projectes, 'C:' + BS + 'P') && eq(nr.destino_base, 'C:' + BS + 'P') &&
-            eq(nr.subtitulosSinteticos, nr.subtitulos + BS + 'SINTETICS'),
-            'projectes=' + nr.projectes + ' | sintetics=' + nr.subtitulosSinteticos);
+        ok('#F2/14 normalizeRutas: fora les rutes derivades de `vertical` (2026-10-23)',
+            nr.vertical === undefined && nr.escaletes === undefined && nr.escaletes_domini === undefined,
+            'vertical=' + nr.vertical + ' | escaletes=' + nr.escaletes);
+        ok('#F2/15 normalizeRutas: `destino_base` mana i `projectes` n es l alies',
+            eq(nr.projectes, 'C:' + BS + 'P') && eq(nr.destino_base, 'C:' + BS + 'P'),
+            'projectes=' + nr.projectes + ' | destino_base=' + nr.destino_base);
+        var nrAlias = R.normalizeRutas({ projectes: 'D:' + BS + 'Q' });
+        ok('#F2/15b el perfil vell que nomes porta `projectes` tambe funciona',
+            eq(nrAlias.destino_base, 'D:' + BS + 'Q') && eq(nrAlias.projectes, 'D:' + BS + 'Q'),
+            'destino_base=' + nrAlias.destino_base);
+        var nrSin = R.normalizeRutas({ subtitulos: 'C:' + BS + 'S' + BS });
+        ok('#F2/15c subtitulosSinteticos es deriva de `subtitulos` (no de `vertical`)',
+            eq(nrSin.subtitulosSinteticos, 'C:' + BS + 'S' + BS + 'SINTETICS'),
+            'sintetics=' + nrSin.subtitulosSinteticos);
         ok('#F2/16 normalizeRutas: una ruta QUE JA VE al perfil no es toca',
             R.normalizeRutas({ vertical: 'C:' + BS + 'V', grafismos: 'C:' + BS + 'MEU' }).grafismos === 'C:' + BS + 'MEU');
 
         // `14_Assembly_Logic` fa `${rutas.conductors}${fitxer}` i `utils.workFolder`
         // fa `rutas.destinoBase + progDir`: el separador final s'ha de RESPECTAR.
-        var nrt = R.normalizeRutas({ vertical: 'C:' + BS + 'V' + BS, destino_base: 'C:' + BS + 'P' + BS, grafismos: 'C:' + BS + 'G' });
+        var nrt = R.normalizeRutas({ destino_base: 'C:' + BS + 'P' + BS, grafismos: 'C:' + BS + 'G' });
         ok('#F2/16b normalizeRutas RESPECTA el separador final de les rutes existents',
             nrt.projectes === 'C:' + BS + 'P' + BS && nrt.destino_base === 'C:' + BS + 'P' + BS &&
-            nrt.grafismos === 'C:' + BS + 'G' &&
-            nrt.subtitulos === 'C:' + BS + 'V' + BS + 'SRT_MP4_PER_TEMPS_15MINUTS' &&
-            nrt.escaletes === 'C:' + BS + 'V' + BS + 'ESCALETES',
-            'projectes=[' + nrt.projectes + '] grafismes=[' + nrt.grafismos + '] subtitols=[' + nrt.subtitulos + ']');
+            nrt.grafismos === 'C:' + BS + 'G',
+            'projectes=[' + nrt.projectes + '] grafismes=[' + nrt.grafismos + ']');
 
         // ── C. GUARDES SOBRE ELS FITXERS REALS ──────────────────────────────
         try {
@@ -155,7 +158,7 @@
                 ' event=' + /FASTPASS_CONFIG_UPDATED/.test(cfg));
             ok('#F2/18 Config: `resolvePath`/`applyProfile` exposats i les rutes noves a `get().rutas`',
                 /resolvePath: function/.test(cfg) && /applyProfile: function/.test(cfg) &&
-                /escaletesDomini:/.test(cfg) && /grafismos:/.test(cfg) &&
+                /destinoBase:/.test(cfg) && /grafismos:/.test(cfg) &&
                 /subtitulos:/.test(cfg) && /subtitulosSinteticos:/.test(cfg),
                 'resolvePath=' + /resolvePath: function/.test(cfg) + ' apply=' + /applyProfile: function/.test(cfg));
 
@@ -171,26 +174,31 @@
                 'literal=' + /ZZZ_GRAFISME/.test(mp) + ' helper=' + /_grafRoot/.test(mp));
 
             var ec = noComments(await readRepo('js/core/escaleta_config.js'));
-            ok('#F2/21 escaleta_config: ESCALETES_PATH/DOMAIN son GETTERS de la config',
-                !/192\.168\.147\.199/.test(ec) &&
-                /defineProperty\(ER, 'ESCALETES_PATH'/.test(ec) &&
-                /defineProperty\(ER, 'ESCALETES_PATH_DOMAIN'/.test(ec) &&
-                /_rutaConfig\('escaletes'\)/.test(ec),
-                'ip=' + /192\.168\.147\.199/.test(ec) + ' getter=' + /defineProperty\(ER, 'ESCALETES_PATH'/.test(ec));
+            ok('#F2/21 escaleta_config: cap ruta d escaletes del NAS (model local-first)',
+                !/192\.168\.147\.199/.test(ec) && ec.indexOf('ESCALETES_PATH') === -1 &&
+                ec.indexOf('_rutaConfig') === -1,
+                'ip=' + /192\.168\.147\.199/.test(ec) + ' path=' + (ec.indexOf('ESCALETES_PATH') !== -1));
 
             var pj = null;
             try { pj = JSON.parse(await readRepo('Profile.json')); } catch (ePj) { pj = null; }
-            ok('#F2/22 Profile.json: rutes noves (projectes/escaletes/grafismes/subtitols/sintetics)',
-                !!pj && !!pj.rutas && !!pj.rutas.projectes && !!pj.rutas.escaletes &&
-                !!pj.rutas.escaletes_domini && !!pj.rutas.grafismos && !!pj.rutas.subtitulos &&
-                !!pj.rutas.subtitulosSinteticos,
+            ok('#F2/22 Profile.json: rutes vives i FORA les mortes (vertical/escaletes)',
+                !!pj && !!pj.rutas && !!pj.rutas.projectes && !pj.rutas.vertical &&
+                !pj.rutas.escaletes && !pj.rutas.escaletes_domini && !!pj.rutas.grafismos &&
+                !!pj.rutas.subtitulos && !!pj.rutas.subtitulosSinteticos &&
+                !!pj.rutas.destino_base && !!pj.rutas.render1 && !!pj.rutas.render2 &&
+                !!pj.rutas.portadas,
                 pj && pj.rutas ? Object.keys(pj.rutas).join(',') : 'JSON invalid');
 
             var st = await readRepo('setup.html');
-            ok('#F2/23 setup.html: camps nous + ajuda de variables + boto PROVA',
+            ok('#F2/23 setup.html: Rutes de Xarxa (infra + 3 export) i ajuda de {project}',
                 /id="path-grafismos"/.test(st) && /id="path-subtitulos"/.test(st) &&
-                /id="path-subtitulosSinteticos"/.test(st) && /id="path-escaletes"/.test(st) &&
-                /\{autor\}/.test(st) && /resolvePathDetailed/.test(st) && /provaRuta/.test(st));
+                /id="path-subtitulosSinteticos"/.test(st) && /id="path-destino_base"/.test(st) &&
+                /id="path-render1"/.test(st) && /id="path-render2"/.test(st) &&
+                /id="path-portadas"/.test(st) &&
+                /\{autor\}/.test(st) && /\{project\}/.test(st) &&
+                /resolvePathDetailed/.test(st) && /provaRuta/.test(st) &&
+                !/id="path-vertical"/.test(st) && !/id="path-escaletes"/.test(st) &&
+                !/id="path-escaletes_domini"/.test(st));
 
             var idx = await readRepo('index.html');
             // (2026-10-21) Sense versio fixa: qualsevol cache-bust (`?v=NN`) val;

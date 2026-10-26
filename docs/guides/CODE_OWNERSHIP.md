@@ -31,7 +31,7 @@
 | **`js/core/state.js`** | TOTS | `markerPhase` controla el bucle F1→F5. `bloque` i `progData` defineixen el context actiu. `structure` alimenta runAutoPlacement. |
 | **`js/core/11_Configuracio.js`** | TOTS | `get()` retorna `tracks.video.mp4` (V1 = 1). Canviar el valor de V1 desplaça TOTES les operacions. `handles` i `tcOffset` afecten els càlculs de trim. |
 | **`js/core/session_manifest.js`** | MainButton, Markers, MP4 | `save()` i `load()` persisteixen i recuperen el manifest. Canvis d'estructura del manifest trenquen compatibilitat. |
-| **`js/core/escaleta_reader.js`** | MainButton, Markers | `findLatest()`, `findLatestValid()`, `calcPrecisionTrimBounds()`, `tcToSeconds()`, `_deduceOnAirEntrada()`. Canviar la lògica de deducció de TC afecta TOTES les projeccions. |
+| **`js/core/escaleta_reader.js`** | MainButton, Markers | `ensureLocalCopy()`, `calcPrecisionTrimBounds()`, `isBoundsOutOfCleanFeedRange()`, `tcToSeconds()`, `_deduceOnAirEntrada()`. Canviar la lògica de deducció de TC afecta TOTES les projeccions. |
 | **`js/logic/14_Assembly_Logic.js`** | Chyrons, Graphics, Markers, MP4 | `runGuidedAssembly()`, `calcDensityFootprintV2()`, `conductor()`. Cridat des de `flow_chyrons.js`, `flow_graphics.js`, `flow_markers.js` i `flow_mp4.js`. |
 | **`js/core/4_Context.js`** | TOTS | `checkContext()` verifica que s'està a la seqüència i projecte correctes. `init()` configura el panel. |
 | **`js/logic/3_Project_Logic.js`** | MainButton | `create()` insereix el MP4 a V1 amb `insertWithBounds`. Canvis en la inserció afecten el punt de partida de TOTS els marcadors. |

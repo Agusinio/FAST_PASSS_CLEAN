@@ -1,24 +1,20 @@
 /* ============================================================================
- * PROVA ARRENCADA / LLISTAT D'ESCALETES (2026-10-21)
+ * PROVA ARRENCADA / ESCALETA LOCAL (2026-10-23)
  * ----------------------------------------------------------------------------
- * SIMPTOMA (mesura real, TNC V1 21/10 primera arrencada del dia):
- *     +    140 ms  checkContext · readFolder NAS (workFolder)  -> 14 ms
- *     +   5377 ms  checkContext · escaleta getStatus            -> 5233 ms (96%)
- *     +   5435 ms  ARRENCADA COMPLETA
- * El llistat de la carpeta d'escaletes el feia `IO.listFolder` del motor
- * ExtendScript (`scanDirectory`): `length` + `modified` + `created` de CADA
- * fitxer i, si `length` ix 0 (típic en UNC), obre el fitxer per `eof`.
+ * CANVI DE MODEL (2026-10-23): l'escaleta es treballa SEMPRE al DIRECTORI DEL
+ * PROJECTE (còpia prèvia del NAS o «foto» del botó FOTO). La carpeta central
+ * d'escaletes del NAS i tota la maquinària que la llistava han desaparegut:
+ *   · escaleta_io.js: fora `_listEscaletas`, `_listEscaletasNow`, `warmList`,
+ *     `_invalidateEscaletas`, la memòria de 8 s, `findLatest` i `getStatus`.
+ *   · `ensureLocalCopy(ctx)` NOMÉS mira el directori del projecte.
+ *   · `escaleta_fetch.js` estima la sèrie d'escaletaIds amb l'HISTORIAL LOCAL
+ *     (`_estimateEscaletaIdFromLocal`) en compte del llistat del NAS.
  *
- * Aquesta prova fixa el comportament NOU de `EscaletaReader`:
- *  A) LLISTAT NATIU (Node async -> CEP) amb el MATEIX format d'entrada que
- *     `scanDirectory` (name/path/modified/created/size/isDir) i només .json.
- *  B) MEMORIA CURTA (`LIST_TTL_MS`) + `_invalidateEscaletas()`.
- *  C) DEDUPLICACIO de crides simultanies (1 sola lectura).
- *  D) RESPATLLERS en cascada: Node -> CEP -> ExtendScript, i camí de domini
- *     quan el primer camí torna BUIT.
- *  E) `load()` normalitza els separadors per a `cep.fs.readFile` (abans
- *     responia err=3 amb els camins que genera `workFolder()`, que porta '/').
- *  F) `findLatestValid()` NO rellegeix el JSON del fallback (ja el té).
+ * Aquesta prova fixa:
+ *  A) `_listProjectFiles` (Node → CEP → ExtendScript) i el seu format.
+ *  B) `findInFolder` / `ensureLocalCopy` (només local).
+ *  C) `load` amb els separadors normalitzats per a `cep.fs.readFile`.
+ *  D) GUARDES: cap ruta d'escaletes del NAS al codi ni a l'arrencada.
  * ==========================================================================*/
 (function () {
     var orig = window.__runTests;
@@ -30,183 +26,175 @@
         window.__PHASE = '22-arrancada';
 
         var ER = UI && UI.EscaletaReader;
-        ok('#BOOT/1 EscaletaReader carregat (js/core/escaleta_io.js al bundle)', !!ER, 'ER=' + !!ER);
+        ok('#BOOT/1 EscaletaReader carregat amb el model local-first',
+            !!ER && typeof ER.findInFolder === 'function' && typeof ER.ensureLocalCopy === 'function' &&
+            typeof ER.lookupLocalStatus === 'function' && typeof ER._listProjectFiles === 'function',
+            'ER=' + !!ER);
+        ok('#BOOT/2 API del NAS retirada (_listEscaletas/findLatest/getStatus/warmList)',
+            !!ER && ER._listEscaletas === undefined && ER.findLatest === undefined &&
+            ER.getStatus === undefined && ER.warmList === undefined,
+            '_listEscaletas=' + !!(ER && ER._listEscaletas) + ' findLatest=' + !!(ER && ER.findLatest) +
+            ' getStatus=' + !!(ER && ER.getStatus) + ' warmList=' + !!(ER && ER.warmList));
         if (!ER) return;
 
         var BS = String.fromCharCode(92);
-        var P1 = 'X:' + BS + 'ESC';
-        var P2 = 'Y:' + BS + 'ESC';
-
-        function setPath(name, val) {
-            Object.defineProperty(ER, name, { get: function () { return val; }, configurable: true });
-        }
-        setPath('ESCALETES_PATH', P1);
-        setPath('ESCALETES_PATH_DOMAIN', P2);
+        var DIR = 'X:' + BS + 'PROVES' + BS + '02_COMARQUES_PROJECTES' + BS + '2026_10_21' + BS + 'V1';
 
         // ── STUBS DE PLATAFORMA ──────────────────────────────────────────────
         var nodeCalls = [];
         var cepCalls = [];
         var jsxCalls = [];
-        var nodeMode = 'ok';     // 'ok' | 'ko'
-        var nodeItems = {};      // items per camí
-        var nodePending = null;  // si no és null, la promesa es resol a mà
+        var nodeMode = 'ok';        // 'ok' | 'ko'
+        var nodeNames = {};         // directori → [noms]
+        var statMtime = 0;
 
         UI.Utils = UI.Utils || {};
-        UI.Utils._nodeFs = function () {
-            return {
-                promises: {
-                    readdir: function (p) {
+        UI.State = UI.State || {};
+        window.cep_node = {
+            require: function () {
+                return {
+                    readdir: function (p, cb) {
                         nodeCalls.push(p);
-                        if (nodePending) return nodePending;
-                        if (nodeMode === 'ko') return Promise.reject(new Error('ENOENT'));
-                        return Promise.resolve(nodeItems[p] || []);
+                        if (nodeMode === 'ko') { cb(new Error('ENOENT')); return; }
+                        cb(null, nodeNames[p] || null);
+                    },
+                    stat: function (p, cb) {
+                        cb(null, {
+                            isDirectory: function () { return false; },
+                            mtime: new Date(statMtime),
+                            birthtime: new Date(statMtime),
+                            size: 1234
+                        });
                     }
-                }
-            };
+                };
+            }
         };
-        UI.Utils.callJSX = function (s) { jsxCalls.push(s); return Promise.resolve('[]'); };
 
-        var cepMode = 'ok';      // 'ok' | 'ko'
-        var cepItems = {};
+        var cepMode = 'ok';
+        var cepNames = {};
+        var readPaths = [];
+        var escaletaFake = JSON.stringify({
+            cleanFeed: { mediaStart: '12:00:00:00', mediaStop: '13:00:00:00' },
+            escaleta: { id: 'PRO1440', liniesEscaleta: [] }
+        });
+
         window.cep = {
             fs: {
                 readdir: function (p) {
                     cepCalls.push(p);
                     if (cepMode === 'ko') return { err: 9, data: null };
-                    var names = cepItems[p];
+                    var names = cepNames[p];
                     if (names === undefined) return { err: 3, data: null };
                     return { err: 0, data: names };
                 },
-                readFile: function () { return { err: 3, data: null }; }
+                readFile: function (p) { readPaths.push(p); return { err: 0, data: escaletaFake }; },
+                stat: function () { return { err: 3, data: null }; }
             }
         };
+        UI.Utils.callJSX = function (s) { jsxCalls.push(s); return Promise.resolve('[]'); };
 
-        var itemsA = [
-            { name: '20261021_120000_TN_COMARQUES_V1_a.json', isDirectory: function () { return false; } },
-            { name: '20261021_130000_TN_COMARQUES_V1_b.json', isDirectory: function () { return false; } },
-            { name: 'llegeix-me.txt', isDirectory: function () { return false; } },
-            { name: 'subcarpeta.json', isDirectory: function () { return true; } }
-        ];
-        nodeItems = {}; nodeItems[P1] = itemsA;
-        ER._invalidateEscaletas();
+        // ── A. LLISTAT DEL DIRECTORI DEL PROJECTE (Node) ─────────────────────
+        var FOTO = 'escaleta_on_demand_1761123456789.json';
+        var NAS1 = '20261021_120000_TN_COMARQUES_V1_a.json';
+        var NAS2 = '20261021_130000_TN_COMARQUES_V1_b.json';
+        nodeNames[DIR] = [FOTO, NAS1, NAS2, 'llegeix-me.txt'];
+        statMtime = 1761123456789;
 
-        // ── A. LLISTAT NATIU (Node) ──────────────────────────────────────────
-        var r1 = await ER._listEscaletas();
-        ok('#BOOT/2 llistat per Node (asíncron)', r1.via === 'node', 'via=' + r1.via);
-        ok('#BOOT/3 només .json (fora .txt i carpetes)', r1.count === 2, 'count=' + r1.count);
-        var parsed1 = JSON.parse(r1.raw || '[]');
-        ok('#BOOT/4 format scanDirectory (name/path/isDir)',
-            parsed1.length === 2 && parsed1[0].name.indexOf('.json') > 0 &&
-            parsed1[0].path === P1 + BS + parsed1[0].name && parsed1[0].isDir === false &&
-            parsed1[0].size === 0 && parsed1[0].created === 0,
-            JSON.stringify(parsed1[0] || {}));
+        var files = await ER._listProjectFiles(DIR);
+        ok('#BOOT/3 llistat per Node: només .json (fora .txt)', !!files && files.length === 3,
+            'n=' + (files ? files.length : '-'));
+        ok('#BOOT/4 format del llistat (name/path/isDir/modified)',
+            !!files && files[0].name === FOTO && files[0].path === DIR + BS + FOTO &&
+            files[0].isDir === false && files[0].modified === statMtime,
+            JSON.stringify(files && files[0] ? { n: files[0].name, m: files[0].modified } : {}));
+        ok('#BOOT/5 readdir rep el directori SENSE separador final',
+            nodeCalls.length === 1 && nodeCalls[0] === DIR, nodeCalls[0] || '(cap)');
 
-        // ── B. MEMORIA CURTA ─────────────────────────────────────────────────
-        var before = nodeCalls.length;
-        var r2 = await ER._listEscaletas();
-        ok('#BOOT/5 segona crida surt de memòria (0 lectures)',
-            r2.via === 'cache' && nodeCalls.length === before, 'via=' + r2.via + ' calls=' + nodeCalls.length);
-        ok('#BOOT/6 LIST_TTL_MS definit (finestra curta, no eterna)',
-            ER.LIST_TTL_MS > 0 && ER.LIST_TTL_MS <= 30000, 'ttl=' + ER.LIST_TTL_MS);
-
-        ER._invalidateEscaletas();
-        await ER._listEscaletas();
-        ok('#BOOT/7 _invalidateEscaletas força lectura nova',
-            nodeCalls.length === before + 1, 'calls=' + nodeCalls.length);
-
-        // ── C. DEDUPLICACIO ──────────────────────────────────────────────────
-        ER._invalidateEscaletas();
-        var resolveNow = null;
-        nodePending = new Promise(function (res) { resolveNow = res; });
-        var c0 = nodeCalls.length;
-        var pA = ER._listEscaletas();
-        var pB = ER._listEscaletas();
-        resolveNow(itemsA);
-        nodePending = null;
-        var rA = await pA; var rB = await pB;
-        ok('#BOOT/8 crides simultànies comparteixen UNA lectura',
-            nodeCalls.length === c0 + 1 && rA.raw === rB.raw, 'calls=' + (nodeCalls.length - c0));
-
-        // ── D. RESPATLLERS ───────────────────────────────────────────────────
-        ER._invalidateEscaletas();
+        // ── B. RESPATLLERS: Node KO → CEP ────────────────────────────────────
         nodeMode = 'ko';
-        cepItems = {};
-        cepItems[P1] = ['20261021_120000_TN_COMARQUES_V1_a.json', 'nota.txt'];
-        var r3 = await ER._listEscaletas();
-        ok('#BOOT/9 sense Node cau a CEP natiu', r3.via === 'cep' && r3.count === 1,
-            'via=' + r3.via + ' count=' + r3.count);
+        cepNames[DIR] = [NAS1];
+        var filesCep = await ER._listProjectFiles(DIR);
+        ok('#BOOT/6 sense Node cau a CEP natiu (readdir)',
+            !!filesCep && filesCep.length === 1 && filesCep[0].name === NAS1,
+            'n=' + (filesCep ? filesCep.length : '-'));
+        nodeMode = 'ok';
 
-        ER._invalidateEscaletas();
+        // ── C. RESPATLLER FINAL: ExtendScript ────────────────────────────────
         cepMode = 'ko';
-        jsxCalls = [];
-        UI.Utils.callJSX = function (s) {
-            jsxCalls.push(s);
-            return Promise.resolve('[{"name":"20261021_120000_TN_COMARQUES_V1_a.json","path":"z","isDir":false}]');
+        nodeMode = 'ko';
+        var savedCallJSX = UI.Utils.callJSX;
+        UI.Utils.callJSX = function (s) { jsxCalls.push(s); return Promise.resolve('ERR:KO'); };
+        var filesJsx = await ER._listProjectFiles(DIR);
+        ok('#BOOT/7 sense Node ni CEP cau a ExtendScript (IO.listFolder) i no inventa res',
+            filesJsx === null && jsxCalls.length > 0 && jsxCalls[0].indexOf('IO.listFolder') === 0,
+            'res=' + (filesJsx === null ? 'null' : '-'));
+        UI.Utils.callJSX = savedCallJSX;
+        cepMode = 'ok';
+        nodeMode = 'ok';
+        cepNames[DIR] = [NAS1, NAS2];
+
+
+        // ── D. findInFolder / ensureLocalCopy (NOMÉS local) ──────────────────
+        UI.Utils.workFolder = function () { return DIR; };
+        var ctx = {
+            config: { rutas: { destinoBase: 'X:' + BS + 'PROVES' + BS } },
+            progData: { archivo: 'TN_COMARQUES', directorio: '02_COMARQUES_PROJECTES' },
+            dateDir: '2026_10_21',
+            bloque: 'V1'
         };
-        var r4 = await ER._listEscaletas();
-        ok('#BOOT/10 sense Node ni CEP cau a ExtendScript',
-            r4.via === 'jsx' && r4.count === 1 && jsxCalls.length > 0 && jsxCalls[0].indexOf('IO.listFolder(') === 0,
-            'via=' + r4.via + ' count=' + r4.count + ' jsx=' + jsxCalls.length);
+        var meta = await ER.ensureLocalCopy(ctx);
+        ok('#BOOT/8 ensureLocalCopy retorna la FOTO del directori del projecte',
+            !!meta && meta.filename === FOTO && meta.path === DIR + BS + FOTO,
+            'file=' + (meta && meta.filename));
+        ok('#BOOT/9 ensureLocalCopy no consulta cap ruta del NAS (només el directori)',
+            nodeCalls.indexOf(DIR) >= 0 && nodeCalls.every(function (p) { return p === DIR; }),
+            nodeCalls.join(' | '));
 
-        // Camí 1 BUIT + camí 2 (domini) amb fitxers -> mana el que té fitxers.
-        ER._invalidateEscaletas();
-        nodeMode = 'ok'; cepMode = 'ok';
-        nodeItems = {};
-        nodeItems[P1] = [];
-        nodeItems[P2] = [{ name: '20261021_120000_TN_COMARQUES_V1_c.json', isDirectory: function () { return false; } }];
-        var r5 = await ER._listEscaletas();
-        ok('#BOOT/11 camí buit no s\'imposa al de domini amb fitxers',
-            r5.count === 1 && r5.path === P2, 'path=' + r5.path + ' count=' + r5.count);
+        nodeNames[DIR] = [];
+        cepNames[DIR] = [];
+        var metaBuit = await ER.ensureLocalCopy(ctx);
+        ok('#BOOT/10 sense escaleta local retorna null (el flux farà FOTO)',
+            metaBuit === null, 'res=' + (metaBuit === null ? 'null' : '?'));
 
-        // ── E. load(): separadors normalitzats per al natiu ──────────────────
-        // `workFolder()` genera "...\PROVES\02_COMARQUES_PROJECTES/2026_10_20/V1"
-        // i `cep.fs.readFile` responia err=3 (al log real: "cep.fs.readFile err=3
-        // → respatller JSX") → crida al motor que bloqueja Premiere + mojibake.
-        ER.applyDurationOverrides = function () { return 0; };   // doble de prova
-        var readPaths = [];
-        var escaletaFake = JSON.stringify({ cleanFeed: { clips: [] }, escaleta: { lines: [] } });
+        nodeNames[DIR] = ['escaleta_invalida.json'];
+        window.cep.fs.readFile = function () { return { err: 0, data: '{"missatge":"Error"}' }; };
+        var metaDolent = await ER.ensureLocalCopy(ctx);
+        ok('#BOOT/11 un JSON d error no compta com a escaleta', metaDolent === null,
+            'res=' + (metaDolent === null ? 'null' : '?'));
         window.cep.fs.readFile = function (p) { readPaths.push(p); return { err: 0, data: escaletaFake }; };
+
+        // ── E. load: separadors normalitzats per al natiu ────────────────────
         var mixed = 'C:' + BS + 'P' + BS + 'PROVES' + BS + '02_COMARQUES_PROJECTES/2026_10_20/V1' + BS + 'a.json';
+        readPaths = [];
         var d1 = await ER.load(mixed, true);
         ok('#BOOT/12 load llig amb el camí normalitzat (sense /)',
             !!d1 && readPaths.length === 1 && readPaths[0].indexOf('/') === -1 &&
             readPaths[0].indexOf('PROVES') > 0, readPaths[0] || '(cap lectura)');
 
-        // ── F. findLatestValid: el fallback no rellegeix el JSON ────────────
-        ER._getBlockLastItemEndSec = function () { return { endSec: 80000, source: 'test', num: '99' }; };
-        readPaths = [];
-        ER._invalidateEscaletas();
-        nodeItems = {};
-        nodeItems[P1] = [{ name: '20261021_120000_TN_COMARQUES_V1_a.json', isDirectory: function () { return false; } }];
-        var fv = await ER.findLatestValid('TN_COMARQUES', 'V1', '20261021');
-        ok('#BOOT/13 fallback vàlid amb UNA sola lectura del JSON',
-            !!(fv && fv.valid && fv._fallback) && readPaths.length === 1,
-            'valid=' + !!(fv && fv.valid) + ' fallback=' + !!(fv && fv._fallback) + ' reads=' + readPaths.length);
-
-        // ── G. GUARDES sobre els fitxers REALS ─────────────────────────────
-        // (1) cache-busts al dia (el panell de CEP cacheja els .js antics).
-        // (2) el llistat s'engega en paral·lel a l'arrencada i el primer camí és
-        //     NATIU: si algú torna a posar `IO.listFolder` primer, es veurà.
+        // ── F. GUARDES sobre els fitxers REALS ───────────────────────────────
         var REPO = window.__REPO || '';
         async function readRepo(rel) {
             var r = await fetch('file:///' + REPO + '/' + rel);
             return await r.text();
         }
-        var idx = await readRepo('index.html');
-        ok('#BOOT/14 cache-busts al dia (escaleta_io v19 + main v87)',
-            /\?v=19/.test(idx.match(/escaleta_io\.js\?v=\d+/) || '') &&
-            /\?v=87/.test(idx.match(/main\.js\?v=\d+/) || ''),
-            (idx.match(/escaleta_io\.js\?v=\d+/) || '') + ' ' + (idx.match(/main\.js\?v=\d+/) || ''));
-
-        var mainSrc = await readRepo('js/main.js');
         var ioSrc = await readRepo('js/core/escaleta_io.js');
-        ok('#BOOT/15 arrencada engega el llistat (warmList) i el primer camí és natiu',
-            mainSrc.indexOf('FASTPASS_UI.EscaletaReader') > 0 &&
-            mainSrc.indexOf('.warmList()') > 0 &&
-            ioSrc.indexOf('warmList') > 0 &&
-            ioSrc.indexOf('pNod = this._listViaNode') > 0 &&
-            ioSrc.indexOf('_listViaCep') > 0,
-            'main=' + (mainSrc.indexOf('.warmList()') > 0) +
-            ' node=' + (ioSrc.indexOf('pNod = this._listViaNode') > 0));
+        ok('#BOOT/13 escaleta_io: cap ruta ni llistat de la carpeta central del NAS',
+            ioSrc.indexOf('ESCALETES_PATH') === -1 && ioSrc.indexOf('_listEscaletas') === -1 &&
+            ioSrc.indexOf('findLatest') === -1 && ioSrc.indexOf('getStatus') === -1 &&
+            ioSrc.indexOf('LOCAL-FIRST') > 0);
+        var mainSrc = await readRepo('js/main.js');
+        ok('#BOOT/14 arrencada sense escalfar el llistat d escaletes (warmList)',
+            mainSrc.indexOf('warmList') === -1 && mainSrc.indexOf('_listEscaletas') === -1);
+        var fetchSrc = await readRepo('js/core/escaleta_fetch.js');
+        ok('#BOOT/15 escaleta_fetch: sèrie estimada amb l HISTORIAL LOCAL',
+            fetchSrc.indexOf('_estimateEscaletaIdFromLocal') > 0 &&
+            fetchSrc.indexOf('_estimateEscaletaIdFromHistory') === -1 &&
+            fetchSrc.indexOf('_invalidateSeries') > 0 &&
+            fetchSrc.indexOf('ESCALETES_PATH') === -1);
+        var idx = await readRepo('index.html');
+        ok('#BOOT/16 cache-busts presents a index.html',
+            /escaleta_io\.js\?v=\d+/.test(idx) && /escaleta_fetch\.js\?v=\d+/.test(idx),
+            'io=' + /escaleta_io\.js\?v=\d+/.test(idx) + ' fetch=' + /escaleta_fetch\.js\?v=\d+/.test(idx));
     };
 })();
+

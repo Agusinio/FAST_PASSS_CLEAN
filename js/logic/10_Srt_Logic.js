@@ -207,13 +207,16 @@
             var out = [];
             for (var i = 0; i < entries.length; i++) {
                 var e = entries[i];
-                out.push({
+                var c = {
                     index: (e.index != null) ? e.index : (i + 1),
                     timeStr: e.timeStr || '',
                     texts: (e.texts || []).slice(),
                     startSec: Number(e.startSec) || 0,
                     endSec: Number(e.endSec) || 0
-                });
+                };
+                // (BUG #188) Marca d'origen: entrada que ve del SINT (fusió 🧩).
+                if (e.sint) c.sint = true;
+                out.push(c);
             }
             return out;
         },
@@ -248,51 +251,249 @@
         },
 
         /**
+         * _normText: clau de comparació de textos (minúscules, sense accents ni
+         * puntuació). Serveix per a reconèixer el MATEIX subtítol quan el TC dels dos
+         * sistemes no quadra (el .srt sintètic i el normal no surten del mateix motor).
+         * @param {string} s
+         * @returns {string}
+         */
+        _normText: function (s) {
+            var t = String(s || '').toLowerCase();
+            try { t = t.normalize('NFD').replace(/[\u0300-\u036f]/g, ''); } catch (e) { }
+            return t.replace(/[^a-z0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim();
+        },
+
+        /**
+         * textOverlap: quantes entrades del SINT tenen la seua frase JA al SRT normal
+         * (sense mirar cap TC). Servix de GUARDA DE PERTINENÇA: els .srt sintètics no
+         * porten el bloc al nom (`MATINS_V5_GUIO_LA_PLOMA_…`), així que es pot carregar
+         * el d'un altre bloc del mateix programa; si el % és molt baix, hi ha risc.
+         * @param {Array} baseEntries - SRT normal
+         * @param {Array} sintEntries - SRT sintetic
+         * @returns {{hits:number,total:number,pct:number}}
+         */
+        textOverlap: function (baseEntries, sintEntries) {
+            var base = baseEntries || [], sint = sintEntries || [];
+            var set = {}, i;
+            for (i = 0; i < base.length; i++) {
+                var k = this._normText((base[i].texts || []).join(' '));
+                if (k) set[k] = 1;
+            }
+            var hits = 0;
+            for (i = 0; i < sint.length; i++) {
+                var k2 = this._normText((sint[i].texts || []).join(' '));
+                if (k2 && set[k2]) hits++;
+            }
+            return { hits: hits, total: sint.length, pct: sint.length ? Math.round(100 * hits / sint.length) : 0 };
+        },
+
+        /** _median: mediana d'una llista de numeros (no muta l'original). */
+        _median: function (list) {
+            var a = (list || []).slice().sort(function (x, y) { return x - y; });
+            if (a.length === 0) return 0;
+            var h = Math.floor(a.length / 2);
+            return (a.length % 2) ? a[h] : (a[h - 1] + a[h]) / 2;
+        },
+
+        /**
+         * estimateOffsetSec (BUG #189 · 2026-10-23): DESFASAMENT d'eix entre el SRT
+         * NORMAL i el SINT, mesurat amb les frases que els dos tenen en comu.
+         *
+         * PER QUE CAL: els `.srt` sintetics NO comencen al media 0 del clip. El seu
+         * 00:00:00 es l'inici del material amb que s'han generat (la peca, o un tros
+         * de programa que la conte), que en un extracte amb handles cau molt mes
+         * endins: mesurat en viu el 22/10, -16,97 s al TN_COMARQUES V3 i -39,55 s al
+         * V1 (ELS_DIPOSTIS). El SRT NORMAL si que viu en temps de MEDIA del clip, aixi
+         * sense ajust cada sintetic eixia eixa diferencia ABANS del lloc on tocava
+         * (l'usuari ho veu com «el subtitol es d'un moment anterior»).
+         *
+         * NO s'endevina cap constant: per a cada frase que apareix EXACTAMENT als dos
+         * (text normalitzat, sense accents ni puntuacio) es calcula
+         * `base.startSec - sint.startSec`; el desfasament es la MEDIANA (robusta a
+         * frases repetides o mal aparellades) i despres es refina quedant-se nomes
+         * les mostres a +-`keepSec` de la mediana.
+         *
+         * @param {Array} baseEntries - SRT normal (eix de MEDIA)
+         * @param {Array} sintEntries - SRT sintetic (el seu propi eix)
+         * @param {Object} [opts] - { keepSec: 2.5, maxAbsSec: 900 }
+         * @returns {{offsetSec:number, offsetSecRaw:number, pairs:number, used:number,
+         *   spreadSec:number, method:string}}
+         *   `offsetSec` = el que cal SUMAR a les entrades SINT per a portar-les a
+         *   l'eix del NORMAL (0 si no s'ha pogut mesurar o si el resultat no es creible,
+         *   `method` = 'cap' | 'text' | 'text-febol' | 'fora-de-rang').
+         */
+        estimateOffsetSec: function (baseEntries, sintEntries, opts) {
+            var o = opts || {};
+            var keep = (o.keepSec != null && isFinite(Number(o.keepSec))) ? Number(o.keepSec) : 2.5;
+            var maxAbs = (o.maxAbsSec != null && isFinite(Number(o.maxAbsSec))) ? Number(o.maxAbsSec) : 900;
+            var out = { offsetSec: 0, offsetSecRaw: 0, pairs: 0, used: 0, spreadSec: 0, method: 'cap' };
+            var base = baseEntries || [], sint = sintEntries || [], i;
+            if (base.length === 0 || sint.length === 0) return out;
+            // Index de la taula NORMAL per text (la primera aparicio mana).
+            var idx = {};
+            for (i = 0; i < base.length; i++) {
+                var kb = this._normText((base[i].texts || []).join(' '));
+                if (kb && idx[kb] == null) idx[kb] = Number(base[i].startSec) || 0;
+            }
+            var deltas = [];
+            for (i = 0; i < sint.length; i++) {
+                var ks = this._normText((sint[i].texts || []).join(' '));
+                if (!ks || idx[ks] == null) continue;
+                deltas.push(idx[ks] - (Number(sint[i].startSec) || 0));
+            }
+            out.pairs = deltas.length;
+            if (deltas.length === 0) return out;
+            var med = this._median(deltas);
+            var kept = [];
+            for (i = 0; i < deltas.length; i++) {
+                if (Math.abs(deltas[i] - med) <= keep) kept.push(deltas[i]);
+            }
+            if (kept.length === 0) kept = deltas.slice();
+            var off = this._median(kept);
+            // Dispersio = pitjor desviacio de les mostres que s'han usat.
+            var spread = 0;
+            for (i = 0; i < kept.length; i++) spread = Math.max(spread, Math.abs(kept[i] - off));
+            out.used = kept.length;
+            out.spreadSec = Math.round(spread * 1000) / 1000;
+            out.offsetSecRaw = Math.round(off * 1000) / 1000;
+            out.method = (kept.length >= 3) ? 'text' : 'text-febol';
+            if (Math.abs(off) > maxAbs) {
+                out.method = 'fora-de-rang';
+                out.offsetSec = 0;
+                return out;
+            }
+            out.offsetSec = out.offsetSecRaw;
+            return out;
+        },
+
+        /**
+         * shiftEntries (BUG #189): copia la taula desplacant TOTS els temps
+         * `deltaSec` (positiu = mes tard). No muta l'original i conserva la marca
+         * `sint` de cada entrada.
+         * Les entrades que queden TOTALMENT abans del 0 (fora del clip) es
+         * descarten i el que queda es RETALLA a 0: un .srt amb temps negatius no es
+         * valid ni per a Premiere ni per a l'exportador.
+         * @param {Array} entries
+         * @param {number} deltaSec
+         * @returns {Array}
+         */
+        shiftEntries: function (entries, deltaSec) {
+            var d = Number(deltaSec) || 0;
+            var src = this.cloneEntries(entries);
+            var out = [], i;
+            for (i = 0; i < src.length; i++) {
+                var e = src[i];
+                var s = (Number(e.startSec) || 0) + d;
+                var en = (Number(e.endSec) || 0) + d;
+                if (en <= 0.0005) continue;      // cau abans del 0 → fora del clip
+                if (s < 0) s = 0;
+                if (en < s) en = s;
+                e.startSec = s;
+                e.endSec = en;
+                out.push(e);
+            }
+            for (i = 0; i < out.length; i++) {
+                out[i].index = i + 1;
+                out[i].timeStr = '';
+            }
+            return out;
+        },
+
+        /**
          * mergeSyntheticGaps: fusiona el SRT normal amb els SINTETICS.
-         * Nomes AFEGEIX; mai modifica ni lleva les entrades existents.
+         * Nomes AFEGEIX; les entrades existents MAI es toquen (start/end/text).
+         *
+         * (2026-10-23 · BUG #188) RETALL: un sintetic que no cap EXACTE dins del
+         * buit no es descarta — s'ENCOGEIX fins a la vora del buit (com fa un
+         * subtitulador a ma), sempre que el retall no passe de `maxTrimSec` ni la
+         * durada final quede per davall de `minDurSec`. Els que se solapen de ple
+         * amb un subtitol existent (o que no hi caben) es descarten amb el motiu.
          *
          * @param {Array} baseEntries - SRT normal
          * @param {Array} sintEntries - SRT sintetic (font de les entrades noves)
-         * @param {Object} [opts] { tolSec=0.2, includeEdges=false }
-         * @returns {{entries:Array, added:Array, rejected:Array, gaps:Array, tolSec:number}}
-         *   added:    {startSec,endSec,texts,reason:'buit'}
-         *   rejected: {startSec,endSec,texts,reason:'solapa'|'duplicat'|'fora-del-tram'}
+         * @param {Object} [opts] { tolSec=0.2, minDurSec=0.4, maxTrimSec=0.8,
+         *                         includeEdges=false, textNearSec=10 }
+         * @returns {{entries:Array, added:Array, rejected:Array, gaps:Array,
+         *            tolSec:number, minDurSec:number, maxTrimSec:number,
+         *            trimmed:number, sintCount:number}}
+         *   added:    {startSec,endSec,texts,reason:'buit'|'buit-ajustada',trimSec}
+         *   rejected: {startSec,endSec,texts,reason:'solapa'|'duplicat'|'duplicat-text'|
+         *              'fora-del-tram'|'massa-curt'|'no-cab'}
          */
         mergeSyntheticGaps: function (baseEntries, sintEntries, opts) {
             var o = opts || {};
             var tol = (o.tolSec != null && isFinite(Number(o.tolSec))) ? Number(o.tolSec) : 0.2;
             if (tol < 0) tol = 0;
+            // (BUG #188) Quants segons pot ENCOGIR-SE un sintetic per encabir-lo al
+            // buit i quina durada minima ha de conservar despres del retall.
+            var minDur = (o.minDurSec != null && isFinite(Number(o.minDurSec))) ? Number(o.minDurSec) : 0.4;
+            var maxTrim = (o.maxTrimSec != null && isFinite(Number(o.maxTrimSec))) ? Number(o.maxTrimSec) : 0.8;
+            if (minDur < 0) minDur = 0;
+            if (maxTrim < 0) maxTrim = 0;
             var base = this.cloneEntries(baseEntries).sort(function (a, b) { return a.startSec - b.startSec; });
             var sint = this.cloneEntries(sintEntries).sort(function (a, b) { return a.startSec - b.startSec; });
             var info = this.findGaps(base);
-            var out = { entries: base, added: [], rejected: [], gaps: info.gaps, tolSec: tol };
+            var out = {
+                entries: base, added: [], rejected: [], gaps: info.gaps, tolSec: tol,
+                minDurSec: minDur, maxTrimSec: maxTrim, trimmed: 0, sintCount: sint.length
+            };
             if (sint.length === 0) return out;
             if (base.length === 0) return out;   // sense SRT normal no hi ha res a reomplir
 
             var fromSec = (o.includeEdges) ? -Infinity : info.firstSec;
             var toSec = (o.includeEdges) ? Infinity : info.lastSec;
 
+            // (BUG #188) BUITS LLIURES: els que hi ha entre les entrades existents.
+            // Es van retallant a mesura que s'hi col·loca un sintetic, aixi el
+            // seguent ja no pot envair el que s'acaba d'afegir.
+            var free = info.gaps.map(function (g) { return { startSec: g.startSec, endSec: g.endSec }; });
+            if (o.includeEdges && info.firstSec != null) {
+                free.unshift({ startSec: info.firstSec - 36000, endSec: info.firstSec });
+                free.push({ startSec: info.lastSec, endSec: info.lastSec + 36000 });
+            }
+
             var accepted = [];   // intervals ja afegits (anti-duplicat)
+            // (2026-10-23) INDEX de TEXTOS del SRT normal: el sintètic que ja hi és
+            // (mateix text, TC a ±textNearSec) no s'afegeix encara que els TC no
+            // solapen. Comparar només TC duplicava subtítols quan els dos motors
+            // no quadraven al frame.
+            var near = (o.textNearSec != null && isFinite(Number(o.textNearSec))) ? Number(o.textNearSec) : 10;
+            if (near < 0) near = 0;
+            var baseTextIdx = {};
+            for (var bt = 0; bt < base.length; bt++) {
+                var kb = this._normText((base[bt].texts || []).join(' '));
+                if (!kb) continue;
+                if (!baseTextIdx[kb]) baseTextIdx[kb] = [];
+                baseTextIdx[kb].push(base[bt]);
+            }
             for (var i = 0; i < sint.length; i++) {
                 var s = sint[i];
-                var rec = { startSec: s.startSec, endSec: s.endSec, texts: s.texts.slice(), reason: '' };
+                var rec = { startSec: s.startSec, endSec: s.endSec, texts: s.texts.slice(), reason: '', trimSec: 0 };
                 // 1) Fora del tram amb contingut real
                 if (s.startSec < fromSec - tol || s.endSec > toSec + tol) {
                     rec.reason = 'fora-del-tram';
                     out.rejected.push(rec);
                     continue;
                 }
-                // 2) Solapa una entrada EXISTENT (amb tolerancia) → no es toca res
+                // 2) El MATEIX TEXT ja existeix al SRT normal (TC a ±`near` s) → és el
+                //     mateix subtítol dit d'una altra manera de comptar → no s'afegeix.
+                var kS = this._normText((s.texts || []).join(' '));
+                var hits = kS ? baseTextIdx[kS] : null;
+                if (hits) {
+                    var dupText = false;
+                    for (var hh = 0; hh < hits.length; hh++) {
+                        if (Math.abs(hits[hh].startSec - s.startSec) <= near ||
+                            Math.abs(hits[hh].endSec - s.endSec) <= near) { dupText = true; break; }
+                    }
+                    if (dupText) {
+                        rec.reason = 'duplicat-text';
+                        out.rejected.push(rec);
+                        continue;
+                    }
+                }
+                // 3) Duplicat respecte d'una altra sintetica ja acceptada (els .srt
+                //    sintetics no se solapen entre ells: si ho fan, és la mateixa frase).
                 var clash = false;
-                for (var b = 0; b < base.length; b++) {
-                    if (this._overlaps(s.startSec, s.endSec, base[b].startSec, base[b].endSec, tol)) { clash = true; break; }
-                }
-                if (clash) {
-                    rec.reason = 'solapa';
-                    out.rejected.push(rec);
-                    continue;
-                }
-                // 3) Duplicat respecte d'una altra sintetica ja acceptada
                 for (var a = 0; a < accepted.length; a++) {
                     if (this._overlaps(s.startSec, s.endSec, accepted[a].startSec, accepted[a].endSec, tol)) { clash = true; break; }
                 }
@@ -301,16 +502,60 @@
                     out.rejected.push(rec);
                     continue;
                 }
-                accepted.push({ startSec: s.startSec, endSec: s.endSec });
-                rec.reason = 'buit';
+                // 4) (BUG #188) QUIN BUIT HI HA DAVALL: el buit lliure que més hi
+                //    encaixa. Si el sintetic el sobreïx una mica, s'ENCOGEIX fins a
+                //    la vora (mai més de `maxTrimSec`) en lloc de llençar-lo.
+                var best = null, bestOv = 0, bestIdx = -1;
+                for (var f = 0; f < free.length; f++) {
+                    var ov = Math.min(s.endSec, free[f].endSec) - Math.max(s.startSec, free[f].startSec);
+                    if (ov > bestOv) { bestOv = ov; best = free[f]; bestIdx = f; }
+                }
+                if (!best || bestOv <= 0.0001) {
+                    rec.reason = 'solapa';
+                    out.rejected.push(rec);
+                    continue;
+                }
+                var cs = Math.max(s.startSec, best.startSec);
+                var ce = Math.min(s.endSec, best.endSec);
+                var durOk = (ce - cs);
+                var trim = (s.endSec - s.startSec) - durOk;
+                if (durOk + 0.0001 < minDur) {
+                    rec.reason = 'massa-curt';
+                    rec.freeSec = durOk;
+                    out.rejected.push(rec);
+                    continue;
+                }
+                if (trim > maxTrim + 0.0001) {
+                    rec.reason = 'no-cab';
+                    rec.trimSec = trim;
+                    out.rejected.push(rec);
+                    continue;
+                }
+                // 5) Acceptada: es queda amb els temps RETALLATS al buit
+                rec.startSec = cs;
+                rec.endSec = ce;
+                rec.trimSec = (trim > 0.0005) ? trim : 0;
+                rec.reason = rec.trimSec > 0 ? 'buit-ajustada' : 'buit';
+                if (rec.trimSec > 0) out.trimmed++;
+                // El buit queda partit (o esgotat) pel que s'acaba de col·locar.
+                // Es reemplaça el buit TRIAT (bestIdx), no el darrer del bucle.
+                free.splice(bestIdx, 1, { startSec: best.startSec, endSec: cs }, { startSec: ce, endSec: best.endSec });
+                var free2 = [];
+                for (var f2 = 0; f2 < free.length; f2++) {
+                    if (free[f2].endSec - free[f2].startSec > 0.0001) free2.push(free[f2]);
+                }
+                free = free2;
+                accepted.push({ startSec: cs, endSec: ce });
                 out.added.push(rec);
             }
 
             if (out.added.length === 0) return out;
 
-            // 4) Fusionar i reindexar (les existents conserven start/end/texts)
+            // 6) Fusionar i reindexar (les existents conserven start/end/texts).
+            //    `sint: true` marca les que venen del SINT per poder-les pintar
+            //    diferents a l'editor (marcades d'origen, no modificables per error).
             var merged = base.concat(out.added.map(function (r) {
-                return { index: 0, timeStr: '', texts: r.texts.slice(), startSec: r.startSec, endSec: r.endSec };
+                return { index: 0, timeStr: '', texts: r.texts.slice(), startSec: r.startSec, endSec: r.endSec, sint: true };
             }));
             merged.sort(function (a, b) { return a.startSec - b.startSec; });
             for (var m = 0; m < merged.length; m++) merged[m].index = m + 1;

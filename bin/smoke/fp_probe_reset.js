@@ -405,9 +405,9 @@
             var idx = await readRepo('index.html');
             ok('#175/20 index.html carrega `19_Fs_Wipe.js` i ha pujat els cache-busts',
                 /19_Fs_Wipe\.js\?v=2/.test(idx) && /utils\.js\?v=28/.test(idx) &&
-                /flow_mainButton\.js\?v=36/.test(idx) && /srt_editor\.js\?v=79/.test(idx),
+                /flow_mainButton\.js\?v=38/.test(idx) && /srt_editor\.js\?v=86/.test(idx),
                 'modul=' + /19_Fs_Wipe\.js\?v=2/.test(idx) + ' * utils=' + /utils\.js\?v=28/.test(idx) +
-                ' * main=' + /flow_mainButton\.js\?v=36/.test(idx) + ' * srt=' + /srt_editor\.js\?v=79/.test(idx));
+                ' * main=' + /flow_mainButton\.js\?v=38/.test(idx) + ' * srt=' + /srt_editor\.js\?v=86/.test(idx));
 
             // ── 5b) GUARDES DEL #180 (RESET: tancar el projecte i esborrar de debò) ──
             ok('#180/7 utils: `_wipeFs` tria motor i `wipeFolder`/`deleteFolder` l usen',

@@ -344,29 +344,6 @@
         },
 
         /**
-         * _mediaToday (2026-10-21 · #177): sonda del MP4 ORIGEN del bloc d'avui.
-         * Delega a Scan.mp4Today (noms per Node + birthtime només dels candidats),
-         * mai a `Scan.mediaAssets` (escaneig ExtendScript de tota la carpeta en UNC).
-         * `ok:false` vol dir que no s'ha pogut llegir → no es pot afirmar res.
-         * ⏱️ (2026-10-22 · #113) Mateixa espera limitada que la sonda de wotts.
-         */
-        _mediaToday: async function (ctx) {
-            const sc = (window.FASTPASS_UI && window.FASTPASS_UI.Logic) ? window.FASTPASS_UI.Logic.Scan : null;
-            if (!sc || typeof sc.mp4Today !== 'function') return { ok: false, found: false };
-            const _tM = Date.now();
-            try {
-                const res = await this._withTimeout(sc.mp4Today(ctx), this.PROBE_TIMEOUT_MS, 'sonda MP4');
-                _bmark('checkContext · sonda MP4 (' + _bsec(Date.now() - _tM) + ')');
-                return res;
-            } catch (e) {
-                _bmark('checkContext · sonda MP4 TIMEOUT/ERROR (' + _bsec(Date.now() - _tM) + ')');
-                getUtils().log('⚠️ [checkContext] mp4Today: ' + e.message +
-                    ' → no es pot afirmar MASSA D\'HORA (el poll ho reintenta)', 'WARN');
-                return { ok: false, found: false };
-            }
-        },
-
-        /**
          * checkContext: porta d'entrada ÚNICA al sintetitzador (single-flight).
          * Vegeu `_ccInFlight` a dalt: les crides simultànies comparteixen UNA
          * execució i, com a molt, se'n programa UNA de nova en acabar.
@@ -551,21 +528,29 @@
                 }
 
                 if (!existingProjectName) {
-                    // ── 2. MATERIAL DEL BLOC D'AVUI: wotts + MP4 origen ───────────
-                    // Fets FÍSICS (els wotts es generen en acabar l'emissió i el MP4
-                    // origen es publica amb el bloc), mai un horari.
-                    // (2026-10-22 · #113) Les dos sondes són INDEPENDENTS i es fan en
-                    // paral·lel: amb el NAS fred cadascuna pot costar segons i en
-                    // sèrie l'espera es doblava. Cap de les dos llança (retornen
-                    // `ok:false`), així que el Promise.all no pot fallar.
-                    const probe = await Promise.all([this._wottsToday(ctx), this._mediaToday(ctx)]);
-                    const wots = probe[0] || { ok: false, found: false, count: 0 };
-                    const mp4 = probe[1] || { ok: false, found: false };
+                    // ── 2. MATERIAL DEL BLOC D'AVUI: NOMÉS wotts ─────────────────
+                    // (2026-10-23) S'ha retirat la sonda del MP4 origen: el vídeo
+                    // del CREAR és la CAPTURA ffmpeg del cleanFeed (sempre hi és si
+                    // hi ha escaleta), així que només els wotts decideixen si el
+                    // bloc s'ha emés. La sonda de wotts no llança (retorna ok:false).
+                    const wots = await this._wottsToday(ctx);
                     if (wots.ok) {
                         semaforoData.wot = wots.found ? 'blink' : 'pending';
                         semaforoData.wotDetail = String(wots.count);
                     }
-                    if (mp4 && mp4.ok) semaforoData.mp4 = mp4.found ? 'blink' : 'error';
+                    // Semàfor MP4: verd si la ingesta del cleanFeed ha arribat al
+                    // final del bloc; si no se sap, queda apagat (no s'inventa res).
+                    const _escM = semaforoData.esc || {};
+                    if (_escM.mediaStop && _escM.blockOut) {
+                        const _rdM = window.EscaletaReader || window.FASTPASS_UI.EscaletaReader;
+                        const _stopM = _rdM.tcToSeconds(_escM.mediaStop);
+                        const _outM = _rdM.tcToSeconds(_escM.blockOut);
+                        semaforoData.mp4 = (_stopM < _outM) ? 'pending' : 'blink';
+                    } else {
+                        semaforoData.mp4 = 'off';
+                    }
+                    // SRT: sense projecte obert no hi ha pista on mirar.
+                    semaforoData.srt = 'off';
 
                     const escFound = !!(semaforoData.esc && semaforoData.esc.found);
                     // ── (2026-10-22 · #182) ESCALETA LOCAL COMPLETA = MATERIAL SUFICIENT ──
@@ -579,7 +564,7 @@
                     if (wots.found) {
                         // CREA: el bloc ja s'ha emés (hi ha wotts).
                         getUtils().log('✅ [checkContext] CREA: wotts del bloc (' + wots.count + ')' +
-                            (mp4.found ? ' + MP4 origen' : '') + ' (' + (wots.via || '?') + ')', 'INFO');
+                            ' (' + (wots.via || '?') + ')', 'INFO');
                     } else if (escReady) {
                         // CREA: escaleta local (FOTO o còpia del NAS) del bloc complet.
                         getUtils().log('✅ [checkContext] CREA: escaleta local (' + semaforoData.esc.filename + ')' +
@@ -588,26 +573,16 @@
                         // El NAS no ha respost: NO es bloqueja el botó per un error
                         // transitori (el CREAR farà la FOTO i, si tampoc no pot, avortarà).
                         getUtils().log('⚠️ [checkContext] Sonda de wotts KO → no es bloqueja el botó', 'WARN');
-                    } else if (mp4.found) {
-                        // ESPERA: hi ha el MP4 origen però encara falten els wotts.
-                        earlyState = 'ESPERANT';
-                        _bmark('checkContext · ESPERA (MP4 origen sí, wotts encara no)');
-                    } else if (mp4.ok) {
-                        // MASSA D'HORA: ni MP4 origen ni wotts (el bloc ni s'ha emés).
+                    } else {
+                        // MASSA D'HORA: no hi ha wotts del bloc (el bloc ni s'ha emés).
                         // (2026-10-21 · #177) Semàfors en ROIG: no hi ha res a importar.
                         earlyState = 'MASSA';
                         semaforoData.wot = 'error';
-                        _bmark('checkContext · MASSA D\'HORA (sense MP4 origen ni wotts)');
-                    } else {
-                        // No es pot llegir el repositori de verticalització: no se sap si
-                        // hi ha MP4 → ESPERA (no s'aventura un MASSA D'HORA fals).
-                        earlyState = 'ESPERANT';
-                        getUtils().log('⚠️ [checkContext] Sonda d\'MP4 KO → ESPERA (no es pot afirmar MASSA D\'HORA)', 'WARN');
+                        _bmark('checkContext · MASSA D\'HORA (sense wotts del bloc)');
                     }
                     if (earlyState) {
                         getUtils().log('⏳ [checkContext] ' + (earlyState === 'ESPERANT' ? 'ESPERA' : "MASSA D'HORA") +
-                            ': MP4 origen=' + (mp4.ok ? (mp4.found ? 'sí' : 'no') : '?') +
-                            ' · wotts=' + (wots.ok ? wots.count : '?') +
+                            ': wotts=' + (wots.ok ? wots.count : '?') +
                             (escFound ? ' · escaleta local=' + semaforoData.esc.filename : ''), 'INFO');
                     }
                 }
@@ -720,13 +695,12 @@
                     // 2. Assets al projecte (nomes si el projecte esta obert o en UPDATE)
                     if (conclusion === 'UPDATE' || conclusion === 'GO') {
                         const _tSem = Date.now();
-                        const [hasMp4, chyItemsRaw, hasSrt, mediaFiles] = await Promise.all([
+                        const [hasMp4, chyItemsRaw, hasSrt] = await Promise.all([
                             getUtils().callJSX("hasClips(1, 'video')"),
                             getUtils().callJSX("FASTPASS.Project.items('CHY')"),
-                            getUtils().callJSX("hasClips(1, 'subtitle')"),
-                            getUtils().readFolder(ctx.config.rutas.verticalitzacio) // Per al SRT físic
+                            getUtils().callJSX("hasClips(1, 'subtitle')")
                         ]);
-                        _bmark('checkContext · semàfor assets (4 crides) (' + _bsec(Date.now() - _tSem) + ')');
+                        _bmark('checkContext · semàfor assets (3 crides) (' + _bsec(Date.now() - _tSem) + ')');
 
                         // MP4
                         const mp4Present = (hasMp4 === "true");
@@ -738,6 +712,7 @@
                             const outSecs = reader.tcToSeconds(semaforoData.esc.blockOut);
                             semaforoData.mp4 = (stopSecs < outSecs) ? 'pending' : 'ready';
                         } else {
+                            // Sense dades de la ingesta no s'afirma res.
                             semaforoData.mp4 = 'ready';
                         }
 
@@ -752,16 +727,9 @@
                         else semaforoData.wot = 'ready';
                         semaforoData.wotDetail = `${wottCount}/${expected}`;
 
-                        // SRT
-                        const srtPresent = (hasSrt === "true");
-                        if (srtPresent) {
-                            semaforoData.srt = 'ready';
-                        } else {
-                            // Mirem si existeix el fitxer SRT al NAS per decidir si Error o Gris
-                            const prefix = `${ctx.progData.archivo}_${ctx.bloque}_`.toUpperCase();
-                            const srtOnDisk = (mediaFiles || []).find(f => f.name.toUpperCase().includes(prefix) && f.name.toUpperCase().endsWith('.SRT'));
-                            semaforoData.srt = srtOnDisk ? 'error' : 'off';
-                        }
+                        // SRT: (2026-10-23) només compta la PISTA del projecte obert.
+                        // Ja no es mira cap fitxer SRT al NAS.
+                        semaforoData.srt = (hasSrt === "true") ? 'ready' : 'off';
                     }
                 } catch (e) {
                     getUtils().log("⚠️ Error recollint dades del semàfor: " + e.message, "DEBUG");
@@ -773,28 +741,22 @@
                 if (!existingProjectName && semaforoData.esc && semaforoData.esc.found) {
                     const _tSN = Date.now();
                     try {
-                        const scN = (window.FASTPASS_UI && window.FASTPASS_UI.Logic && window.FASTPASS_UI.Logic.Scan);
-                        if (scN && scN.mediaAssets) {
-                            // (2026-09-17) El MP4 del cleanFeed viu a la ruta que diu el JSON
-                            // (mediaPath, p.ex. \\DSMEDIA10\...), NO a config.rutas.verticalitzacio:
-                            // el SCAN mediaAssets no el trobava mai i el semafor quedava en
-                            // AMARILLO per sempre tot i haver-se emes el bloc.
-                            // Criteri correcte (el mateix que amb projecte obert): la ingesta
-                            // ha arribat al final del bloc → mediaStop >= blockOut.
-                            var _escN = semaforoData.esc;
-                            var _mStop = _escN.mediaStop, _bOut = _escN.blockOut;
-                            if (_mStop && _bOut) {
-                                var _rdN = window.EscaletaReader || window.FASTPASS_UI.EscaletaReader;
-                                var _stopS = _rdN.tcToSeconds(_mStop);
-                                var _outS = _rdN.tcToSeconds(_bOut);
-                                semaforoData.mp4 = (_stopS < _outS) ? 'pending' : 'blink';
-                                getUtils().log('🎬 [sem-mp4] cleanFeed mediaStop=' + _mStop + ' (' + _stopS + 's) vs blockOut=' + _bOut + ' (' + _outS + 's) → ' + semaforoData.mp4, 'DEBUG');
-                            } else {
-                                const mediaN = await scN.mediaAssets(ctx);
-                                semaforoData.mp4 = (mediaN && mediaN.mp4) ? 'blink' : 'pending';
-                            }
-                            semaforoData.srt = (mediaN && mediaN.srt) ? 'error' : 'off';
+                        // Semàfor MP4: la ingesta del cleanFeed ha arribat al final del
+                        // bloc? (2026-10-23) Ja no es mira cap carpeta de verticalització:
+                        // el vídeo del CREAR és la captura ffmpeg del cleanFeed.
+                        const _escN = semaforoData.esc;
+                        const _mStop = _escN.mediaStop, _bOut = _escN.blockOut;
+                        if (_mStop && _bOut) {
+                            const _rdN = window.EscaletaReader || window.FASTPASS_UI.EscaletaReader;
+                            const _stopS = _rdN.tcToSeconds(_mStop);
+                            const _outS = _rdN.tcToSeconds(_bOut);
+                            semaforoData.mp4 = (_stopS < _outS) ? 'pending' : 'blink';
+                            getUtils().log('🎬 [sem-mp4] cleanFeed mediaStop=' + _mStop + ' (' + _stopS + 's) vs blockOut=' + _bOut + ' (' + _outS + 's) → ' + semaforoData.mp4, 'DEBUG');
+                        } else {
+                            semaforoData.mp4 = 'off';
                         }
+                        // SRT: sense projecte obert no hi ha pista on mirar.
+                        semaforoData.srt = 'off';
                         // (2026-10-21) wottsToday (Node `birthtime` + caché) en comptes de
                         // Scanner.wotts: este llegia 963 fitxers per JSX (~4 s) cada repintat.
                         if (typeof this._wottsToday === 'function') {

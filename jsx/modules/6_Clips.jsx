@@ -1070,6 +1070,31 @@ FASTPASS.Clips = {
     },
 
     /**
+     * setItemColorLabel (F3.6 · 2026-10-23): Pinta l'ETIQUETA DE COLOR d'un item del
+     * projecte. Servix perquè els subtítols afegits als BUITS (SINT) es vegen distints
+     * dels de l'SRT base al timeline. Cada exportació crea el seu propi
+     * `_MOD_<timestamp>.srt`, així que pintar eixe item no afecta les altres taules.
+     * @param {string} itemName - Nom del .srt al projecte (URI-encoded)
+     * @param {number} label - Índex d'etiqueta de Premiere (0-15; 7 = Mango/taronja)
+     * @returns {string} "OK_L<n>" · "ERR_ITEM_NOT_FOUND" · "ERR_NO_COLOR_LABEL_API" · "ERR:..."
+     */
+    setItemColorLabel: function(itemName, label) {
+        try {
+            var nameToFind = decodeURIComponent(itemName);
+            var item = FASTPASS.Project.find(nameToFind);
+            if (!item) {
+                var lastDot = nameToFind.lastIndexOf(".");
+                if (lastDot > 0) item = FASTPASS.Project.find(nameToFind.substring(0, lastDot));
+            }
+            if (!item) return "ERR_ITEM_NOT_FOUND";
+            if (typeof item.setColorLabel !== "function") return "ERR_NO_COLOR_LABEL_API";
+            var n = parseInt(label, 10);
+            if (!isFinite(n) || n < 0) n = 7;
+            return item.setColorLabel(n) ? ("OK_L" + n) : "ERR_SET_COLOR_LABEL";
+        } catch(e) { return "ERR: " + e.message; }
+    },
+
+    /**
      * move: Mou un clip d'una pista a una altra preservant start, inPoint i outPoint.
      * Funció ATÒMICA: no pren decisions, només executa el moviment.
      * @param {number} trackIdx - Pista d'origen (1-based)
