@@ -71,13 +71,17 @@ proven amb un cleanFeed real (`2026_10_25/V3/TNM_V3`, bloc vertical); referènci
 
 ---
 
-## 3 · En cua d'implementació (3)
+## 3 · En cua d'implementació (7)
 
 | Codi | Què és | Estat |
 |---|---|---|
 | `NNEWS` | **Natural News**: *clean-swap* — substituir clips amb gràfics cremats per versions netes | `planned` (disseny fet, sense codi) |
 | `MARKERS_INVARIANT` | Invariant «un marcador per ítem, sense duplicats» verificat en acabar el placement (toca `jsx/`) | Apuntat (requereix permís per tocar `jsx/`) |
 | `SRT_GUARD` | Guarda al motor SRT: rebutjar un `.srt` sense cap bloc vàlid abans de carregar-lo | Apuntat |
+| `TWITTS_OCR` | **Col·locació dels TWITTS (grafismes) automatitzada amb OCR**: detectar a la imatge on va cada twitt i col·locar-lo sense intervenció | `planned` (petició 27/10) |
+| `JSON_DIETA` | **Neteja del JSON** que agrupa tota la informació (escaleta + wotts + …): que només continga els ítems que necessiten els processos del bloc | `planned` (petició 27/10) |
+| `ECHO_OFF_UI` | **Echo off** de les finestres de sistema (`ffmpeg` i altres) i **rellotge d'arena al botó MAIN** mentre hi ha processos en marxa, perquè l'usuari ho sàpia | `planned` (petició 27/10) |
+| `AUDIO_IA_DEREVERB` | **Neteja de l'àudio inicial** (cua de reverb del molinet anterior) amb IA que separe la veu | `planned` (petició 27/10) |
 
 ---
 

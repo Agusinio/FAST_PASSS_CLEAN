@@ -7,11 +7,11 @@
 > es va retirar el 27/10 per orde de l'usuari: queda a l'historial de git
 > (`git log -p ce18186 -- docs/BUGS_FIXED.md`). Ací hi ha el resum operatiu de tots.
 
-**Resum**: 6 pendents · 128 resolts/tancats.
+**Resum**: 10 pendents · 128 resolts/tancats.
 
 ---
 
-## 1 · PENDENTS (6)
+## 1 · PENDENTS (10)
 
 | Nº | Estat | Què passa |
 |---|---|---|
@@ -21,6 +21,10 @@
 | **#111** | Investigació oberta (29/09) | Els ítems d'escaleta **FLOTANTS** (`flotant:true`) no reben cap marcador; segons la regla de l'usuari n'haurien de portar un de **VERMELL** |
 | **#116** | Nota pendent de decisió (30/09) | **Marcador VERMELL DE CUA** que no hauria d'existir: el filtre el descarta bé i la vàlvula de seguretat de `_safePlaceByPrefixes` el torna a afegir |
 | **#117** | Nota pendent de decisió (30/09) | **Semàfors trencats sense projecte** per `ReferenceError: mediaN is not defined` a `checkContext` → es perden els semàfors SRT i WOTTS |
+| **#196** | Nou (27/10) · sense diagnòstic | **La finestra de GRÀFICS no obri sempre a la carpeta de la DATA del projecte**: ha d'arrancar al directori del dia del bloc (el de l'escaleta), no a l'últim recordat |
+| **#197** | Nou (27/10) · sense diagnòstic | **El grafisme no s'inserix al timeline en tota la seua longitud**: un **corte a V1** afecta el seu **Out** (el gràfic s'encongeix). La inserció ha d'ocupar la durada sencera del gràfic, sense retallar-se al punt d'edició de V1 |
+| **#198** | Nou (27/10) · sense diagnòstic | **Tancar el projecte amb el botó verd ha de BUIDAR l'editor de subtítols**: si hi ha un `.srt` carregat, en eixir el panell (i el projecte) ha de quedar net |
+| **#199** | Nou (27/10) · sense diagnòstic | **El botó EXPORT no respecta la posició del clip original de V1**: en inserir els clips nous al final, han d'anar a la posició del clip de V1 original, no al final de la seqüència |
 
 ### 1.1 · ✅ Validats en viu · **CODI SENSIBLE: NO TOCAR**
 
