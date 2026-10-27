@@ -269,9 +269,9 @@
             ok('#F3/24 index: 🧩 a la fila SUBTÍTOLS i 🗑 RETIRAT (Supr ho fa)',
                 html.indexOf('btnSrtDel') === -1 && /id="btnSrtFill"/.test(html) &&
                 /Ctrl\+clic = SUBTÍTOLS SINTÈTICS/.test(html));
-            ok('#F3/25 index: cache-busts F3 (srt_editor 86, flow_srt 19, main 92, Scanner 23, Srt_Logic 22, Config 44)',
+            ok('#F3/25 index: cache-busts F3 (srt_editor 86, flow_srt 19, main 93, Scanner 23, Srt_Logic 22, Config 44)',
                 /srt_editor\.js\?v=86/.test(html) && /flow_srt\.js\?v=19/.test(html) &&
-                /main\.js\?v=92/.test(html) && /Scanner\.js\?v=23/.test(html) &&
+                /main\.js\?v=93/.test(html) && /Scanner\.js\?v=23/.test(html) &&
                 /10_Srt_Logic\.js\?v=22/.test(html) && /11_Configuracio\.js\?v=44/.test(html));
 
             var cfg = noComments(await readRepo('js/core/11_Configuracio.js'));

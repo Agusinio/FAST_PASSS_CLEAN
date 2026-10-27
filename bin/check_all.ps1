@@ -238,7 +238,7 @@ if ($jsxFail) {
     $jsx.Changed | Select-Object -First 6 | ForEach-Object { Write-Host ('    ' + $_) -ForegroundColor Yellow }
     if ($jsx.Changed.Count -gt 6) { Write-Host ('    ... (+' + ($jsx.Changed.Count - 6) + ' mes)') -ForegroundColor Yellow }
     Write-Host '    NORMA: jsx/ es INTOCABLE. Si el canvi no estava autoritzat, revertiu-lo.' -ForegroundColor Yellow
-    Write-Host '           Si estava autoritzat i validat: -AcceptJsx (i documentar-ho a BUGS_FIXED/CHANGELOG).' -ForegroundColor Yellow
+    Write-Host '           Si estava autoritzat i validat: -AcceptJsx (i documentar-ho a BUGS.md/CHANGELOG).' -ForegroundColor Yellow
 }
 if ($Full) {
     foreach ($r in $results) {

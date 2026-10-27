@@ -4,6 +4,55 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>FAST >>> PASS (v2.9.5 - TACTICAL)</title>
+    <!-- MARCA DE PÀGINA (2026-10-27) ─────────────────────────────────────────
+         El timing d'arrencada (_boot_timing.log) comença a js/main.js, que és
+         l'ÚLTIM dels 48 mòduls que carrega el panell: el tram de navegació +
+         càrrega de fitxers quedava fora del log (l'usuari veia un minut i el
+         log només 146 ms). Este bloc va ABANS de qualsevol recurs extern i
+         només deixa dades a window.__FP_PAGE; main.js les bolca al mateix log
+         (línia amb ms negatives). No toca res del panell ni del DOM. -->
+    <script>
+    (function () {
+        var P = { navStart: 0, headAt: 0, dcl: 0, load: 0, scripts: 0, res: 0, slow: [] };
+        try { window.__FP_PAGE = P; } catch (e0) { }
+        try {
+            if (window.performance) {
+                if (performance.timing && performance.timing.navigationStart) {
+                    P.navStart = performance.timing.navigationStart;
+                }
+                if (performance.now) { P.headAt = performance.now(); }
+            }
+            document.addEventListener('DOMContentLoaded', function () {
+                try { P.dcl = Date.now(); } catch (e1) { }
+            });
+            window.addEventListener('load', function () {
+                try {
+                    P.load = Date.now();
+                    var rs = (window.performance && performance.getEntriesByType)
+                        ? (performance.getEntriesByType('resource') || []) : [];
+                    var i, r, n = 0, tot = 0, arr = [];
+                    for (i = 0; i < rs.length; i++) {
+                        r = rs[i];
+                        if (!r || !r.name || r.name.indexOf('/js/') < 0) { continue; }
+                        n++;
+                        tot += (r.duration || 0);
+                        arr.push({ n: r.name.split('/js/').pop(), d: Math.round(r.duration || 0) });
+                    }
+                    P.scripts = n;
+                    P.res = Math.round(tot);
+                    arr.sort(function (a, b) { return b.d - a.d; });
+                    P.slow = arr.slice(0, 3);
+                    // Si el navegador no oferix Resource Timing (mesurat: Edge
+                    // headless i alguns entorns CEP tornen 0 entrades), almenys
+                    // queda el NOMBRE de mòduls que hi ha al DOM.
+                    if (!n) {
+                        try { P.scripts = document.querySelectorAll('script[src]').length; P.noRes = 1; } catch (e4) { }
+                    }
+                } catch (e2) { }
+            });
+        } catch (e3) { }
+    })();
+    </script>
     <link rel="stylesheet" href="./style.css?v=61">
 </head>
 <body>
@@ -271,6 +320,6 @@
 <script src="js/workflows/flow_mapa.js?v=25"></script>
     <script src="js/core/project_registry.js?v=5"></script>
     <script src="js/editor/srt_editor.js?v=86"></script>
-    <script src="js/main.js?v=92"></script>
+    <script src="js/main.js?v=93"></script>
 </body>
 </html>

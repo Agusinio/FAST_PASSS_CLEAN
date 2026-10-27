@@ -2085,6 +2085,19 @@
             for (const mk0 of (markersFull || [])) {
                 const e0 = (structureById || {})[mk0.fullId];
                 if (!e0 || !e0.chyrons) continue;
+                // (2026-10-27 · BUG #195) El rètol del CONDUCTOR («Directe_PRESENCIAL_Ciutat
+                // de la Justícia») penja de la CAPÇALERA de plató que obri el bloc
+                // («01BT - PG bona tarda i DONA PAS…» @0,00). Eixa capçalera JA és el
+                // plató: el rètol es queda on és i NO es mou al directe/connexió posterior
+                // (abans anava a parar a `01dir`@32,28 → 32,68 s, dins de la connexió).
+                if (this._debeQuedarseEnPlato(mk0, e0, markersFull)) {
+                    for (const cQ of e0.chyrons) {
+                        if (!filterFn(cQ) || !this._isDirecteSenyalWott(cQ)) continue;
+                        log(`   🏠 [${label}] PLATÓ: "${String(cQ.name).substring(0, 50)}…" penja de la capçalera ` +
+                            `${mk0.fullId} @ ${mk0.time.toFixed(2)}s → es QUEDA al plató (no va a cap directe)`);
+                    }
+                    continue;
+                }
                 // (2026-10-16 · BUG #168) La INTRO **sí** que és origen (és el lineID amb què el
                 // generador enganxa aquests wotts): la guarda només aparta els ítems que JA són
                 // el DESTÍ, per no tornar a moure un rètol que ja és al seu lloc (idempotència
@@ -4479,6 +4492,90 @@
         },
 
         /**
+         * _normTitol: normalitza un títol per comparar-lo (MAJÚSCULES, sense accents ni
+         * res que no siga A-Z0-9). Mateix criteri que `_isPresenterTitle`.
+         * @param {string} s
+         * @returns {string}
+         */
+        _normTitol: function (s) {
+            return String(s || '').toUpperCase()
+                .replace(/[ÁÀ]/g, 'A').replace(/[ÉÈ]/g, 'E').replace(/[ÍÌ]/g, 'I')
+                .replace(/[ÓÒ]/g, 'O').replace(/[ÚÙ]/g, 'U')
+                .replace(/[^A-Z0-9]/g, '');
+        },
+
+        /**
+         * _isCapcaleraPlato: l'ítem és la CAPÇALERA/PLATAFORMA de plató del bloc (el
+         * lloc des d'on presenta el conductor)?
+         *
+         * (2026-10-27 · BUG #195) En este bloc (`TNM_V1` 26/10) l'ítem que obri el bloc
+         * és `01BT - PG bona tarda i DONA PAS CIUTAT JUSTÍCIA` @0,00: el sufix (`bt`) no
+         * era a cap llista i el títol no començava per cap token de presentació, així
+         * que ni `_isPresenterLine` ni `_isPresenterTitle` el reconeixien. El motor
+         * prenia aleshores el `01dir` (@32,28) com a plató del bloc i el rètol del
+         * conductor hi anava a parar.
+         *
+         * Criteris (sufix + NOM de l'ítem, com indica l'usuari):
+         *   · sufix `bt` / `pg` / `plato` / `estudi` (a l'ítem o a l'id del marcador:
+         *     «01BT», «01 PG»);
+         *   · títol amb prefix de plató (`PG`/`PLA`/`PLATO`/`ESTUDI`) que continga
+         *     `BONATARD*`, `BONANIT`, `DONAPAS`, `SALUTACIO` o `INTRO`
+         *     («PG bona tarda i DONA PAS…»). Les INTRO de DIFERIT no entren (les
+         *     gestiona `_isIntroMarker`/`_pickDirecteDiferitAfter`, regla #168).
+         *
+         * @param {Object} m - marcador {comments, label, name, time}
+         * @param {Object} [entry] - ítem de `13_Parse` ({suffix, type…})
+         * @returns {boolean}
+         */
+        _isCapcaleraPlato: function (m, entry) {
+            const suf = String((entry && entry.suffix) || '').toLowerCase().trim();
+            if (suf === 'bt' || suf === 'pg' || suf === 'plato' || suf === 'estudi') return true;
+            const lbl = String((m && (m.comments || m.label || m.name)) || '');
+            if (!lbl) return false;
+            const id = (lbl.split('-')[0] || '').trim();
+            const mid = id.match(/^\d+\s*(.*)$/);
+            const sufId = (mid && mid[1]) ? mid[1].replace(/\s+/g, '').toLowerCase() : '';
+            if (sufId === 'bt' || sufId === 'pg' || sufId === 'plato' || sufId === 'estudi') return true;
+            const titol = this._normTitol(this._extractMarkerTitle(lbl));
+            if (!/^(PG|PLA|PLATO|ESTUDI)/.test(titol)) return false;
+            if (/INTRO/.test(titol)) return false;   // les intro tenen la seua regla (#168)
+            return /BONATARD|BONANIT|DONAPAS|SALUTACIO/.test(titol);
+        },
+
+        /**
+         * _debeQuedarseEnPlato: el rètol de PRESENCIAL/DIRECTE que penja d'aquest ítem
+         * s'ha de QUEDAR al plató (no s'ha de moure al directe/connexió posterior)?
+         *
+         * (2026-10-27 · BUG #195 · regla d'usuari) «Si hi ha un ítem intro/off al
+         * principi, va amb el conductor; si no n'hi ha, no s'hi posa.» El rètol del
+         * conductor (`Directe_PRESENCIAL_Ciutat de la Justícia`, 32,68 s) se n'anava al
+         * `01dir` perquè `_ipdAnchorPlan` (#167) sempre busca el DIRECTE/DIFERIT
+         * posterior. Guarda: si l'ítem és la CAPÇALERA de plató i **obri el bloc**,
+         * el rètol ja és al seu lloc → no es mou.
+         *
+         * Fora d'ací queden intactes: les INTRO (`i`) → regla #168 (`04i - intro
+         * DIFERIT…` seguix movent-se), el `dp` (convenció 2026-09-21) i l'ENVIAT
+         * (`_isEnviatWott` → punt de connexió).
+         *
+         * @param {Object} m - marcador d'origen {time, comments|label|name}
+         * @param {Object} [entry] - ítem de `13_Parse` ({suffix…})
+         * @param {Array} markersFull - tots els marcadors del bloc
+         * @returns {boolean}
+         */
+        _debeQuedarseEnPlato: function (m, entry, markersFull) {
+            if (!m || !isFinite(m.time)) return false;
+            if (!this._isCapcaleraPlato(m, entry)) return false;
+            const lbl = String((m.comments || m.label || m.name) || '').toUpperCase();
+            if (this._isIntroMarker(m, entry) && (/\bDIFERIT\b/.test(lbl) || /\bDIFERIDO\b/.test(lbl))) return false;
+            let first = null;
+            for (const x of (markersFull || [])) {
+                if (!x || !isFinite(x.time)) continue;
+                if (first === null || x.time < first) first = x.time;
+            }
+            return first !== null && Math.abs(m.time - first) <= 0.05;
+        },
+
+        /**
          * _isPresenterTitle: Determina si el títol del primer ítem del bloc correspon a
          * una peça de PLATÓ/presentació (hi ha presentador en càmera). Criteri: el títol
          * comença per tokens de presentació (OFF / OFD / DONA PAS / CONN / INTRO /
@@ -4493,7 +4590,8 @@
                 .replace(/[^A-Z0-9]/g, '');
             var tokens = [
                 'OFF', 'OFD', 'OFT', 'DONAPAS', 'DONA', 'CONNEXIO', 'CONN',
-                'INTRO', 'DIRECTE', 'BONDIA', 'BONDIADIA', 'SALUTACIO'
+                'INTRO', 'DIRECTE', 'BONDIA', 'BONDIADIA', 'BONATARDA', 'BONATARDE',
+                'BONATARDES', 'BONANIT', 'SALUTACIO'
             ];
             // (2026-10-16) TN MEDIODIA V1 (15/10): l'ítem de PLATÓ que obre el bloc és
             // "01 PGi - PG Intro" (títol "PG Intro" = pla general d'entrada amb la
@@ -4531,7 +4629,13 @@
             var m = num.match(/^\d+(.*)$/);
             if (m && m[1]) {
                 var suf = m[1];
-                if (suf === 'i' || suf === 'dp' || suf === 'dir' || suf === 'f' || suf === 'off') {
+                // (2026-10-27 · BUG #195) `bt` (bona tarda) i `pg` (pla general) són
+                // CAPÇALERA/PLATAFORMA de plató: el conductor eix en càmera ací. Sense
+                // açò `01BT` no comptava com a plató i el motor prenia el `01dir` del
+                // bloc («01dir - conn MARTA MARTORELL» @32,28) com el plató → el rètol
+                // del conductor se n'anava dins de la connexió.
+                if (suf === 'i' || suf === 'dp' || suf === 'dir' || suf === 'f' || suf === 'off' ||
+                    suf === 'bt' || suf === 'pg') {
                     return true;
                 }
             }

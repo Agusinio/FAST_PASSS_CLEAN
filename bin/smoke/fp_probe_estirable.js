@@ -5,7 +5,7 @@
  * (chyrons, tema-títol, congelats, traduccions…) NO es podien estirar amb el
  * ratolí: es col·locaven i "quedaven clavats".
  *
- * CAUSA ARREL (mesurada en viu el 2026-10-08 · docs/BUGS_FIXED.md #146): el final
+ * CAUSA ARREL (mesurada en viu el 2026-10-08 · BUGS.md #146): el final
  * es tancava amb `Clips.endAt`, que NOMÉS mou `clip.end` del TIMELINE → l'`outPoint`
  * del SOURCE queda al final del mèdia i l'estat és INCOHERENT
  * (`end − start ≠ outPoint − inPoint`) → Premiere considera el material ESGOTAT i

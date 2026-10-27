@@ -97,7 +97,7 @@ depenen del seu **contracte exacte** i un canvi "de passada" trenca funcionalita
    si canvia sense re-sellar, la línia ix **`jsx MODIFICAT (n)`** i el procés acaba en **exit 1**.
    Després d'un canvi autoritzat i validat: `.\bin\check_all.ps1 -AcceptJsx`.
 
-Detall: `README.md` §4 (regla 3) i `docs\HANDOFF_2026-10-22.md` §0.
+Detall: `README.md` §4 (regla 3) i `BUGS.md` §3 (com s'actualitza el catàleg).
 
 ---
 

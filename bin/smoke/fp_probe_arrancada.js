@@ -195,6 +195,20 @@
         ok('#BOOT/16 cache-busts presents a index.html',
             /escaleta_io\.js\?v=\d+/.test(idx) && /escaleta_fetch\.js\?v=\d+/.test(idx),
             'io=' + /escaleta_io\.js\?v=\d+/.test(idx) + ' fetch=' + /escaleta_fetch\.js\?v=\d+/.test(idx));
+        // (2026-10-27) El timing d'arrencada començava a js/main.js, que és l'ÚLTIM
+        // dels 48 <script>: el tram navegació + càrrega de mòduls quedava fora del
+        // _boot_timing.log (l'usuari veia ~1 min i el log resumia 146 ms). Ara
+        // index.html deixa una marca al <head> (window.__FP_PAGE) ABANS de cap
+        // recurs i main.js la bolca al log amb ms negatives.
+        var posMarca = idx.indexOf('window.__FP_PAGE');
+        var posPrimer = idx.indexOf('<script src=');
+        ok('#BOOT/17 marca de pàgina al <head> i abocada al log (tram previ a main.js)',
+            posMarca > 0 && posPrimer > 0 && posMarca < posPrimer &&
+            /getEntriesByType\('resource'\)/.test(idx) &&
+            /__FP_PAGE/.test(mainSrc) &&
+            /page:\s*function\s*\(\s*\)/.test(mainSrc) &&
+            /pageLoad:\s*function\s*\(\s*\)/.test(mainSrc),
+            'marca=' + posMarca + ' primerScript=' + posPrimer);
     };
 })();
 

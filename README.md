@@ -55,7 +55,8 @@ i [`docs/guides/MASTER_FUNCIONALITATS.md`](docs/guides/MASTER_FUNCIONALITATS.md)
 | `docs/guides/` | Arquitectura, propietat del codi, guia d'usuari, botonera, desenvolupament, Git. |
 | `docs/specs/` | Especificacions: escaleta JSON, classificació d'ítems, colors de marcador, NNEWS. |
 | `docs/reference/` | Material de referència: keyframes, parser, temps OnAir, TITOLET, mostres Adobe. |
-| `docs/BUGS_FIXED.md` | **Registre de bugs** (resolts amb causa arrel i solució + pendents). |
+| `BUGS.md` | **Catàleg únic de bugs** (5 pendents + 125 resolts, amb número i descripció). |
+| `FEATURES.md` | **Catàleg únic d'implementacions** (validades, pendents de validar i en cua). |
 | `docs/CHANGELOG.md` | Historial de commits del repositori. |
 
 ---
@@ -173,14 +174,15 @@ i `fp_probe_setup_ui.ps1` (`-FailOnly`, només els `FAIL` + el `TOTAL`).
 | Què fa cada botó | [`docs/guides/MASTER_FUNCIONALITATS.md`](docs/guides/MASTER_FUNCIONALITATS.md) (resum: [`GUIA_BOTONERA.md`](docs/guides/GUIA_BOTONERA.md)) |
 | Convencions de desenvolupament | [`docs/guides/DEVELOPMENT.md`](docs/guides/DEVELOPMENT.md) |
 | Flux de Git | [`docs/guides/GIT_WORKFLOW.md`](docs/guides/GIT_WORKFLOW.md) |
-| Bugs arreglats i pendents | [`docs/BUGS_FIXED.md`](docs/BUGS_FIXED.md) |
+| Bugs (pendents i resolts) | [`BUGS.md`](BUGS.md) |
+| Implementacions (validades / per validar / en cua) | [`FEATURES.md`](FEATURES.md) |
 | Historial de canvis | [`docs/CHANGELOG.md`](docs/CHANGELOG.md) |
 | Especificacions tècniques | [`docs/specs/`](docs/specs/) |
 | Referències (keyframes, parser, TITOLET…) | [`docs/reference/`](docs/reference/) |
 
 > ⚠️ Els documents de `docs/guides/` es van escriure per al repositori de desenvolupament: poden
 > esmentar eines internes (`plans/`, `.roo/`, scripts de `bin/`) que **no formen part d'aquest paquet**.
-> Si un enllaç no resol, busqueu el tema a `docs/BUGS_FIXED.md` o a `docs/CHANGELOG.md`.
+> Si un enllaç no resol, busqueu el tema a `BUGS.md` o a `docs/CHANGELOG.md`.
 
 ---
 

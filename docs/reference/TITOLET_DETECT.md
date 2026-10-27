@@ -2,7 +2,7 @@
 
 > v1.7.0 · 2026-10-14 (7a passada: **ROI per etiqueta** `roiPerRole`/`roiDefault` + **TC del nom** · 6a: `cardTrimFrames` · artefactes #147/#148 · **#158** dues zones TITOLET · **#159/#159b** marge de mèdia + congelat ancorat al final real) · `titolet.*` a `Config` (`11_Configuracio.js`) · `bin/ocr.ps1` · `js/logic/17_TitoletDetect_Logic.js` (`?v=2`) · `15_FFmpeg_Logic.js` · `flow_chyrons.js` (`?v=75`) · `js/core/utils.js` (`?v=25`)
 >
-> 📄 Estat complet, proves, pendents i **agenda de la sessió següent**: `plans/HANDOFF_2026-10-08_TITOLETS.md`
+> 📄 Estat complet, proves, pendents i **agenda de la sessió següent**: `plans/BUGS.md`
 
 ## Què fa
 
@@ -563,7 +563,7 @@ congelat **~35 KB**, cap firma duplicada a V7/V8 i cap sobre-deduplicació de r�
    el TRIM, el `GAP` i si el congelat pot desbordar el final de l'ítem.
 
 Plan detallat, fitxers implicats, decisions obertes i proves disponibles:
-**`plans/HANDOFF_2026-10-08_TITOLETS.md`** §7.
+**`plans/BUGS.md`** §7.
 
 ---
 

@@ -294,7 +294,7 @@
          * endCoherent: Fixa el FINAL del clip que arrenca a `startSec` DEIXANT-LO ESTIRABLE
          * amb el ratolí a la timeline.
          *
-         * ── PER QUÈ (mesurat en viu el 2026-10-08 · docs/BUGS_FIXED.md #146) ─────────────
+         * ── PER QUÈ (mesurat en viu el 2026-10-08 · BUGS.md #146) ─────────────
          * `Clips.endAt` (àtom històric) NOMÉS mou `clip.end` del TIMELINE: l'`outPoint` del
          * SOURCE queda on era (al final del mèdia) → l'estat és INCOHERENT
          * (`end − start ≠ outPoint − inPoint`) i Premiere considera el material ESGOTAT →

@@ -439,6 +439,203 @@ window.__runTests = async function () {
         Object.keys(FM._colorByNumFromManifest({})).length === 0 &&
         Object.keys(FM._colorByNumFromManifest(null)).length === 0);
 
+    // ── 12b. F8·Separació (2026-10-27 · BUG #192): MAI dos marcadors superposats ──
+    // Regla imperativa d'usuari: si dos marcadors coincidixen, se separen uns segons
+    // i es deixen en ORDE D'ESCALETA. Cas real TNM_V1 26/10: F2 va fer «01dir»
+    // marcador d'inici a 00:00 i F7 hi va afegir «01 TE-1», «01 TD-1» i «01BT» al
+    // MATEIX 0,00 s (4 marcadors superposats, i 01dir és el 4t de l'escaleta).
+    ph('12b-f8-separacio');
+    ok('F8: separateOverlappingMarkers + _calcSeparacioSuperposats (GAP 3 s)',
+        !!(FM && typeof FM.separateOverlappingMarkers === 'function' &&
+           typeof FM._calcSeparacioSuperposats === 'function') && FM._GAP_SEPARACIO === 3,
+        typeof FM);
+    var f8Cluster = [
+        { prefix: '01dir', time: 0, seq: 28, comment: '01dir - conn MARTA MARTORELL', color: 6 },
+        { prefix: '02', time: 41.56, seq: 30, comment: '02 - +++IPD ALDARULLS', color: 7 },
+        { prefix: '01 TE-1', time: 0, seq: 25, comment: '01 TE-1 - TE ALDARULLS', color: 4 },
+        { prefix: '03', time: 67.92, seq: 31, comment: '03 - +++IPD VERTICALS', color: 7 },
+        { prefix: '01BT', time: 0, seq: 27, comment: '01BT - PG bona tarda', color: 6 },
+        { prefix: '01 TD-1', time: 0, seq: 26, comment: '01 TD-1 - TD ALDARULLS', color: 4 }
+    ];
+    var f8a = FM._calcSeparacioSuperposats(f8Cluster, { gap: 3, tol: 0.20 });
+    ok('F8: 4 marcadors a 0,00 s → se n\'hi mouen 3 (el 1r d\'escaleta es queda)',
+        f8a.length === 3, JSON.stringify(f8a));
+    ok('F8: ORDE D\'ESCALETA · 01 TD-1@3 · 01BT@6 · 01dir@9',
+        f8a.length === 3 && f8a[0].prefix === '01 TD-1' && f8a[0].timeSec === 3 &&
+        f8a[1].prefix === '01BT' && f8a[1].timeSec === 6 &&
+        f8a[2].prefix === '01dir' && f8a[2].timeSec === 9,
+        JSON.stringify(f8a.map(function (p) { return p.prefix + '@' + p.timeSec; })));
+    ok('F8: el primer de l\'escaleta (01 TE-1) es queda al 00:00',
+        !f8a.some(function (p) { return p.prefix === '01 TE-1'; }));
+    ok('F8: cap posició es repeteix (ni amb el marcador que es queda)',
+        (function () {
+            var ts = [0].concat(f8a.map(function (p) { return p.timeSec; }))
+                .sort(function (a, b) { return a - b; });
+            for (var i = 1; i < ts.length; i++) { if (ts[i] - ts[i - 1] < 0.5) return false; }
+            return true;
+        })(), JSON.stringify(f8a.map(function (p) { return p.timeSec; })));
+    ok('F8: marcadors ja separats (01dir/02 i 02/03) → cap canvi',
+        FM._calcSeparacioSuperposats([f8Cluster[0], f8Cluster[1]]).length === 0 &&
+        FM._calcSeparacioSuperposats([f8Cluster[1], f8Cluster[3]]).length === 0);
+    var f8Pinned = FM._calcSeparacioSuperposats([
+        { prefix: '010', time: 41.56, seq: 29, color: 6 },
+        { prefix: '02', time: 41.56, seq: 30, color: 7, pinned: true }
+    ], { gap: 3 });
+    ok('F8: el marcador amb OnAir NO es mou (l\'altre passa a +3 s)',
+        f8Pinned.length === 1 && f8Pinned[0].prefix === '010' && f8Pinned[0].timeSec === 44.56,
+        JSON.stringify(f8Pinned));
+    var f8Tight = FM._calcSeparacioSuperposats([
+        { prefix: 'A', time: 0, seq: 1, color: 6 },
+        { prefix: 'B', time: 0, seq: 2, color: 6 },
+        { prefix: 'C', time: 2, seq: 3, color: 6 }
+    ], { gap: 3 });
+    ok('F8: clúster amb poc espai → GAP reduït i 0,5 s de marge amb el següent',
+        f8Tight.length === 1 && f8Tight[0].prefix === 'B' && f8Tight[0].timeSec === 1.5,
+        JSON.stringify(f8Tight));
+    ok('F8: sense escaleta (seq null) o <2 marcadors → []',
+        FM._calcSeparacioSuperposats([{ prefix: 'X', time: 0 }, { prefix: 'Y', time: 0 }]).length === 0 &&
+        FM._calcSeparacioSuperposats([]).length === 0);
+
+    // ── 12c. BUG #193 (2026-10-27): inici del bloc i finestres degenerades ──
+    // Cas real TNM_V1 26/10: `01 TE-1`/`01 TD-1` són GRAFICS (classe=GRAFIC al manifest)
+    // però arriben SENSE hora (escaleta_bounds els anul·la la Prevista) → queien a
+    // `unplacedItems`; `01BT` (capçalera, també sense hora) no era candidata a inici i el
+    // 🔒 requeia en `01dir` → 4 marcadors a 0,00 s. R1+R2 ho tanquen a l'origen; R4 obri
+    // la finestra degenerada de F5 i encadena durades.
+    ph('12c-bug193-inici-bloc');
+    var f193Lines = [
+        { num: '01 TE-1', titol: 'TE ALDARULLS', horaEntradaOnAir: '00:00:00', horaEntradaPrevista: '', durada: '0:00', agrupacio: '01', sequencia: 25 },
+        { num: '01 TD-1', titol: 'TD ALDARULLS', horaEntradaOnAir: '', horaEntradaPrevista: '', durada: '0:00', agrupacio: '01', sequencia: 26 },
+        { num: '01BT', titol: 'PG bona tarda', horaEntradaOnAir: '', horaEntradaPrevista: '', durada: '0:33', agrupacio: '01', sequencia: 27 },
+        { num: '01dir', titol: 'conn MARTA MARTORELL', horaEntradaOnAir: '14:32:13', horaEntradaPrevista: '14:32:13', durada: '0:07', agrupacio: '01', sequencia: 28 }
+    ];
+    var f193c = FM._classifyItems(f193Lines);
+    var _f193nums = function (arr) { return (arr || []).map(function (l) { return l.num; }); };
+    ok('#193/R1: els gràfics de capçalera SENSE hora van a graphicItems (no a unplacedItems)',
+        _f193nums(f193c.graphicItems).indexOf('01 TE-1') !== -1 &&
+        _f193nums(f193c.graphicItems).indexOf('01 TD-1') !== -1 &&
+        _f193nums(f193c.unplacedItems).indexOf('01 TE-1') === -1 &&
+        _f193nums(f193c.unplacedItems).indexOf('01 TD-1') === -1,
+        JSON.stringify({ g: _f193nums(f193c.graphicItems), u: _f193nums(f193c.unplacedItems) }));
+    ok('#193/R1: 1 estructural (01dir) · 2 gràfics · 1 sense hora (01BT)',
+        f193c.structuralItems.length === 1 && _f193nums(f193c.structuralItems)[0] === '01dir' &&
+        f193c.graphicItems.length === 2 && f193c.unplacedItems.length === 1 &&
+        _f193nums(f193c.unplacedItems)[0] === '01BT',
+        JSON.stringify({ s: _f193nums(f193c.structuralItems), g: _f193nums(f193c.graphicItems), u: _f193nums(f193c.unplacedItems) }));
+    var f193horaRef = function (it) { return (it && it.horaEntradaOnAir === '14:32:13') ? 0 : null; };
+    var f193pick = FM._pickStartItem(f193c.structuralItems, [], f193horaRef, f193c.graphicItems, f193c.unplacedItems);
+    ok('#193/R2: el marcador d\'inici és 01BT (capçalera sense hora, seq 27), NO 01dir',
+        f193pick && f193pick.num === '01BT', JSON.stringify(f193pick && f193pick.num));
+    var f193pick2 = FM._pickStartItem([
+        { num: '03', horaEntradaOnAir: '14:35:00', durada: '0:20', sequencia: 31 },
+        { num: '01dir', horaEntradaOnAir: '14:32:13', durada: '0:07', sequencia: 28 }
+    ], [], f193horaRef, [], [{ num: '01BT', durada: '0:33', sequencia: 27 }]);
+    ok('#193/R2: amb candidats desordenats mana `sequencia` (01BT, seq 27)',
+        f193pick2 && f193pick2.num === '01BT', JSON.stringify(f193pick2 && f193pick2.num));
+    var f193pick3 = FM._pickStartItem(f193c.structuralItems, [], f193horaRef, f193c.graphicItems);
+    ok('#193/R2: crida antiga (sense el 5é argument) no trenca: tria 01dir',
+        f193pick3 && f193pick3.num === '01dir', JSON.stringify(f193pick3 && f193pick3.num));
+
+    var f193ord = [{ num: '01BT', durada: '0:33' }, { num: '01dir', durada: '0:07' }, { num: '02', durada: '0:18' }];
+    var f193oidx = { '01BT': 0, '01dir': 1, '02': 2 };
+    var f193dur = function (it) {
+        var p = String((it && it.durada) || '0:00').split(':').map(Number);
+        return (p.length === 2 && !isNaN(p[0]) && !isNaN(p[1])) ? p[0] * 60 + p[1] : 0;
+    };
+    var f193D = FM._cadenaDuradesSec(f193ord, f193oidx, '01BT', 1, 0, f193dur);
+    ok('#193/R4: cadena de durades · 01BT@0 (33 s) → 01dir a 33,00 s',
+        f193D && Math.abs(f193D.time - 33) < 0.01, JSON.stringify(f193D));
+    ok('#193/R4: cadena impossible (sense veí, ítem 1r, o durades 0) → null',
+        FM._cadenaDuradesSec(f193ord, f193oidx, null, 1, 0, f193dur) === null &&
+        FM._cadenaDuradesSec(f193ord, f193oidx, '01BT', 0, 0, f193dur) === null &&
+        FM._cadenaDuradesSec([{ num: '01BT', durada: '0:00' }, { num: '01dir' }], f193oidx, '01BT', 1, 0, f193dur) === null);
+    var f193w1 = FM._hiFinestraInferida('01dir', '01dir', 0, 70);
+    ok('#193/R4: finestra [x → x] → s\'obri fins al final del bloc (70 s)',
+        f193w1.degenerada === true && f193w1.hi === 70 && f193w1.nextNum === null, JSON.stringify(f193w1));
+    var f193w2 = FM._hiFinestraInferida('01BT', '02', 41.56, 70);
+    ok('#193/R4: finestra normal intacta (01BT@0 → 02@41,56)',
+        f193w2.degenerada === false && f193w2.hi === 41.56 && f193w2.nextNum === '02', JSON.stringify(f193w2));
+    ok('#193/R4: sense veí següent → final del bloc',
+        FM._hiFinestraInferida('01BT', null, null, 70).hi === 70);
+
+    // ── #193·R6: una hora FORA del material no pot situar cap marcador ──
+    // Cas real TNM_V1 27/10: 01dir (Prevista 14:32:14 = 52334 s) → el clip comença a
+    // 14:32:22,9 (52342,92) → F2 calculava -8,92 s, clavava a 00:00 i F8 separava a 3 s.
+    var f193r6Lines = [
+        { num: '01BT', titol: 'PG bona tarda', horaEntradaOnAir: '', horaEntradaPrevista: '', durada: '0:33', agrupacio: '01', sequencia: 27 },
+        { num: '01dir', titol: 'conn MARTA MARTORELL', horaEntradaOnAir: '', horaEntradaPrevista: '14:32:14', durada: '0:07', agrupacio: '01', sequencia: 28 },
+        { num: '02', titol: 'IPD ALDARULLS', horaEntradaOnAir: '14:33:04', horaEntradaPrevista: '14:33:04', durada: '0:26', agrupacio: '01', sequencia: 30 },
+        { num: '03', titol: 'IPD VERTICALS', horaEntradaOnAir: '', horaEntradaPrevista: '14:33:30', durada: '0:11', agrupacio: '01', sequencia: 31 }
+    ];
+    var f193mb = FM._matBoundsSec({ anchorEfectiva: 52384, anchorEfTimelineSec: 41.08 }, [{ start: 0, end: 88 }]);
+    ok('#193/R6: _matBoundsSec → el 0 del timeline és el segon 52342,92 del món (88 s de material)',
+        f193mb && Math.abs(f193mb.startSec - 52342.92) < 0.01 && Math.abs(f193mb.endSec - 52430.92) < 0.01,
+        JSON.stringify(f193mb));
+    ok('#193/R6: sense anchors vàlids → _matBoundsSec null',
+        FM._matBoundsSec(null, []) === null && FM._matBoundsSec({}, []) === null);
+    var f193r6 = FM._classifyItems(f193r6Lines, { matBoundsSec: f193mb });
+    var f193r6dir = f193r6.unplacedItems.filter(function (l) { return l.num === '01dir'; })[0];
+    ok('#193/R6: Prevista FORA del material (01dir @14:32:14 < 14:32:22,9) → unplacedItems amb flag _foraMaterial',
+        _f193nums(f193r6.unplacedItems).indexOf('01dir') !== -1 &&
+        !!f193r6dir && f193r6dir._foraMaterial === true &&
+        _f193nums(f193r6.structuralItems).indexOf('01dir') === -1,
+        JSON.stringify({ u: _f193nums(f193r6.unplacedItems), s: _f193nums(f193r6.structuralItems) }));
+    ok('#193/R6: la mateixa escaleta SENSE límits → 01dir seguix estructural (compatibilitat)',
+        _f193nums(FM._classifyItems(f193r6Lines).structuralItems).indexOf('01dir') !== -1);
+    ok('#193/R6: l\'OnAir no es descarta mai encara que caiga fora del material (02 @14:33:04)',
+        _f193nums(f193r6.structuralItems).indexOf('02') !== -1 &&
+        _f193nums(f193r6.unplacedItems).indexOf('02') === -1);
+    ok('#193/R6: Prevista DINS del material (03 @14:33:30) → es queda estructural',
+        _f193nums(f193r6.structuralItems).indexOf('03') !== -1 &&
+        _f193nums(f193r6.unplacedItems).indexOf('03') === -1,
+        JSON.stringify(_f193nums(f193r6.structuralItems)));
+
+    // ── 12d. BUG #194 (2026-10-27): UN DIRECTE NO PORTA GRÀFICS MAI ──
+    // Cas real TNM_V1 26/10 (MARCADORS_2026-10-27_1330): `01 TE-1`@35,82 i `01 TD-1`@37,59
+    // s'ancoraven a `01dir`@32,28 → dins de la connexió en directe. El pare de plató és
+    // `01BT`@0,00 (DonaPas) → +10/+15 s. `_resolveGraphicParents` és pura (sense JSX).
+    ph('12d-bug194-grafics-fora-directe');
+    var f194mk = [
+        { time: 0, comments: '01BT - PG bona tarda i DONA PAS' },
+        { time: 32.28, comments: '01dir - conn MARTA MARTORELL' },
+        { time: 39.36, comments: '02 - +++IPD ALDARULLS' }
+    ];
+    var f194p = FM._resolveGraphicParents(f194mk);
+    ok('#194: el pare de la base 01 és 01BT@0,00, MAI el directe 01dir@32,28',
+        f194p['01'] === 0 && f194p['01'] !== 32.28, JSON.stringify(f194p));
+    ok('#194: les altres bases no es contaminen (02 → 39,36)',
+        f194p['02'] === 39.36, JSON.stringify(f194p));
+    var f194pDir = FM._resolveGraphicParents([{ time: 32.28, comments: '01dir - conn MARTA MARTORELL' }]);
+    ok('#194: si l\'únic marcador del número és un directe → no s\'ancora (sense pare)',
+        f194pDir['01'] === undefined, JSON.stringify(f194pDir));
+    var f194pDp = FM._resolveGraphicParents([
+        { time: 0, comments: '01dp - donapas' },
+        { time: 5, comments: '01i - intro' },
+        { time: 32.28, comments: '01dir - conn' }
+    ]);
+    ok('#194: la intro mana sobre el donapas i el directe (01i@5)',
+        f194pDp['01'] === 5, JSON.stringify(f194pDp));
+    var f194pOff = FM._resolveGraphicParents([
+        { time: 8, comments: '02f - off de continuïtat' },
+        { time: 20, comments: '02dir - conn' }
+    ]);
+    ok('#194: l\'off (02f) és pare de plató vàlid i guanya al directe',
+        f194pOff['02'] === 8, JSON.stringify(f194pOff));
+    var f194pVid = FM._resolveGraphicParents([
+        { time: 63, comments: '01 - vídeo propi' },
+        { time: 0, comments: '01BT - capçalera' },
+        { time: 32.28, comments: '01dir - conn' }
+    ]);
+    ok('#194: el vídeo propi (01@63) seguix manant quan existix',
+        f194pVid['01'] === 63, JSON.stringify(f194pVid));
+    var f194pGraf = FM._resolveGraphicParents([
+        { time: 0, comments: '01BT - capçalera' },
+        { time: 10, comments: '01 TE-1 - TE ALDARULLS' },
+        { time: 32.28, comments: '01dir - conn' }
+    ]);
+    ok('#194: un gràfic ja col·locat no es pren com a pare de si mateix (01BT@0)',
+        f194pGraf['01'] === 0, JSON.stringify(f194pGraf));
+
     // ── 13. flow_mainButton (F6c): un sol helper per a la forma del master ──
     ph('13-flow-mainbutton');
     var MB = window.FASTPASS_UI.Workflows && window.FASTPASS_UI.Workflows.MainButton;
@@ -500,6 +697,40 @@ window.__runTests = async function () {
     ok('filtre LLOC: traducció amb "Lloc" al text queda EXCLOSA',
         filtreLloc({ name: 'Wott_TNV_14_00.59_PRG_644349_TRADUCCIO [1-2] Lloc de treball.006.mov', rol: 'TRADUCCIO [1-2] Lloc de treball' }) === false);
     ok('fase TRADUCCIÓ: la traducció sí que hi entra', CH._isTraduccioWott(TRAD_TNC) === true);
+
+    // ── 14b. BUG #195 (2026-10-27): el rètol del CONDUCTOR no cau dins del directe ──
+    // Cas real TNM_V1 26/10 (CHYRONS_2026-10-27_1400): el rètol «Directe_PRESENCIAL_
+    // Ciutat de la Justícia», penjat de `01BT - PG bona tarda i DONA PAS…` @0,00,
+    // s'anava a `01dir`@32,28 + 0,40 = **32,68 s** (dins de la connexió) perquè `01BT`
+    // no es reconeixia com a plató (sufix `bt` fora de la llista i el títol no comença
+    // per cap token). Regla d'usuari: intro/off al principi → va amb el conductor.
+    ph('14b-bug195-conductor-plato');
+    var F195 = [
+        { time: 0, comments: '01BT - PG bona tarda i DONA PAS CIUTAT JUSTÍCIA' },
+        { time: 32.28, comments: '01dir - conn MARTA MARTORELL' },
+        { time: 39.36, comments: '02 - +++IPD ALDARULLS NIT BCN' }
+    ];
+    ok('#195: «PG bona tarda i DONA PAS…» és títol de plató (token BONATARDA)',
+        CH._isPresenterTitle('PG bona tarda i DONA PAS CIUTAT JUSTÍCIA') === true);
+    ok('#195: 01BT compta com a ítem de plató (_isPresenterLine, sufix bt)',
+        CH._isPresenterLine({ num: '01BT', titol: 'PG bona tarda i DONA PAS CIUTAT JUSTÍCIA' }) === true);
+    ok('#195: la capçalera es reconeix pel SUFIX i pel NOM (01BT / «01 PG - …»)',
+        CH._isCapcaleraPlato(F195[0], { suffix: 'bt' }) === true &&
+        CH._isCapcaleraPlato({ time: 0, comments: '01 PG - PG bona tarda i DONA PAS' }, {}) === true,
+        String(CH._isCapcaleraPlato(F195[0], { suffix: 'bt' })));
+    ok('#195: 01dir i el 02 (IPD) NO són capçalera de plató',
+        CH._isCapcaleraPlato(F195[1], { suffix: 'dir' }) === false &&
+        CH._isCapcaleraPlato(F195[2], { suffix: '' }) === false);
+    ok('#195: el rètol PRESENCIAL de la capçalera al inici es QUEDA al plató',
+        CH._debeQuedarseEnPlato(F195[0], { suffix: 'bt' }, F195) === true);
+    ok('#195: la intro de DIFERIT al inici seguix movent-se (regla #168 intacta)',
+        CH._debeQuedarseEnPlato({ time: 0, comments: '04i - intro DIFERIT (VIMBODÍ I POBLET)' },
+            { suffix: 'i' },
+            [{ time: 0, comments: '04i - intro DIFERIT (VIMBODÍ I POBLET)' },
+             { time: 34.36, comments: '05 - +++IPD POBLET VISITA' }]) === false);
+    ok('#195: si la capçalera NO obri el bloc, no bloqueja el moviment',
+        CH._debeQuedarseEnPlato(F195[0], { suffix: 'bt' },
+            [{ time: -6, comments: '00 - prèvia' }].concat(F195)) === false);
 
     // ── 15. TN MIGDIA V1 (15/10/2026): marcador "01 PGi - PG Intro" ───────────
     // El 1r marcador del bloc és l'ítem de PLATÓ que l'obre i porta un ESPAI entre el

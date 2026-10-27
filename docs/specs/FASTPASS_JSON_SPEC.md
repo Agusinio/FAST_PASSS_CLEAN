@@ -510,7 +510,7 @@ la connexió (`_connexioMarkerTime`) només resolia el cas dels ENVIAT: el marca
 de l'IPD no conté «CONNEXIÓ» ni acaba en `dir`.
 
 **Solució**: `_isDirecteSenyalWott`, `_isIpdDirecteMarker`, `_firstIpdDirecteAfter` i
-`Chyrons._ipdAnchorPlan()` (detall a `docs/BUGS_FIXED.md` #167), `label` amb el
+`Chyrons._ipdAnchorPlan()` (detall a `BUGS.md` #167), `label` amb el
 comentari del marcador dins de `markersFull` i `flow_chyrons.js?v=76`.
 
 **Cobertura** (17 asserts, fase `15-ipd-chyron`, sonda `bin\smoke\fp_probe_ipd_chyron.js`

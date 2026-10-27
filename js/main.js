@@ -255,7 +255,8 @@ function applySliderLimits() {
         var p2 = function (n) { return (n < 10 ? '0' : '') + n; };
         return 'FASTPASS · timing d\'arrencada del panell\n' +
             'Inici: ' + p2(d.getHours()) + ':' + p2(d.getMinutes()) + ':' + p2(d.getSeconds()) +
-            '  (ms = des de l\'inici · Δ = des de la marca anterior)\n';
+            '  (ms = des de l\'inici · Δ = des de la marca anterior)\n' +
+            '(les ms NEGATIVES són el tram previ a main.js: navegació + càrrega dels <script>)\n';
     };
     var _bootText = function () { return _bootHead() + _bootLines.join('\n') + '\n'; };
     var _bootFlush = function () {
@@ -294,6 +295,58 @@ function applySliderLimits() {
             logPath: function () { return _bootRoot ? (_bootRoot + '\\_boot_timing.log') : 'C:\\temp\\_boot_timing.log'; },
             mark: function (label, lvl) { _bootMarkSafe(label, lvl); },
             text: function () { return _bootText(); },
+            /**
+             * TRAM PREVI A MAIN.JS (2026-10-27). El cronòmetre comença en este
+             * fitxer, que és l'últim dels 48 <script> de l'index.html: el temps
+             * de navegació + càrrega dels mòduls no eixia enlloc i l'usuari veia
+             * un minut que el log resumia en 146 ms. `index.html` deixa les
+             * marques a window.__FP_PAGE (script inline del <head>, ABANS de cap
+             * recurs extern); ací es bolquen com a línia amb ms NEGATIVES.
+             * Torna un resum curt (per a qui vullga pintar-lo en un toast).
+             */
+            page: function () {
+                try {
+                    var P = window.__FP_PAGE;
+                    if (!P || !P.headAt) { return ''; }
+                    var nowPerf = (window.performance && performance.now) ? performance.now() : 0;
+                    var preHead = Math.round(nowPerf - P.headAt);                        // <head> → main.js
+                    var preNav = P.navStart ? Math.round(Date.now() - P.navStart) : preHead; // navegació → main.js
+                    var nSrc = 0;
+                    try { nSrc = document.querySelectorAll('script[src]').length; } catch (eQS) { }
+                    var msHead = Math.round(P.headAt);
+                    _bootLines.push('-' + _bootPad(preNav) + ' ms  (Δ' + _bootPad(preHead) +
+                        ' ms)  pàgina: navegació → main.js · marca del head +' + msHead +
+                        ' ms · ' + (nSrc || 48) + ' mòduls al DOM');
+                    _bootFlush();
+                    return 'navegació→main ' + preNav + ' ms · head→main ' + preHead + ' ms';
+                } catch (ePg) { return ''; }
+            },
+            /**
+             * FINAL DE LA CÀRREGA (load): DCL, quants recursos de js/ s'han baixat,
+             * la suma de les seues durades i els 3 més lents. És el que dirà si el
+             * tram de ~0,5 s és arrencada del motor o parseig dels mòduls.
+             */
+            pageLoad: function () {
+                try {
+                    var P = window.__FP_PAGE;
+                    if (!P || !P.load) { return ''; }
+                    var msLoad = P.navStart ? (P.load - P.navStart) : P.load;
+                    var dcl = P.dcl && P.navStart ? (P.dcl - P.navStart) : 0;
+                    var top = '';
+                    if (P.slow && P.slow.length) {
+                        var t = [], i;
+                        for (i = 0; i < P.slow.length; i++) { t.push(P.slow[i].n + ' ' + P.slow[i].d + ' ms'); }
+                        top = ' · top: ' + t.join(', ');
+                    }
+                    var resum = (P.res > 0)
+                        ? ((P.scripts || 0) + ' recursos js · Σ ' + P.res + ' ms')
+                        : ((P.scripts || 0) + ' mòduls · sense timing de recursos');
+                    _bootLines.push('+' + _bootPad(msLoad) + ' ms  (Δ' + _bootPad(P.load - _tBoot) +
+                        ' ms)  pàgina: load · DCL ' + dcl + ' ms · ' + resum + top);
+                    _bootFlush();
+                    return 'load ' + msLoad + ' ms · DCL ' + dcl + ' ms';
+                } catch (ePL) { return ''; }
+            },
             autoOpenMs: function () { return _bootAutoOpenMs; },
             setAutoOpen: function (ms) {
                 _bootAutoOpenMs = (typeof ms === 'number' && ms >= 0) ? ms : (parseInt(ms, 10) || 0);
@@ -318,7 +371,28 @@ function applySliderLimits() {
             }
         };
     } catch (eBootApi) { }
+    // ── TRAM PREVI A MAIN.JS (2026-10-27) ───────────────────────────────────
+    // El cronòmetre comença en este fitxer: tot el que ha tardat el navegador a
+    // baixar l'HTML i els 48 mòduls queda a window.__FP_PAGE (marca del bloc del
+    // head) i s'escriu com a línia NEGATIVA al mateix _boot_timing.log, ABANS de
+    // la marca de main.js perquè el log es llija en ordre cronològic.
+    try {
+        if (window.FASTPASS_UI && FASTPASS_UI.Boot && FASTPASS_UI.Boot.page) {
+            FASTPASS_UI.Boot.page();
+        }
+    } catch (ePgPre) { }
     _bootMarkSafe('main.js: arrencada');
+    // Al `load` s'afig el recompte de recursos de js/ + els 3 més lents.
+    try {
+        if (window.FASTPASS_UI && FASTPASS_UI.Boot && FASTPASS_UI.Boot.pageLoad) {
+            if (document.readyState === 'complete') { FASTPASS_UI.Boot.pageLoad(); }
+            else {
+                window.addEventListener('load', function () {
+                    try { FASTPASS_UI.Boot.pageLoad(); } catch (ePgLd) { }
+                });
+            }
+        }
+    } catch (ePgLst) { }
     // ── CAPACITATS DEL CEP PER AL DIÀLEG DE CARPETES (2026-10-22 · #178b 3a) ──
     // Queda al log de sessió (`FASTPASS.log` / `_keyframe_trace.log`) encara que
     // ningú no arribe a clicar 📁: el 22/10 es va perdre una vesprada perquè el
@@ -1205,7 +1279,12 @@ if (btnMarksC1) btnMarksC1.addEventListener('click', () => callWorkflow('Markers
             // agrupacio:null) només es creaven dins de placeOnAirMarkers (F1), que no
             // formava part d'aquest pipeline → en el flux automàtic OUT&GO no apareixia
             // cap vermell (cas real 28/09 TNV_V2: `02dir`). Fase pròpia i idempotent.
-            ['Vermells (no agrupats)', () => callWorkflow('Markers', 'placeUngroupedMarkers')]
+            ['Vermells (no agrupats)', () => callWorkflow('Markers', 'placeUngroupedMarkers')],
+            // (2026-10-27 · BUG #192) NORMA IMPERATIVA d'usuari: dos marcadors NO poden
+            // quedar mai superposats. És l'última passada del pipeline (després de F6·GF i
+            // dels vermells, que també poden afegir marcadors al 00:00): separa els que
+            // coincidixen en orde d'escaleta amb GAP de 3 s (flow_markers: F8·Separació).
+            ['Separació (F8)',         () => callWorkflow('Markers', 'separateOverlappingMarkers')]
         ];
         utils.log('🚀 [PIPE] Marcadors post-OUT: ' + phases.map(p => p[0]).join(' → ') + '. Verifica els marcadors i usa COLOCAR per als chyrons.', 'INFO');
         // [2026-09-17] NOMES MARCADORS: si la V1 ja esta trocejada (>=2 clips) no tornem a

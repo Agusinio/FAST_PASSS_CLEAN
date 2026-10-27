@@ -291,4 +291,10 @@ return { corte: idealPos, idx: -1 }; // Respeta el tiempo aditivo
 5. **Fin de la escaleta útil**: el primer ítem cuyo `titol` contenga `TEMPS FINAL` marca el final de la
    escaleta (el editor deja ítems de prueba detrás). Se aplica en `EscaletaReader.load()`
    (`truncateAtTempsFinal`, 2026-10-02): desde ese ítem (incluido) no se cuenta nada más.
+6. **(2026-10-27 · #194) Un DIRECTE nunca es padre de un gráfico**: los grafismos van a la
+   **Intro** (`…i`), el **off** (`…f`/`off`) o el **DonaPas** (`…dp`); un directe es plató puro y no
+   lleva rótulos ni grafismos. `Markers._resolveGraphicParents` excluye `dir`/`directe`/`especial`
+   como padre y cae primero a la capçalera/plataforma del mismo número (`01BT`, `01PG`…). Cas real
+   `TNM_V1` 26/10: `01 TE-1`/`01 TD-1` pasan de `35,82`/`37,59 s` (dentro de `01dir`) a
+   `10,00`/`15,00 s` (dentro de `01BT`).
 

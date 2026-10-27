@@ -1,0 +1,8 @@
+# SHA256 de la línia base de #193 (estat EXACT abans dels retocs del 27/10)
+# Data: 2026-10-27 · Carpeta: docs/rollback/2026-10-27_FIX_INICI_BLOC
+# Verificació: (Get-FileHash -LiteralPath <fitxer> -Algorithm SHA256).Hash.ToLower()
+
+1b68d687b05678d4327093ac34ed170e7bff1de11631ce77639d8619c4475548  flow_markers.js.orig    (origen: js/workflows/flow_markers.js)
+44b9850c95d0a1e3c07a73445ece5eaa37a4cfd90d13a2b098bc287070190a96  escaleta_bounds.js.orig (origen: js/core/escaleta_bounds.js)
+e14e0565dbc66f599da0ed75ff37f6d4a5ed53ed39d3e154df9621cf65164f16  main.js.orig            (origen: js/main.js)          [ja inclou F8 #192]
+681b6eda2aa878736a747cd6dca341f20007d4b65f469ba7557dbbb5bfc8e464  fp_smoke_ac.js.orig     (origen: bin/smoke/fp_smoke_ac.js) [ja inclou F8 #192]

@@ -2,7 +2,7 @@
 
 Data: **2026-10-21** · origen: sessió de proves amb usuaris reals
 Abast: 4 punts reportats per l'usuari. Cada fase es tanca amb validació (smoke + Premiere) i
-entrada a `docs/BUGS_FIXED.md` / `docs/CHANGELOG.md`.
+entrada a `BUGS.md` / `docs/CHANGELOG.md`.
 
 | Fase | Tema | Estat |
 |------|------|-------|
@@ -427,6 +427,20 @@ codi s'escriu `docs/specs/MARKERS_OPERATIVA.md` amb la mecànica COMPLETA i la d
 ABANS de crear el marcador (funció única `_canPlaceAt(tc)`), no una neteja posterior: netejar
 després deixa el manifest i el log inconsistents i pot trencar l'ancoratge dels chyrons.
 
+> **Garantia de tancament (2026-10-27 · BUG #192)**: a més de previndre-ho a cada fase, el
+> pipeline acaba amb **F8·Separació** (`flow_markers.separateOverlappingMarkers`), que separa
+> amb GAP de 3 s i en orde de `sequencia` qualsevol clúster que haja quedat (≤0,20 s), sense
+> moure mai els marcadors amb OnAir. És una xarxa de seguretat, **no** substitueix la
+> deduplicació en origen: si F8 ha de moure res, el log ho diu (`🔧 [F8·Separació] …`) i la
+> causa s'ha d'arreglar a la fase que l'ha creat. Detall a `docs/specs/MARKER_COLORS.md`
+> §«Regla imperativa: cap marcador superposat».
+
+> **Causa d'origen (2026-10-27 · BUG #193)**: la xarxa de F8 tapava un error de **F2/F5**.
+> F2 triava com a inici el primer ítem **amb hora** (`01dir`) en lloc del primer de l'escaleta
+> (`01BT`), i F5 no podia inferir res perquè la seua finestra degenerava a `[x → x]`. El
+> disseny del retoc (R1-R5, amb ABANS/DESPRÉS, prova de regressió i rollback) és a
+> [`FIX_INICI_BLOC.md`](FIX_INICI_BLOC.md). Fins que no s'aplique, F8 seguix sent necessària.
+
 ### Mètode
 1. Obrir els projectes del dia anterior (ja creats) i desar els snapshots.
 2. Comparar amb `bin/compare_markers.ps1` + `bin/analyze_prproj_*.py`.
@@ -446,5 +460,5 @@ després deixa el manifest i el log inconsistents i pot trencar l'ancoratge dels
 - Cache-bust a `index.html` per a cada fitxer tocat.
 - `bin/smoke/fp_smoke_build.ps1` (PASS/FAIL), `bin/check_js_v8.ps1` (60/60), `bin/check_dead.ps1`
   (0 orfes) en verd abans de commitar.
-- Entrada a `docs/BUGS_FIXED.md` (SIMPTOMA / CAUSA ARREL / SOLUCIO / FITXERS / VALIDACIO) i a
+- Entrada a `BUGS.md` (SIMPTOMA / CAUSA ARREL / SOLUCIO / FITXERS / VALIDACIO) i a
   `docs/CHANGELOG.md`.

@@ -54,3 +54,26 @@ if (/IPD/i.test(line.num + ' ' + line.titol)) {
   "puesto a mano" que sobreviva**. Cada fase hace delete+create y recalcula el color desde
   la escaleta con `_getColorIdx`, así que un recolor manual se pierde en la siguiente pasada
   (por eso la regla vive en el código, no en un fichero de estado).
+
+## Regla imperativa: cap marcador superposat (2026-10-27 · BUG #192)
+
+> **Ordre de l'usuari**: «els marcadors no poden quedar mai superposats. Sempre que això
+> passe, cal separar-los uns segons i deixar-los en el seu ordre d'escaleta.»
+
+La garantia viu a **`F8 · Separació`** (`separateOverlappingMarkers`, `flow_markers.js`), que
+és l'**última fase** del pipeline de marcadors d'OUT&GO (`js/main.js`), després de
+`F6·Ordre` + `F7·Cobertura`, de `F6·GF` i dels VERMELLS (totes poden afegir marcadors al
+`00:00`).
+
+| Aspecte | Valor |
+|---|---|
+| Detecció | dos marcadors amb `\|Δt\| ≤ 0,20 s` formen un **clúster** |
+| Separació | `_GAP_SEPARACIO` = **3,0 s** (el mínim que va demanar l'usuari); es reduïx només si el clúster següent és a prop (marge de 0,5 s, mínim 0,20 s) |
+| Ordre | `sequencia` de l'escaleta: el **primer** es queda a la posició del clúster i la resta van darrere |
+| OnAir | `pinned`: **no es mou mai** (el seu imant al tall és sagrat); si un altre li cau damunt, es mou l'altre |
+| Abast | només marcadors amb prefix d'escaleta (`num - títol`); els rètols MOGRT (comentaris sense `num - …`) no s'hi toquen |
+
+Cas real que la va motivar (`TNM_V1` 2026-10-26): `F2` va fer `01dir` marcador d'inici a
+`00:00` i `F7` hi va afegir `01 TE-1`, `01 TD-1` i `01BT` al **mateix** `0,00 s` → quatre
+marcadors superposats i, a més, amb l'ordre d'escaleta invertit (`01dir` és el 4t del bloc:
+`seq 28`, darrere de `25/26/27`). Amb F8 queden `01 TE-1@0 · 01 TD-1@3 · 01BT@6 · 01dir@9`.

@@ -1,0 +1,624 @@
+/* ============================================================================
+ * HARNES HEADLESS · AnalysisCenter v1 + SessionManifest v2 + LOGIC 16_ANALYSIS v2
+ * ----------------------------------------------------------------------------
+ * Carrega els fitxers REALS del repositori (via fp_smoke_build.ps1) i els
+ * executa amb un stub de Utils (callJSX → mapa de fitxers en memòria).
+ * Sense Premiere ni NAS: valida el CABLEJAT i les semàntiques de merge/rebuild.
+ * L'estat global (__LOG, __FILES, __ERR, __PASS...) el crea fp_smoke_boot.js.
+ * ==========================================================================*/
+
+(function () {
+    var FILES = window.__FILES;
+
+    /** esc: rèplica exacta de Utils.escape (utils.js:862) */
+    function esc(s) {
+        return String(s)
+            .replace(/\\/g, '\\\\')
+            .replace(/'/g, "\\'")
+            .replace(/\n/g, '\\n')
+            .replace(/\r/g, '\\r')
+            .replace(/\t/g, '\\t')
+            .replace(/[\u0080-\uFFFF]/g, function (ch) {
+                var h = ch.charCodeAt(0).toString(16);
+                while (h.length < 4) { h = '0' + h; }
+                return '\\u' + h;
+            });
+    }
+
+    /** unesc: desfà esc() en UNA passada (l'ordre importa: \\n no és \ + \n) */
+    function unesc(s) {
+        return String(s).replace(/\\(u[0-9a-fA-F]{4}|[\s\S])/g, function (m, g) {
+            if (g.charAt(0) === 'u') return String.fromCharCode(parseInt(g.slice(1), 16));
+            switch (g) {
+                case 'n': return '\n';
+                case 'r': return '\r';
+                case 't': return '\t';
+                case "'": return "'";
+                case '\\': return '\\';
+                default: return g;
+            }
+        });
+    }
+
+    window.__unesc = unesc;
+
+    window.FASTPASS_UI.Utils = {
+        log: function (m, lvl) { window.__LOG.push(String(lvl || 'DEBUG') + ' ' + String(m)); },
+        delay: function () { return Promise.resolve(); },
+        escape: esc,
+        jsxName: function (n) { return String(n == null ? '' : n).replace(/%/g, '%25'); },
+        workFolder: function (ctx) {
+            return 'C:/TMP/NAS/' + ctx.progData.archivo + '_PROJECTES/' + ctx.dateDir + '/' + ctx.bloque;
+        },
+        ensureFolders: async function (dir) { window.__FOLDERS.push(dir); return true; },
+        _fromMojibake: function (s) { return s; },
+        callJSX: async function (expr) {
+            var s = String(expr);
+            window.__JSX.push(s.slice(0, 70));
+            var m;
+            if ((m = /^IO\.readTxt\('([\s\S]*)'\)$/.exec(s))) {
+                var p = unesc(m[1]);
+                return (FILES[p] === undefined) ? '' : FILES[p];
+            }
+            if ((m = /^IO\.writeTxt\('([\s\S]*?)', '([\s\S]*)'\)$/.exec(s))) {
+                FILES[unesc(m[1])] = unesc(m[2]);
+                return 'OK';
+            }
+            if ((m = /^IO\.appendTxt\('([\s\S]*?)', '([\s\S]*)'\)$/.exec(s))) {
+                var ap = unesc(m[1]);
+                FILES[ap] = (FILES[ap] || '') + unesc(m[2]);
+                return 'OK';
+            }
+            return 'OK';
+        }
+    };
+})();
+
+/* ── Resultats ─────────────────────────────────────────────────────────────*/
+window.__R = [];
+window.__PASS = 0;
+window.__FAIL = 0;
+window.__ok = function (name, cond, extra) {
+    if (cond) { window.__PASS++; window.__R.push('OK   ' + name); }
+    else { window.__FAIL++; window.__R.push('FAIL ' + name + ' :: ' + (extra === undefined ? '' : extra)); }
+};
+
+window.__dump = function () {
+    var head = 'AnalysisCenter v' + ((window.FASTPASS_UI.Core.AnalysisCenter || {}).VERSION || '?') +
+        ' · SessionManifest v' + ((window.FASTPASS_UI.SessionManifest || {}).VERSION || '?') +
+        ' | PASS ' + window.__PASS + ' FAIL ' + window.__FAIL +
+        ' | JSX ' + window.__JSX.length + ' | FILES ' + Object.keys(window.__FILES).length +
+        ' | FASE ' + (window.__PHASE || '-');
+    var body = window.__R.join('\n');
+    var errs = window.__ERR.length ? ('JSError(s):\n' + window.__ERR.join('\n')) : 'JSError(s): cap';
+    var warns = window.__LOG.filter(function (l) { return /WARN|ERROR/.test(l); });
+    return head + '\n' + body + '\n' + errs + '\nWARN/ERROR dels mòduls (' + warns.length + '):\n' +
+        warns.slice(0, 12).map(function (l) { return '  ' + l; }).join('\n');
+};
+
+/* ── Fixtures ──────────────────────────────────────────────────────────────*/
+window.__ctx = {
+    dateDir: '15_10_2026_TNV',
+    bloque: 'V1',
+    progData: { archivo: 'TNV', wott: 'TNV', directorio: 'TNV_PROJECTES' },
+    config: { rutas: { destinoBase: 'C:/TMP/NAS/' } }
+};
+
+window.__runTests = async function () {
+    var ok = window.__ok;
+    var ph = function (n) { window.__PHASE = n; };
+    ph('start');
+    var UI = window.FASTPASS_UI;
+    var AC = UI.Core.AnalysisCenter;
+    var SM = UI.SessionManifest;
+    var AN = UI.Logic.Analysis;
+    var FILES = window.__FILES;
+    var ctx = window.__ctx;
+
+    var MPATH = SM.getPath(ctx);
+    var MIRROR = AN._getPath(ctx);
+    window.__MPATH = MPATH;
+    window.__MIRROR = MIRROR;
+
+    // ── 0. Mòduls i esquema ────────────────────────────────────────────────
+    ok('mòduls carregats (AC 1.0 / SM 2.0 / Analysis)',
+        !!(AC && SM && AN) && AC.VERSION === '1.0' && SM.VERSION === '2.0',
+        [AC && AC.VERSION, SM && SM.VERSION].join('|'));
+    var needSec = ['escaletaItems', 'clips', 'media', 'markers', 'chyrons', 'graphics',
+                   'analysis', 'structure', 'phases'];
+    var missing = needSec.filter(function (k) { return SM.SECTION_KEYS.indexOf(k) === -1; });
+    ok('SECTION_KEYS cobreix les seccions v2.0', missing.length === 0, missing.join(','));
+    ok('manifest path = <bloc>\\TNV_V1.fastpass.json', /\\TNV_V1\.fastpass\.json$/.test(MPATH), MPATH);
+    ok('mirall = .../analisis_estructura/15_10_TNV_V1.json', /analisis_estructura\/15_10_TNV_V1\.json$/.test(MIRROR), MIRROR);
+
+    // ── 1. FASE ESCALETA (saveEscaleta → manifest + mirall) ────────────────
+    ph('1-escaleta');
+    var LINES = [
+        // NOTA: la línia d'escaleta real NO porta `horaSortidaOnAir` (el camp no
+        // existeix al repo): la sortida OnAir es DERIVA de `horaEntradaOnAir +
+        // durada`. Per això la durada de l'ítem 00 és 0:22 (finestra 72000→72022).
+        { sequencia: 10, num: '00', titol: 'INICI', agrupacio: null, durada: '0:22',
+          horaEntradaOnAir: '20:00:00', teVideo: true },
+        { sequencia: 20, num: '01', titol: 'CRÒNICA', agrupacio: 'BLOQUE 3', durada: '3:00',
+          horaEntradaPrevista: '20:01:00', horaSortidaPrevista: '20:04:00', teVideo: true },
+        { sequencia: 30, num: '02DP', titol: 'IPD METEOROLOGIA', agrupacio: null, durada: '0:30', teVideo: true },
+        { sequencia: 40, num: '03', titol: 'SUMARI', agrupacio: null, durada: '' }
+    ];
+    await AN.saveEscaleta(ctx, 'escaleta_TNV_V1.json', LINES,
+        { prevVideoItem: { num: 'M1' }, nextVideoItem: { num: 'M2' } },
+        { inSec: 1.5, outSec: 99 });
+
+    ok('escriptura via IO.writeTxt (respatller JSX)', window.__JSX.some(function (s) { return s.indexOf('IO.writeTxt(') === 0; }));
+    ok('manifest .fastpass.json escrit al disc', typeof FILES[MPATH] === 'string' && FILES[MPATH].length > 100,
+        FILES[MPATH] ? FILES[MPATH].length + ' bytes' : 'ABSENT');
+    ok('mirall analisis_estructura/*.json escrit', typeof FILES[MIRROR] === 'string',
+        FILES[MIRROR] ? FILES[MIRROR].length + ' bytes' : 'ABSENT');
+
+    var txt = FILES[MPATH] || '';
+    ok('manifest en PRETTY-PRINT (salt de línia real, no \\n literal)',
+        txt.indexOf('\n  "_version"') > 0 && txt.replace(/[^\n]/g, '').length > 50,
+        JSON.stringify(txt.slice(0, 40)));
+    var mm = null;
+    try { mm = JSON.parse(txt); } catch (eP) { mm = null; }
+    ok('manifest és JSON vàlid', !!mm);
+    mm = mm || {};
+
+
+    // ── 2. FASE MEDIA (clips de V1 = veritat física) ───────────────────────
+    ph('2-media');
+    await AC.writeMedia(ctx, [
+        { name: '00_INICI.mxf', start: 72000, end: 72022, inPoint: 0 },
+        { name: 'FUERA_DE_BLOC.mxf', start: 100, end: 200, inPoint: 0 },
+        { name: '01A_CRONICA.mxf', start: 72070, end: 72130, inPoint: 12.5 },
+        { name: '02DP_IPD.mxf', start: 72250, end: 72265, inPoint: 0 }
+    ], { track: 1, label: 'Clips.getTrackClips' });
+    mm = (SM._cache[MPATH] || {});
+    ok('media.clipsV1 = 4 clips', !!(mm.media && mm.media.clipsV1.length === 4 && mm.media.clipCount === 4));
+    ok('media.firstStartSec/lastEndSec', mm.media.firstStartSec === 72000 && mm.media.lastEndSec === 72265,
+        [mm.media.firstStartSec, mm.media.lastEndSec].join('->'));
+
+    // ── 3. FASE MARKERS (snapshot cru -> font dels TCs) ───────────────────
+    ph('3-markers');
+    await AC.writeMarkers(ctx, [
+        { time: 20, comments: '00 · INICI', color: 1 },
+        { time: 1200.5, comments: '02DP · IPD METEOROLOGIA', color: 7 }
+    ], { source: 'Markers.get' });
+    mm = (SM._cache[MPATH] || {});
+    ok('markers.list = 2 marcadors', !!(mm.markers && mm.markers.list.length === 2));
+    ok('marker num/digits derivats del comentari',
+        mm.markers.list[1].num === '02DP' && mm.markers.list[1].numDigits === '02',
+        mm.markers.list[1].num + '/' + mm.markers.list[1].numDigits);
+    ok('marker tc calculat amb fps 25', mm.markers.list[1].tc === '00:20:00:12', mm.markers.list[1].tc);
+
+    // ── 4. RETOLS COL·LOCATS (writeChyronsPlaced + dedup) ─────────────────
+    ph('4-chyrons');
+    await AC.writeChyronsPlaced(ctx, [
+        AC.record('RT00_ESTRUCTURA', 3, 72005, 72015, { num: '00', tipus: 'RETOL', itemNum: '00' }),
+        AC.record('RT03_SUMARI', 3, 5000, 5010, { num: '03', tipus: 'RETOL', itemNum: '03' })
+    ], { bin: 'RETOLS_V1' });
+    await AC.writeChyronsPlaced(ctx, [
+        AC.record('RT00_ESTRUCTURA', 3, 72005, 72018, { num: '00', tipus: 'RETOL', itemNum: '00' })
+    ]);
+    mm = (SM._cache[MPATH] || {});
+    ok('chyrons.placed deduplicat per num|name|track (2, no 3)',
+        mm.chyrons.placed.length === 2 && mm.chyrons.countPlaced === 2, String(mm.chyrons.placed.length));
+    ok('la re-col·locacio ACTUALITZA el registre (endSec 72018)',
+        mm.chyrons.placed[0].endSec === 72018 && mm.chyrons.placed[0].durSec === 13,
+        JSON.stringify([mm.chyrons.placed[0].endSec, mm.chyrons.placed[0].durSec]));
+    ok('chyrons.bin preservat del 1r pedac', mm.chyrons.bin === 'RETOLS_V1', String(mm.chyrons.bin));
+
+    // ── 5. GRAFISMES ──────────────────────────────────────────────────────
+    ph('5-graphics');
+    await AC.writeGraphics(ctx, [
+        AC.record('TITOLET_00', 4, 72010, 72012, { num: '00', tipus: 'TITOLET', itemNum: '00' }),
+        AC.record('CEP_03', 4, 9000, 9010, { num: '03', tipus: 'CEP', itemNum: '03' })
+    ]);
+    mm = (SM._cache[MPATH] || {});
+    ok('graphics.list = 2 grafismes', mm.graphics.list.length === 2);
+
+    ok('esquema migrat/creat a _version 2.0', mm._version === '2.0', mm._version);
+    ok('analysis.escaleta.itemsBloc 4 ítems', !!(mm.analysis && mm.analysis.escaleta && mm.analysis.escaleta.itemsBloc.length === 4),
+        mm.analysis && mm.analysis.escaleta ? mm.analysis.escaleta.itemsBloc.length : 'n/a');
+    ok('analysis.meta.phases.escaleta = true', !!(mm.analysis && mm.analysis.meta && mm.analysis.meta.phases.escaleta === true));
+    ok('no-ASCII sobreviu al pont JSX (titol CRONICA)',
+        !!(mm.analysis && mm.analysis.escaleta && mm.analysis.escaleta.itemsBloc[1].titol === 'CR\u00d2NICA'),
+        mm.analysis && mm.analysis.escaleta ? JSON.stringify(mm.analysis.escaleta.itemsBloc[1].titol) : 'n/a');
+    ok('contextItems/trimBounds desats',
+        !!(mm.analysis.escaleta.itemsContexte.prevVideoItem.num === 'M1' && mm.analysis.escaleta.trimBounds.outSec === 99));
+
+    var mirrorObj = null;
+    try { mirrorObj = JSON.parse(FILES[MIRROR] || 'null'); } catch (eM) { mirrorObj = null; }
+    ok('mirall = copia exacta de manifest.analysis (pretty-print sobreviu)',
+        !!mirrorObj && JSON.stringify(mirrorObj) === JSON.stringify(mm.analysis),
+        mirrorObj ? 'claus: ' + Object.keys(mirrorObj).join(',') : 'mirall illegible');
+
+
+
+    // ── 6. FASES crudo/cocinado (merge profund de sub-dades) ──────────────
+    ph('6-phases');
+    await AN.appendPhase(ctx, 'crudo', {
+        inout: { '00': { inSec: 1, outSec: 5 } },
+        marks: [ { num: '00', inSec: 2, outSec: 8, color: 4 } ]
+    });
+    await AN.appendPhase(ctx, 'crudo', { marks: [ { num: '01', inTc: '20:01:10:00', outTc: '20:01:20:00' } ] });
+    await AN.appendPhase(ctx, 'cocinado', { marks: { list: [ { num: '02DP', inTc: '00:20:01:00', color: 6 } ] } });
+    mm = (SM._cache[MPATH] || {});
+    ok('crudo.inout de la 1a crida preservat pel merge', mm.analysis.crudo.inout['00'].outSec === 5);
+    ok('crudo.marks es LLISTA -> la 2a crida la substitueix (no barreja)',
+        mm.analysis.crudo.marks.length === 1 && mm.analysis.crudo.marks[0].num === '01',
+        JSON.stringify(mm.analysis.crudo.marks.map(function (r) { return r.num; })));
+    ok('cocinado.marks.list acceptat (forma {list:[]})', mm.analysis.cocinado.marks.list.length === 1);
+
+    // ── 7. VISTA MESTRA (structure.items) ─────────────────────────────────
+    ph('7-structure');
+    var st = mm.structure;
+    ok('structure.count = 4 items', st.count === 4, String(st.count));
+    ok('structure.source (markers/clipsV1/chyronsPlaced/graphics/escaletaItems)',
+        st.source.markers === 2 && st.source.clipsV1 === 4 && st.source.chyronsPlaced === 2 &&
+        st.source.graphics === 2 && st.source.escaletaItems === 4, JSON.stringify(st.source));
+    ok('structure.source.itemsFrom = mirall-analisi (sense master encara)',
+        st.source.itemsFrom === 'mirall-analisi', String(st.source.itemsFrom));
+
+    var i0 = st.items[0], i1 = st.items[1], i2 = st.items[2], i3 = st.items[3];
+    ok('item 00 · classe ESTRUCTURAL / color VERMELL / ungrouped',
+        i0.classe === 'ESTRUCTURAL' && i0.colorIdx === 1 && i0.ungrouped === true,
+        [i0.classe, i0.colorIdx, i0.ungrouped].join('|'));
+    ok('item 00 · finestra onAir 72000->72022',
+        i0.window.source === 'onAir' && i0.window.inSec === 72000 && i0.window.outSec === 72022,
+        JSON.stringify(i0.window));
+    ok('item 00 · TC del MARCADOR (00:00:20:00)', i0.tc === '00:00:20:00' && i0.marker.timeSec === 20, i0.tc);
+    ok('item 00 · markerPrevist null (ja hi ha marcador)', i0.markerPrevist === null);
+    ok('item 00 · 1 clip dins la finestra (00_INICI)',
+        i0.clips.length === 1 && i0.clips[0].name === '00_INICI.mxf' && i0.clips[0].overlapSec === 22,
+        JSON.stringify(i0.clips.map(function (c) { return c.name; })));
+    ok('item 00 · 1 retol + 1 grafic', i0.chyrons.length === 1 && i0.graphics.length === 1,
+        i0.chyrons.length + '+' + i0.graphics.length);
+    ok('item 00 · marks.crudo BUID (la 2a crida del crudo SUBSTITUEIX la llista)',
+        !!(i0.marks && i0.marks.crudo === null),
+        JSON.stringify(i0.marks && i0.marks.crudo));
+    ok('item 00 · escaleta original dins la vista', !!(i0.escaleta && i0.escaleta.num === '00'));
+
+    ok('item 01 · finestra prevista 72060->72240 + color BLAU (agrupacio)',
+        i1.window.source === 'prevista' && i1.window.inSec === 72060 && i1.window.outSec === 72240 && i1.colorIdx === 6,
+        JSON.stringify(i1.window) + '|' + i1.colorIdx);
+    ok('item 01 · markerPrevist present (encara no hi ha marcador)',
+        !!(i1.marker === null && i1.markerPrevist && i1.markerPrevist.colorIdx === 6),
+        JSON.stringify(i1.markerPrevist && i1.markerPrevist.colorIdx));
+    ok('item 01 · 1 clip (01A_CRONICA)', i1.clips.length === 1 && i1.clips[0].name === '01A_CRONICA.mxf',
+        i1.clips.length + '');
+    ok('item 01 · marks.crudo normalitzat des de TC (inSec 72070 / durSec 10)',
+        !!(i1.marks.crudo && i1.marks.crudo.inSec === 72070 && i1.marks.crudo.durSec === 10),
+        JSON.stringify(i1.marks.crudo && [i1.marks.crudo.inSec, i1.marks.crudo.durSec]));
+
+    ok('item 02DP · finestra DEDUIDA encadenada (72240->72270)',
+        i2.window.source === 'deduida' && i2.window.inSec === 72240 && i2.window.outSec === 72270,
+        JSON.stringify(i2.window));
+    ok('item 02DP · classe IPD / color TURQUESA', i2.classe === 'IPD' && i2.isIpd === true && i2.colorIdx === 7,
+        [i2.classe, i2.colorIdx].join('|'));
+    ok('item 02DP · TC del marcador 1200,5 s (00:20:00:12)', i2.tc === '00:20:00:12', i2.tc);
+    ok('item 02DP · 1 clip dins la finestra deduida',
+        i2.clips.length === 1 && i2.clips[0].name === '02DP_IPD.mxf', i2.clips.length + '');
+    ok('item 02DP · marks.cocinado via {list:[]} + TC 1201',
+        !!(i2.marks.cocinado && i2.marks.cocinado.inSec === 1201), JSON.stringify(i2.marks.cocinado && i2.marks.cocinado.inSec));
+
+    ok('item 03 · classe GRAFIC / color GROC', i3.classe === 'GRAFIC' && i3.colorIdx === 4 && i3.ungrouped === false,
+        [i3.classe, i3.colorIdx].join('|'));
+    ok('item 03 · TC buit i markerPrevist null (sense hora ni marcador)',
+        i3.tc === '' && i3.markerPrevist === null && i3.marker === null);
+    ok('item 03 · finestra 72270->72270 -> cap clip', i3.window.inSec === 72270 && i3.clips.length === 0);
+    ok('item 03 · retol i grafic lligats pel NUM (fora de finestra)',
+        i3.chyrons.length === 1 && i3.graphics.length === 1, i3.chyrons.length + '+' + i3.graphics.length);
+
+    ok('findItem("02") resol el 02DP pels digits', (AC.findItem(mm, '02') || {}).num === '02DP');
+    ok('getItems() retorna el master d\'escaleta', SM.getItems(mm).length === 4);
+
+
+    // ── 8. markPhase + relectura del disc ────────────────────────────────
+    ph('8-markPhase+reload');
+    await AC.markPhase(ctx, 'markersPlaced');
+    mm = (SM._cache[MPATH] || {});
+    ok('phases.markersPlaced = true', mm.phases.markersPlaced === true);
+
+    SM._cache = {};                                  // obliga a rellegir del "disc"
+    var rr = await SM.load(ctx, true);
+    ok('recarrega del disc: _version 2.0 · 4 items (upstream mirall)',
+        rr._version === '2.0' && SM.getItems(rr).length === 4 && rr.structure.items.length === 4 &&
+        SM.getItemsSource(rr) === 'mirall-analisi',
+        rr._version + '/' + SM.getItems(rr).length + ' via ' + SM.getItemsSource(rr));
+    ok('recarrega: structure.items 4 + seccions preservades',
+        rr.structure.items.length === 4 && rr.markers.list.length === 2 &&
+        rr.chyrons.placed.length === 2 && rr.graphics.list.length === 2,
+        [rr.structure.items.length, rr.markers.list.length, rr.chyrons.placed.length, rr.graphics.list.length].join('|'));
+
+    // ── 9. MIGRACIO d'un manifest v1.0 (nomes escaleta) ──────────────────
+    ph('9-migracio');
+    var ctx1 = {
+        dateDir: '15_10_2026_TNV', bloque: 'V2',
+        progData: { archivo: 'TNV', wott: 'TNV', directorio: 'TNV_PROJECTES' },
+        config: { rutas: { destinoBase: 'C:/TMP/NAS/' } }
+    };
+    var p1 = SM.getPath(ctx1);
+    FILES[p1] = JSON.stringify({
+        _version: '1.0',
+        escaletaItems: [ { num: '05', titol: 'SUMARI', durada: '0:10', horaEntradaPrevista: '20:05:00' } ],
+        ref: { fps: 25 }
+    }, null, 2);
+    var old = await SM.load(ctx1, true);
+    ok('migracio v1.0 -> 2.0 sense perdre l\'escaleta',
+        old._version === '2.0' && old.escaletaItems.length === 1 && !!old.markers && !!old.structure, old._version);
+    var rebuilt = await SM.saveSection(ctx1, 'escaletaItems', old.escaletaItems, { reason: 'migracio' });
+    ok('saveSection() recompon structure (rebuild -> AnalysisCenter)',
+        rebuilt.structure.items.length === 1 && rebuilt.structure.items[0].window.source === 'prevista',
+        JSON.stringify(rebuilt.structure.items[0] && rebuilt.structure.items[0].window));
+    ok('upstream de l\'escaleta = master (escaletaItems desat)',
+        SM.getItemsSource(rebuilt) === 'master', String(SM.getItemsSource(rebuilt)));
+    ok('v1.0 heretat: seccions noves escrites al disc',
+        typeof FILES[p1] === 'string' && FILES[p1].indexOf('"markers"') > 0 && FILES[p1].indexOf('"structure"') > 0);
+
+    // ── 9b. La VISTA sempre es deriva de l'escaleta MARE (no de si mateixa) ──
+    // Regressió: `composeStructure` llegia `getItems()` (que prefereix la vista
+    // `structure`), per tant en reescriure el master (2n «Muntar») o desar el
+    // mirall de l'anàlisi, la vista es recompomava amb les dades VELLES.
+    var loopMan = {
+        _version: '2.0',
+        escaletaItems: [{ num: '01', titol: 'NOU', durada: '0:30', horaEntradaPrevista: '02:00:00' }],
+        structure: {
+            items: [{
+                escaleta: { num: '01', titol: 'VELL', durada: '0:30', horaEntradaPrevista: '01:00:00' },
+                window: { inSec: 3600, outSec: 3630, source: 'prevista' }
+            }],
+            count: 1
+        }
+    };
+    AC.rebuild(loopMan, { reason: 'regressio-realimentacio' });
+    ok('rebuild: la vista s\'ha de derivar del MASTER, no de la vista vella',
+        loopMan.structure.items[0].titol === 'NOU' && loopMan.structure.items[0].window.inSec === 7200,
+        loopMan.structure.items[0].titol + '@' + loopMan.structure.items[0].window.inSec);
+    ok('rebuild: l\'escaleta de la vista és el MATEIX objecte que el master',
+        loopMan.structure.items[0].escaleta === loopMan.escaletaItems[0]);
+    // Sense master ni mirall, la vista existent es recompon sobre si mateixa (idempotent)
+    var loopOnly = { _version: '2.0', structure: { items: [{ escaleta: { num: '04', durada: '0:10', horaEntradaPrevista: '03:00:00' } }], count: 1 } };
+    AC.rebuild(loopOnly, { reason: 'idempotent' });
+    ok('rebuild sense master: recompon des de la vista (idempotent, 1 item)',
+        loopOnly.structure.items.length === 1 && loopOnly.structure.items[0].window.inSec === 10800,
+        JSON.stringify(loopOnly.structure.items[0].window));
+
+    // ── 10. Mirall de text llegible ──────────────────────────────────────
+    ph('10-mirror-text');
+    var mt = AC.mirrorAllTxt(mm);
+    ok('mirrorAllTxt inclou marcadors + taula per item',
+        mt.indexOf('SNAPSHOT MARCADORS') === 0 && mt.indexOf('VISTA PER') > 0 && mt.indexOf('02DP') > 0,
+        mt.split('\n')[0]);
+
+    // ── 11. AssemblyContext (F6): accés unificat als ítems del manifest ──
+    ph('11-assembly-context');
+    var ASM = window.FASTPASS_UI.Core.AssemblyContext;
+    ok('AssemblyContext carregat amb el helper _itemsOf', !!(ASM && typeof ASM._itemsOf === 'function'));
+    ok('_itemsOf() delega a getItems() (vista structure, 4 items)',
+        ASM._itemsOf(mm).length === 4, String(ASM._itemsOf(mm).length));
+    var asmMasterFirst = { escaletaItems: [{ num: '07', agrupacio: 'V1' }], analysis: { escaleta: { itemsBloc: [{ num: '08' }] } } };
+    ok('_itemsOf(): el master «Muntar» mana sobre el mirall',
+        ASM._itemsOf(asmMasterFirst)[0].num === '07', ASM._itemsOf(asmMasterFirst)[0].num);
+    var asmStructFirst = { structure: { items: [{ escaleta: { num: '09' } }] }, escaletaItems: [{ num: '07' }] };
+    ok('_itemsOf(): la vista structure té prioritat sobre les dues fonts',
+        ASM._itemsOf(asmStructFirst)[0].num === '09', ASM._itemsOf(asmStructFirst)[0].num);
+    ok('_itemsOf(): manifest buit o null → [] (sense excepció)',
+        ASM._itemsOf(null).length === 0 && ASM._itemsOf({}).length === 0);
+    // El mirall d'anàlisi és el que fa que el context funcioni ABANS del «Muntar»
+    var asmMirrorOnly = { analysis: { escaleta: { itemsBloc: [{ num: '03', agrupacio: 'V1', flotant: false }] } } };
+    ok('_itemsOf(): sense master, llegeix el mirall d\'anàlisi (pre-Muntar)',
+        ASM._itemsOf(asmMirrorOnly).length === 1 && ASM._itemsOf(asmMirrorOnly)[0].num === '03');
+    ok('getItemsSource() distingeix el mirall del master',
+        SM.getItemsSource(asmMirrorOnly) === 'mirall-analisi' && SM.getItemsSource(asmMasterFirst) === 'master',
+        SM.getItemsSource(asmMirrorOnly) + '/' + SM.getItemsSource(asmMasterFirst));
+
+    // ── 12. flow_markers (F6): lectura unificada via itemsOf → getItems() ──
+    ph('12-flow-markers');
+    var FM = window.FASTPASS_UI.Workflows && window.FASTPASS_UI.Workflows.Markers;
+    ok('flow_markers carregat (Workflows.Markers)',
+        !!(FM && typeof FM._colorByNumFromManifest === 'function'));
+    // Manifest SENSE escaletaItems ni mirall: només la vista structure.
+    // Si quedés cap lectura directa de manifest.escaletaItems, sortiria buit.
+    var fmStructOnly = {
+        structure: {
+            items: [
+                { escaleta: { num: '05', titol: 'SUBMARI', agrupacio: 'v1' } },
+                { escaleta: { num: '06', titol: 'GF' } }
+            ]
+        }
+    };
+    var fmCols = FM._colorByNumFromManifest(fmStructOnly);
+    ok('_colorByNumFromManifest llegeix la VISTA structure (2 nums)',
+        Object.keys(fmCols).length === 2 && fmCols['05'] !== undefined && fmCols['06'] !== undefined,
+        JSON.stringify(fmCols));
+    var fmMirrorOnly = { analysis: { escaleta: { itemsBloc: [{ num: '07', agrupacio: 'v1' }] } } };
+    ok('_colorByNumFromManifest cau al mirall (pre-Muntar)',
+        Object.keys(FM._colorByNumFromManifest(fmMirrorOnly)).length === 1,
+        JSON.stringify(FM._colorByNumFromManifest(fmMirrorOnly)));
+    ok('_colorByNumFromManifest amb manifest buit → {} (sense excepció)',
+        Object.keys(FM._colorByNumFromManifest({})).length === 0 &&
+        Object.keys(FM._colorByNumFromManifest(null)).length === 0);
+
+    // ── 12b. F8·Separació (2026-10-27 · BUG #192): MAI dos marcadors superposats ──
+    // Regla imperativa d'usuari: si dos marcadors coincidixen, se separen uns segons
+    // i es deixen en ORDE D'ESCALETA. Cas real TNM_V1 26/10: F2 va fer «01dir»
+    // marcador d'inici a 00:00 i F7 hi va afegir «01 TE-1», «01 TD-1» i «01BT» al
+    // MATEIX 0,00 s (4 marcadors superposats, i 01dir és el 4t de l'escaleta).
+    ph('12b-f8-separacio');
+    ok('F8: separateOverlappingMarkers + _calcSeparacioSuperposats (GAP 3 s)',
+        !!(FM && typeof FM.separateOverlappingMarkers === 'function' &&
+           typeof FM._calcSeparacioSuperposats === 'function') && FM._GAP_SEPARACIO === 3,
+        typeof FM);
+    var f8Cluster = [
+        { prefix: '01dir', time: 0, seq: 28, comment: '01dir - conn MARTA MARTORELL', color: 6 },
+        { prefix: '02', time: 41.56, seq: 30, comment: '02 - +++IPD ALDARULLS', color: 7 },
+        { prefix: '01 TE-1', time: 0, seq: 25, comment: '01 TE-1 - TE ALDARULLS', color: 4 },
+        { prefix: '03', time: 67.92, seq: 31, comment: '03 - +++IPD VERTICALS', color: 7 },
+        { prefix: '01BT', time: 0, seq: 27, comment: '01BT - PG bona tarda', color: 6 },
+        { prefix: '01 TD-1', time: 0, seq: 26, comment: '01 TD-1 - TD ALDARULLS', color: 4 }
+    ];
+    var f8a = FM._calcSeparacioSuperposats(f8Cluster, { gap: 3, tol: 0.20 });
+    ok('F8: 4 marcadors a 0,00 s → se n\'hi mouen 3 (el 1r d\'escaleta es queda)',
+        f8a.length === 3, JSON.stringify(f8a));
+    ok('F8: ORDE D\'ESCALETA · 01 TD-1@3 · 01BT@6 · 01dir@9',
+        f8a.length === 3 && f8a[0].prefix === '01 TD-1' && f8a[0].timeSec === 3 &&
+        f8a[1].prefix === '01BT' && f8a[1].timeSec === 6 &&
+        f8a[2].prefix === '01dir' && f8a[2].timeSec === 9,
+        JSON.stringify(f8a.map(function (p) { return p.prefix + '@' + p.timeSec; })));
+    ok('F8: el primer de l\'escaleta (01 TE-1) es queda al 00:00',
+        !f8a.some(function (p) { return p.prefix === '01 TE-1'; }));
+    ok('F8: cap posició es repeteix (ni amb el marcador que es queda)',
+        (function () {
+            var ts = [0].concat(f8a.map(function (p) { return p.timeSec; }))
+                .sort(function (a, b) { return a - b; });
+            for (var i = 1; i < ts.length; i++) { if (ts[i] - ts[i - 1] < 0.5) return false; }
+            return true;
+        })(), JSON.stringify(f8a.map(function (p) { return p.timeSec; })));
+    ok('F8: marcadors ja separats (01dir/02 i 02/03) → cap canvi',
+        FM._calcSeparacioSuperposats([f8Cluster[0], f8Cluster[1]]).length === 0 &&
+        FM._calcSeparacioSuperposats([f8Cluster[1], f8Cluster[3]]).length === 0);
+    var f8Pinned = FM._calcSeparacioSuperposats([
+        { prefix: '010', time: 41.56, seq: 29, color: 6 },
+        { prefix: '02', time: 41.56, seq: 30, color: 7, pinned: true }
+    ], { gap: 3 });
+    ok('F8: el marcador amb OnAir NO es mou (l\'altre passa a +3 s)',
+        f8Pinned.length === 1 && f8Pinned[0].prefix === '010' && f8Pinned[0].timeSec === 44.56,
+        JSON.stringify(f8Pinned));
+    var f8Tight = FM._calcSeparacioSuperposats([
+        { prefix: 'A', time: 0, seq: 1, color: 6 },
+        { prefix: 'B', time: 0, seq: 2, color: 6 },
+        { prefix: 'C', time: 2, seq: 3, color: 6 }
+    ], { gap: 3 });
+    ok('F8: clúster amb poc espai → GAP reduït i 0,5 s de marge amb el següent',
+        f8Tight.length === 1 && f8Tight[0].prefix === 'B' && f8Tight[0].timeSec === 1.5,
+        JSON.stringify(f8Tight));
+    ok('F8: sense escaleta (seq null) o <2 marcadors → []',
+        FM._calcSeparacioSuperposats([{ prefix: 'X', time: 0 }, { prefix: 'Y', time: 0 }]).length === 0 &&
+        FM._calcSeparacioSuperposats([]).length === 0);
+
+    // ── 13. flow_mainButton (F6c): un sol helper per a la forma del master ──
+    ph('13-flow-mainbutton');
+    var MB = window.FASTPASS_UI.Workflows && window.FASTPASS_UI.Workflows.MainButton;
+    ok('flow_mainButton carregat (Workflows.MainButton) amb les 4 accions + _fullScan',
+        !!(MB && typeof MB._runNew === 'function' && typeof MB._runUpdate === 'function' &&
+           typeof MB._runLoad === 'function' && typeof MB._runGo === 'function' &&
+           typeof MB._fullScan === 'function'),
+        typeof MB);
+    ok('flow_mainButton: cap Error de sintaxi (mòdul definit sencer)',
+        !!(MB && MB.runMainAction && MB.runReset));
+
+
+    // ── 14. FAMÍLIES DE RÈTOLS: cap TRADUCCIÓ a les altres fases (TNC V3) ──
+    // Bug real (2026-10-15, TNC V3 bloc 14 «FAUNA ALIADA PER L'AGRICULTURA»):
+    // `placeChyronNom` filtrava amb `c.name.includes("Nom")` sobre el nom SENCER del
+    // fitxer, que inclou el TEXT del rètol → la traducció
+    // «…_644349_TRADUCCIO [2-3] Només n'existei…» (conté "Només") se la quedava la
+    // fase NOM: la col·locava a V7 (59.72→64.60) damunt del nom-càrrec legítim
+    // («Hobun Ikeya_director») i la traducció quedava DUPLICADA (V7 + V8).
+    ph('14-chyrons-families');
+    var CH = window.FASTPASS_UI.Workflows && window.FASTPASS_UI.Workflows.Chyrons;
+    ok('flow_chyrons carregat amb _isTraduccioWott (+ _isEnviatWott)',
+        !!(CH && typeof CH._isTraduccioWott === 'function' && typeof CH._isEnviatWott === 'function'));
+    var TRAD_TNC = {
+        name: "Wott_TNC_v3_14_00.59_FAUNA ALIADA PER L'AGRICULTURA_644349_TRADUCCIO [2-3] Només n'existei.00644934.mov",
+        rol: "TRADUCCIO [2-3] Només n'existei",
+        tc: "00.59"
+    };
+    var NOM_TNC = {
+        name: "Wott_TNC_v3_14_00.59_FAUNA ALIADA PER L'AGRICULTURA_599162_Nomcarrec_Hobun Ikeya_director.00644930.mov",
+        rol: "NOMCARREC",
+        tc: "00.59"
+    };
+    if (CH && typeof CH._isTraduccioWott === 'function') {
+        ok('_isTraduccioWott: cas real TNC V3 (rol TRADUCCIO sense accent)',
+            CH._isTraduccioWott(TRAD_TNC) === true);
+        ok('_isTraduccioWott: TOKEN «TRADUCCIÓ» amb accent al nom',
+            CH._isTraduccioWott({ name: 'Wott_TNV_14_00.59_PRG_644349_TRADUCCIÓ [2-3] Hola.006.mov', rol: '' }) === true);
+        ok('_isTraduccioWott: rol TRADUCCIÓ (13_Parse accentuat)',
+            CH._isTraduccioWott({ name: 'Wott_TNV_14_00.59_PRG_644349_TRADUCCIÓ [2-3] Hola.006.mov', rol: 'TRADUCCIÓ' }) === true);
+        ok('_isTraduccioWott: un nom-càrrec NO és traducció', CH._isTraduccioWott(NOM_TNC) === false);
+        ok('_isTraduccioWott: "traducció" dins d\'un token no compta',
+            CH._isTraduccioWott({ name: 'Wott_TNV_03_01.10_PRG_599170_Nomcarrec_Servei de traducció.006.mov', rol: 'NOMCARREC' }) === false);
+        ok('_isTraduccioWott: sense nom ni rol → false (sense excepció)',
+            CH._isTraduccioWott(null) === false && CH._isTraduccioWott({}) === false);
+    }
+    // Filtres REALS dels botons (mateixa expressió que al codi, amb la guarda):
+    // la traducció ha de quedar EXCLOSA de NOM/LLOC i només entrar a TRADUCCIÓ.
+    var filtreNom = function (c) {
+        return !CH._isTraduccioWott(c) &&
+            ((c.rol || '').toUpperCase() === "NOMCARREC" || c.name.includes("Nom") || c.name.includes("Carrec"));
+    };
+    var filtreLloc = function (c) {
+        return !CH._isTraduccioWott(c) &&
+            (c.name.includes("Lloc") || c.name.includes("Data") || (c.rol || '').toUpperCase() === "LLOCDATA");
+    };
+    ok('filtre NOM: la traducció de TNC V3 queda EXCLOSA (fix del duplicat a V7)', filtreNom(TRAD_TNC) === false);
+    ok('filtre NOM: el nom-càrrec legítim segueix capturat', filtreNom(NOM_TNC) === true);
+    ok('filtre LLOC: traducció amb "Lloc" al text queda EXCLOSA',
+        filtreLloc({ name: 'Wott_TNV_14_00.59_PRG_644349_TRADUCCIO [1-2] Lloc de treball.006.mov', rol: 'TRADUCCIO [1-2] Lloc de treball' }) === false);
+    ok('fase TRADUCCIÓ: la traducció sí que hi entra', CH._isTraduccioWott(TRAD_TNC) === true);
+
+    // ── 15. TN MIGDIA V1 (15/10/2026): marcador "01 PGi - PG Intro" ───────────
+    // El 1r marcador del bloc és l'ítem de PLATÓ que l'obre i porta un ESPAI entre el
+    // número i el sufix d'ítem. Amb la regex antiga (`/^\d+[a-z]{0,5}\s*-\s*.+$/`, i
+    // `{0,3}` a dues fases) quedava FORA dels marcadors estructurals:
+    //   (a) el Tema-Títol gran del ítem "01 PGi" queia al respatller per BASE i
+    //       s'anclava al marcador de l'ALTRE ítem ("01" @32.32s) → 32 s tard;
+    //   (b) el Conductor no trobava cap marcador de plató → s'ometia.
+    // I el congelat de cobertura s'estirava fins a `zoneEnd`, 6 frames DAMUNT de la
+    // peça de sortida (32.08→32.32) → la desaparició no es veia a pantalla.
+    ph('15-tnm-marcador-pgi');
+    if (CH && typeof CH._isStructuralMarkerComment === 'function') {
+        ok('_isStructuralMarkerComment: "01 PGi - PG Intro" (TNM V1) SÍ és estructural',
+            CH._isStructuralMarkerComment('01 PGi - PG Intro') === true);
+        ok('_isStructuralMarkerComment: "01 - PENSIONS ENTREN EN PRECAMPANYA" segueix estructural',
+            CH._isStructuralMarkerComment('01 - PENSIONS ENTREN EN PRECAMPANYA') === true);
+        ok('_isStructuralMarkerComment: "01lead - INTRO" (TNV 29/09) segueix estructural',
+            CH._isStructuralMarkerComment('01lead - INTRO') === true);
+        ok('_isStructuralMarkerComment: comentari sense guió → false',
+            CH._isStructuralMarkerComment('Línia Escaleta') === false);
+        ok('_isStructuralMarkerComment: buit/null → false (sense excepció)',
+            CH._isStructuralMarkerComment('') === false && CH._isStructuralMarkerComment(null) === false);
+    } else {
+        ok('_isStructuralMarkerComment exposat al mòdul', false, typeof (CH && CH._isStructuralMarkerComment));
+    }
+    // El filtre ha de ser el MATEIX a les dues fases (flow_markers el consulta al
+    // mòdul de chyrons en temps de crida; aquí flow_markers ja s'ha carregat abans).
+    ok('flow_markers delega el MATEIX filtre (Markers._isStructuralMarkerComment)',
+        !!(FM && typeof FM._isStructuralMarkerComment === 'function') &&
+        FM._isStructuralMarkerComment('01 PGi - PG Intro') === true &&
+        FM._isStructuralMarkerComment('Línia Escaleta') === false);
+    ok('_isPresenterTitle: "PG Intro" (pla general + INTRO) és plató',
+        CH._isPresenterTitle('PG Intro') === true);
+    ok('_isPresenterTitle: "Intro" i "OFF…" segueixen sent plató',
+        CH._isPresenterTitle('Intro') === true && CH._isPresenterTitle('Off presentadora') === true);
+    ok('_isPresenterTitle: ítem de vídeo NO és plató (PENSIONS…)',
+        CH._isPresenterTitle('PENSIONS ENTREN EN PRECAMPANYA') === false);
+    ok('_isPresenterTitle: "PG" sol (sense token després) → false',
+        CH._isPresenterTitle('PG') === false);
+    ok('_isPresenterLine: la línia "01 PGi / PG Intro" de l\'escaleta és plató',
+        CH._isPresenterLine({ num: '01 PGi', titol: 'PG Intro' }) === true);
+    ok('_isPresenterLine: la línia "01" (vídeo, font BVC) NO és plató',
+        CH._isPresenterLine({ num: '01', titol: 'PENSIONS ENTREN EN PRECAMPANYA', tipus: 'NORMAL', font: 'BVC' }) === false);
+    // Congelat vs sortida (TNM V1): encadenats 1.36→32.08 + 32.08→32.32, mai encavalcats.
+    ok('_coberturaFreezeEnd: amb la sortida col·locada el congelat acaba al seu IN',
+        CH._coberturaFreezeEnd(32.32, 32.08, true) === 32.08);
+    ok('_coberturaFreezeEnd: sense sortida el congelat arriba a zoneEnd',
+        CH._coberturaFreezeEnd(32.32, 32.08, false) === 32.32);
+    ok('_coberturaFreezeEnd: exitStart no finit → zoneEnd',
+        CH._coberturaFreezeEnd(4.8, NaN, true) === 4.8);
+    // (2026-10-16 · #166) CADENA amb l'ancoratge REAL: `reverseStart` es deriva de `zoneEnd`
+    // (IN del gran) i el congelat acaba EXACTAMENT aquí → ni solapament ni forat. Amb
+    // l'ancoratge vell (`endZone` = marcador) i el congelat ja encadenat, el tram
+    // `endZone → zoneEnd` quedava descobert quan el marcador anava abans del gran.
+    var FR25 = 1 / 25, exitDur6 = 6 * FR25;               // peça de desaparició = 6 frames
+    var zoneEndT = 32.32;                                  // IN del gran (marcador) — V6 mesurat
+    var revStartT = Math.ceil((zoneEndT - exitDur6) / FR25 - 1e-6) * FR25;
+    ok('cadena congelat→sortida→gran: reverseStart deriva de zoneEnd i el congelat hi acaba',
+        Math.abs(revStartT - (zoneEndT - exitDur6)) < 1e-9 &&
+        CH._coberturaFreezeEnd(zoneEndT, revStartT, true) === revStartT);
+
+    // ── Guarda de regressió: cap WARN/ERROR silenciós dels mòduls ─────────
+    var warns = window.__LOG.filter(function (l) { return /WARN|ERROR/.test(l); });
+    ok('cap WARN/ERROR dels mòduls al llarg del flux', warns.length === 0, warns.slice(0, 3).join(' | '));
+};

@@ -391,7 +391,14 @@
         // _classifyItems(lines)
         // Classifica les línies d'escaleta en 4 categories.
         // ═══════════════════════════════════════════════════════════════
-        _classifyItems: function (lines) {
+        /**
+         * @param {Array} lines - línies d'escaleta del bloc
+         * @param {Object} [opts] - `{ matBoundsSec: { startSec, endSec } }`: límits del
+         *        MATERIAL importat en segons absoluts del món. Si es passa, un ítem
+         *        SENSE OnAir la hora del qual cau FORA del material passa a
+         *        `unplacedItems` (BUG #193·R6). Sense `opts`, comportament històric.
+         */
+        _classifyItems: function (lines, opts) {
             const parseDurada = (str) => {
                 if (!str || str === "0:00") return 0;
                 const parts = str.split(':').map(Number);
@@ -411,6 +418,24 @@
             };
 
             const getRawDuradaSec = (line) => parseDurada(line.durada || '0:00');
+
+            // (2026-10-27 · BUG #193·R6) TC "HH:MM:SS" (o "HH:MM:SS:FF") → segons.
+            // Serveix per comparar la hora de l'ítem amb els límits del MATERIAL
+            // (`opts.matBoundsSec`), que vénen en segons absoluts del món.
+            const tcSec = (str) => {
+                if (!str) return null;
+                const p = String(str).trim().split(':').map(Number);
+                if (!p.length || p.some((n) => isNaN(n))) return null;
+                if (p.length === 4) return p[0] * 3600 + p[1] * 60 + p[2] + p[3] / 25;
+                if (p.length === 3) return p[0] * 3600 + p[1] * 60 + p[2];
+                if (p.length === 2) return p[0] * 60 + p[1];
+                return null;
+            };
+
+            /** OnAir DUR (> 00:00:00): l'única hora que no es pot descartar mai. */
+            const hasOnAirSec = (line) => !!(line.horaEntradaOnAir
+                && line.horaEntradaOnAir !== '00:00:00'
+                && String(line.horaEntradaOnAir).trim() !== '');
 
             // (2026-10-14 · BUG #156b) El set d'estructurals forçats viu al MÒDUL
             // (FORCED_STRUCTURAL_SUFFIXES) i el sufix es compara NORMALITZAT (_normSuffix,
@@ -444,6 +469,46 @@
                     continue;
                 }
                 const horaRef = line.horaEntradaOnAir || line.horaEntradaPrevista;
+                // (2026-10-27 · #193) El SUFIX de gràfic MANA sobre «sense hora»: els gràfics
+                // de capçalera (01 TE-1, 01 TD-1…) poden vindre SENSE cap hora perquè el
+                // sanejat d'escaleta_bounds els anul·la la Prevista. ABANS queien a
+                // `unplacedItems`, on F2 els podia triar com a marcador d'inici i F5 els
+                // inferia com si foren estructura → quatre marcadors a 0,00 s (TNM_V1 26/10).
+                if (isGraphicByNum(line.num)) {
+                    graphicItems.push(line);
+                    log(`   📌 [D9b·GRAFIC] ${line.num}: sufix gràfic → Fase 3` +
+                        ((!horaRef || horaRef === "00:00:00") ? ' (sense hora)' : ''));
+                    continue;
+                }
+                // (2026-10-27 · BUG #193·R6) HORA FORA DEL MATERIAL: una Prevista que cau
+                // ABANS de l'inici del clip importat (o després del final) no pot situar cap
+                // marcador. Cas real TNM_V1 27/10: `01dir` té Prevista 14:32:14, però el clip
+                // comença a 14:32:22,9 → F2 calculava −8,92 s, ho clavava a 00:00 (clamp) i
+                // F8 ho separava a 00:00:03:00 (GAP 3 s) → marcador de la CONEXIÓ al minut 0.
+                // Aquella hora és inservible: l'ítem passa a "sense hora" i el deduirà F5 amb
+                // el material (cadena de durades R4 + corts). L'OnAir mai no es descarta.
+                if (opts && opts.matBoundsSec && horaRef && horaRef !== "00:00:00" && !hasOnAirSec(line)) {
+                    const mb = opts.matBoundsSec;
+                    const hrSec = tcSec(horaRef);
+                    const startSec = Number(mb.startSec);
+                    const endSec = (mb.endSec === null || mb.endSec === undefined) ? null : Number(mb.endSec);
+                    const fora = (hrSec !== null) && (
+                        (isFinite(startSec) && hrSec < startSec - 0.5) ||
+                        (endSec !== null && isFinite(endSec) && hrSec > endSec + 0.5)
+                    );
+                    if (fora) {
+                        line._foraMaterial = true;
+                        if (line.agrupacio && line.flotant !== true) {
+                            unplacedItems.push(line);
+                            log(`   🚫 [FORA-MATERIAL] ${line.num}: hora ${horaRef} (${hrSec.toFixed(2)}s) cau fora del material (` +
+                                `${isFinite(startSec) ? startSec.toFixed(2) : '?'}s → ${endSec !== null ? endSec.toFixed(2) : '?'}s) → ` +
+                                `hora descartada, es deduirà del material (F5)`);
+                        } else {
+                            log(`   ⏭️ [SKIP] ${line.num}: hora fora del material i sense agrupació → ignorat`);
+                        }
+                        continue;
+                    }
+                }
                 if (!horaRef || horaRef === "00:00:00") {
                     if (line.agrupacio && line.flotant !== true) {
                         unplacedItems.push(line);
@@ -703,6 +768,34 @@
                 clipStart: clipStart,
                 clipInPoint: clipInPoint
             };
+        },
+
+        /**
+         * _matBoundsSec: (2026-10-27 · BUG #193·R6) Límits del MATERIAL importat expressats
+         * en SEGONS ABSOLUTS DEL MÓN, per poder comparar-los amb les hores d'escaleta.
+         *
+         * El temps 0 del timeline correspon a l'instant del món
+         * `anchorEfectiva − anchorEfTimelineSec` (de `pos = anchorEfTL + (t − anchorEfectiva)`).
+         * En TNM_V1 27/10: 52384 − 41,08 = **52342,92 s** (14:32:22,9) — el clip NO comença
+         * al `worldBlockAnchorSec` (52333) sinó ~10 s després (in-point del clip extret).
+         * Qualsevol hora per davall d'este valor cau fora del material.
+         *
+         * @param {Object} anchors - de `_calcTemporalAnchors`
+         * @param {Array} clips - clips de V1 [{start,end}] en segons de timeline
+         * @returns {{startSec:number, endSec:number|null}|null}
+         */
+        _matBoundsSec: function (anchors, clips) {
+            if (!anchors) return null;
+            var aef = Number(anchors.anchorEfectiva);
+            var aefTL = Number(anchors.anchorEfTimelineSec);
+            if (!isFinite(aef) || !isFinite(aefTL)) return null;
+            var startSec = aef - aefTL;
+            var endSec = null;
+            if (clips && clips.length) {
+                var c0 = Number(clips[0].start), cN = Number(clips[clips.length - 1].end);
+                if (isFinite(c0) && isFinite(cN) && cN > c0) endSec = startSec + (cN - c0);
+            }
+            return { startSec: startSec, endSec: endSec };
         },
 
         // ═══════════════════════════════════════════════════════════════
@@ -1225,9 +1318,11 @@
          * @param {Array} [ungroupedItems] - ítems NO agrupats dins el bloc (ctxData.ungroupedItems)
          * @param {Function} horaRefSec - (item) → segons de referència | null
          * @param {Array} [graphicItems] - de `_classifyItems` (per excloure gràfics mal classificats)
+         * @param {Array} [unplacedItems] - de `_classifyItems`: ítems del bloc SENSE hora (2026-10-27 ·
+         *        #193: la capçalera `01BT` viu ací i fins ara no era mai candidata)
          * @returns {Object|null} { item, num }
          */
-        _pickStartItem: function (structuralItems, ungroupedItems, horaRefSec, graphicItems) {
+        _pickStartItem: function (structuralItems, ungroupedItems, horaRefSec, graphicItems, unplacedItems) {
             // (2026-09-25, unificat 2026-10-14) El marcador d'INICI NO pot caure mai en un GRÀFIC
             // (P2/GF/MAPA/TE…): als gràfics els toca la seva pròpia capa. TNC V2: «04 P2-2» va
             // sortir classificat com a estructural i s'enduia el 🔒 d'inici (queixa d'usuari).
@@ -1235,9 +1330,27 @@
             for (var gi = 0; gi < ((graphicItems || []).length); gi++) {
                 grafNums[String((graphicItems[gi] || {}).num || '').trim().toLowerCase()] = true;
             }
+            // (2026-10-27 · #193) CANDIDATS = estructurals AMB hora + estructurals SENSE hora del
+            // bloc (`unplacedItems`), ordenats per `sequencia` (escaleta). ABANS només es miraven
+            // els que tenien hora: `01BT` (capçalera sense hora) no era candidata i el 🔒 d'inici
+            // requeia en `01dir` (seq 28) → `01dir` acabava a 00:00 en lloc de 34,50 s (TNM_V1 26/10).
+            var cands = [], vistCand = {};
+            var _afegirCand = function (it) {
+                if (!it || !it.num) return;
+                var kk = String(it.num).trim().toLowerCase();
+                if (vistCand[kk]) return;
+                vistCand[kk] = true; cands.push(it);
+            };
+            for (var c1 = 0; c1 < ((structuralItems || []).length); c1++) _afegirCand(structuralItems[c1]);
+            for (var c2 = 0; c2 < ((unplacedItems || []).length); c2++) _afegirCand(unplacedItems[c2]);
+            cands.sort(function (a, b) {
+                var sa = (a && a.sequencia != null && isFinite(Number(a.sequencia))) ? Number(a.sequencia) : Number.MAX_SAFE_INTEGER;
+                var sb = (b && b.sequencia != null && isFinite(Number(b.sequencia))) ? Number(b.sequencia) : Number.MAX_SAFE_INTEGER;
+                return (sa === sb) ? 0 : (sa - sb);
+            });
             var pick = null, pickSec = null;
-            for (var si = 0; si < ((structuralItems || []).length); si++) {
-                var cand = structuralItems[si];
+            for (var si = 0; si < cands.length; si++) {
+                var cand = cands[si];
                 if (!cand || !cand.num) continue;
                 var cn = String(cand.num).trim();
                 if (grafNums[cn.toLowerCase()] === true || cn.toUpperCase().indexOf('P2') !== -1) {
@@ -1322,7 +1435,7 @@
             // mateixa que CAPA0): "estructural" = classificació de `_classifyItems`, NO
             // `isItemEstructural` (durada > 0) → la capçalera d'un bloc pot ser un 'off' 0:00.
             var _horaRefF2 = function (it) { return this._horaRefSec(it, reader); }.bind(this);
-            var startPick = this._pickStartItem(structuralItems, ungroupedItems, _horaRefF2, classData.graphicItems);
+            var startPick = this._pickStartItem(structuralItems, ungroupedItems, _horaRefF2, classData.graphicItems, classData.unplacedItems);
             var startItem = startPick ? startPick.item : null;
             var placedByStart = {};
             if (startPick) {
@@ -1507,7 +1620,7 @@
             // (2026-10-14 · BUG #156b) Qui és l'ÍTEM D'INICI del bloc (regla única, vegeu
             // `_pickStartItem`): NOMÉS el seu marcador a 00:00 és intocable per F3.
             var _horaRefF3 = function (it) { return this._horaRefSec(it, reader); }.bind(this);
-            var _startPickF3 = this._pickStartItem(structuralItems, ungroupedItems, _horaRefF3, classData.graphicItems);
+            var _startPickF3 = this._pickStartItem(structuralItems, ungroupedItems, _horaRefF3, classData.graphicItems, classData.unplacedItems);
             var startNumF3 = _startPickF3 ? _startPickF3.num : null;
 
             for (var si = 0; si < structuralItems.length; si++) {
@@ -2328,7 +2441,7 @@
             // la MATEIXA regla que fan servir F2 i F3 (BUG #156b) — perquè el 🔒 de les 00:00
             // no depengui de quina fase l'ha col·locat.
             const _horaRef0 = function (it) { return this._horaRefSec(it, ctxData.reader); }.bind(this);
-            const _start0 = this._pickStartItem(classData.structuralItems, ctxData.ungroupedItems, _horaRef0, classData.graphicItems);
+            const _start0 = this._pickStartItem(classData.structuralItems, ctxData.ungroupedItems, _horaRef0, classData.graphicItems, classData.unplacedItems);
             const first = _start0 ? _start0.item : null;
             if (first) {
                 const pfx = String(first.num || '').trim();
@@ -2642,15 +2755,93 @@
         //   C) Últim recurs: punt mig de la finestra (amb avís al log).
         // MAI es col·loca a menys de 0,5 s d'un marcador veí (no xoca amb F1-F4).
         // ═══════════════════════════════════════════════════════════════
+        /**
+         * _hiFinestraInferida: (2026-10-27 · #193) SOSTRE de la finestra d'inferència de F5.
+         *
+         * Si «anterior» i «següent» resolen al MATEIX marcador (num repetit a l'escaleta o
+         * prefix compartit), la finestra no pot ser `[x → x]`: s'obri fins al final del bloc.
+         * Sense això, `hi - lo < 1,0` i l'ítem s'apilava a 0,00 s (TNM_V1 26/10).
+         * Funció PURA (sense JSX) perquè el smoke la puga provar.
+         *
+         * @param {string|null} prevNum - num del veí anterior JA col·locat
+         * @param {string|null} nextNum - num del veí següent JA col·locat
+         * @param {number|null} nextTime - TC del veí següent (s)
+         * @param {number} blockEnd - final del bloc a V1 (s)
+         * @returns {{hi:number, nextNum:string|null, degenerada:boolean}}
+         */
+        _hiFinestraInferida: function (prevNum, nextNum, nextTime, blockEnd) {
+            var hiFinal = (typeof blockEnd === 'number' && isFinite(blockEnd)) ? blockEnd : 0;
+            var degenerada = (prevNum !== null && prevNum !== undefined &&
+                             nextNum !== null && nextNum !== undefined &&
+                             String(prevNum) === String(nextNum));
+            if (degenerada) return { hi: hiFinal, nextNum: null, degenerada: true };
+            var hi = (nextTime !== null && nextTime !== undefined && isFinite(Number(nextTime)))
+                ? Number(nextTime) : hiFinal;
+            return { hi: hi, nextNum: (nextNum === undefined ? null : nextNum), degenerada: false };
+        },
+
+        /**
+         * _cadenaDuradesSec: (2026-10-27 · #193) Posició deduïda per la CADENA DE DURADES
+         * d'escaleta (criteri D de F5): últim veí amb marcador + suma de les durades dels
+         * ítems que el precedixen (del veí inclòs fins a `idx - 1`). Un ítem comença on
+         * acaba el temps del que el precedix.
+         *
+         * Cas real TNM_V1 26/10: `01BT@0` (durada 33 s) → `01dir` = 0 + 33 = 33 s.
+         * Funció PURA (sense JSX) perquè el smoke la puga provar.
+         *
+         * @param {Array} ordered - ítems en ORDE D'ESCALETA
+         * @param {Object} orderIdx - num → índex dins `ordered`
+         * @param {string|null} prevNum - num del veí anterior JA col·locat
+         * @param {number} idx - índex de l'ítem a situar dins `ordered`
+         * @param {number|null} prevTime - TC del veí anterior (s)
+         * @param {Function} duradaSec - (item) → segons de durada efectiva
+         * @returns {{time:number, acum:number}|null} null si no es pot encadenar
+         */
+        _cadenaDuradesSec: function (ordered, orderIdx, prevNum, idx, prevTime, duradaSec) {
+            if (prevNum === null || prevNum === undefined) return null;
+            if (prevTime === null || prevTime === undefined || !isFinite(Number(prevTime))) return null;
+            if (idx === null || idx === undefined || !isFinite(Number(idx)) || Number(idx) < 1) return null;
+            var pIdx = (orderIdx && orderIdx[String(prevNum)] !== undefined) ? Number(orderIdx[String(prevNum)]) : -1;
+            if (pIdx < 0 || pIdx >= Number(idx)) return null;
+            var acum = 0;
+            for (var q = pIdx; q < Number(idx); q++) {
+                var it = (ordered && ordered[q]) ? ordered[q] : null;
+                var d = (typeof duradaSec === 'function' && it) ? Number(duradaSec(it)) : 0;
+                if (isFinite(d) && d > 0) acum += d;
+            }
+            if (acum <= 0) return null;
+            return { time: Number(prevTime) + acum, acum: acum };
+        },
+
         placeInferredItems: async function () {
             log('🔎 [F5·Inferits] Iniciant deducció d\'ítems d\'escaleta sense hora...');
 
             const ctxData = await getAssemblyContext().loadAssemblyContext();
             if (!ctxData) { log('⚠️ [F5·Inferits] loadAssemblyContext ha fallat. Abortant.'); return 0; }
-            const { lines, clips } = ctxData;
+            const { manifest, reader, lines, clips } = ctxData;
             if (!clips || clips.length === 0) { log('⚠️ [F5·Inferits] Sense clips a V1.'); return 0; }
 
-            const classData = this._classifyItems(lines);
+            // (2026-10-27 · BUG #193·R6) Un ítem amb hora (Prevista) que cau FORA del material
+            // no pot rebre marcador per aquella hora: F2 el clavava a 00:00 (clamp) i F8 el
+            // separava 3 s (01dir → 00:00:03:00). Ací es reclasifica amb els límits del
+            // material perquè es deduïsca del PROPI material (cadena de durades R4 + corts).
+            let classData = this._classifyItems(lines);
+            try {
+                const _anchF5 = this._calcTemporalAnchors(manifest, reader, classData.structuralItems, clips);
+                const _matB = this._matBoundsSec(_anchF5, clips);
+                if (_matB) {
+                    const _cdMat = this._classifyItems(lines, { matBoundsSec: _matB });
+                    const _afegits = _cdMat.unplacedItems.length - classData.unplacedItems.length;
+                    if (_afegits > 0) {
+                        log('   🚫 [F5·Inferits] ' + _afegits + ' ítem(s) amb hora FORA del material (' +
+                            _matB.startSec.toFixed(2) + 's → ' +
+                            (_matB.endSec !== null ? _matB.endSec.toFixed(2) : '?') + 's) → es deduiran del material');
+                    }
+                    classData = _cdMat;
+                }
+            } catch (eMat) {
+                log('⚠️ [F5·Inferits] Límits del material no resolts: ' + eMat.message, 'WARN');
+            }
             const unplacedItems = classData.unplacedItems || [];
             if (unplacedItems.length === 0) {
                 log('🔎 [F5·Inferits] Cap ítem sense hora. ✓ FINALITZAT.');
@@ -2695,7 +2886,7 @@
             var inferits = 0;
 
             // (2026-10-14 · BUG #156b) GUARDA DEL MARCADOR D'INICI (forat documentat a
-            // features.json, acord 30/09 «F5 és l'única fase sense guarda»): `placeByPrefixes`
+            // BUGS.md, acord 30/09 «F5 és l'única fase sense guarda»): `placeByPrefixes`
             // fa UPSERT per PREFIX → deduir un ítem que sosté el 00:00 ESBORRAVA el marcador
             // d'inici i el recreava a mig bloc (cas real '01dp'). Es detecta pel prefix
             // d'inici publicat per F2 (`_iniciPrefix`) o per un marcador existent a ≤0,15 s.
@@ -2722,9 +2913,17 @@
                     log('   ⏭️ [F5·Inferits] ' + num + ': és el marcador d\'inici (00:00) → no es toca.');
                     continue;
                 }
-                if (posByPrefix[num] !== undefined && posByPrefix[num] <= 0.15) {
+                // (2026-10-27 · BUG #193·R6) EXCEPCIÓ: si la hora de l'ítem cau FORA del
+                // material, eixe marcador a ~0,00 s és un RESIDU d'haver-s'hi clavat (clamp de
+                // F2 + GAP de F8) i SÍ que s'ha de reubicar amb el material. El marcador
+                // d'INICI seguix protegit per les guardes de més amunt.
+                const _residuForaMat = (line._foraMaterial === true);
+                if (posByPrefix[num] !== undefined && posByPrefix[num] <= 0.15 && !_residuForaMat) {
                     log('   ⏭️ [F5·Inferits] ' + num + ': ja té marcador a ' + Number(posByPrefix[num]).toFixed(2) + 's (inici del bloc) → no es toca.');
                     continue;
+                }
+                if (_residuForaMat && posByPrefix[num] !== undefined && posByPrefix[num] <= 0.15) {
+                    log('   🔓 [F5·Inferits] ' + num + ': marcador a ' + Number(posByPrefix[num]).toFixed(2) + 's però la seua hora cau FORA del material → es reubica.');
                 }
                 if (this._frozen && this._frozen[num.toLowerCase()] === true) {
                     log('   ⏭️ [F5·Inferits] ' + num + ': marcador congelat per una capa anterior → no es toca.');
@@ -2749,7 +2948,14 @@
                 // 0,00 s) i, en comptar com a veí, s'hi aplica el marge de 0,5 s → cap ítem
                 // inferit pot quedar enganxat al marcador d'inici.
                 if (prevNum === null && iniciTime !== null && lo <= iniciTime + 0.05) { lo = iniciTime; prevNum = iniciPfx; }
-                var hi = (nextTime !== null) ? nextTime : clips[clips.length - 1].end;
+                // (2026-10-27 · #193) Finestra: si «anterior» i «següent» són el MATEIX marcador,
+                // no pot ser [x → x] → s'obri fins al final del bloc (`_hiFinestraInferida`).
+                var _hiInf = this._hiFinestraInferida(prevNum, nextNum, nextTime, clips[clips.length - 1].end);
+                if (_hiInf.degenerada) {
+                    log('   ⚠️ [F5·Inferits] ' + num + ': veí anterior = veí següent (' + prevNum + ') → finestra oberta fins al final del bloc');
+                }
+                var hi = _hiInf.hi;
+                nextNum = _hiInf.nextNum;
                 log('   🔎 [F5·Inferits] ' + num + ': finestra [' + (prevNum || '—') + '@' + lo.toFixed(2) + 's → ' + (nextNum || '—') + '@' + hi.toFixed(2) + 's]');
                 if (hi - lo < 1.0) {
                     log('   ⚠️ [F5·Inferits] ' + num + ': finestra massa estreta → saltant.', 'WARN');
@@ -2761,9 +2967,24 @@
                 if (uHi < uLo) uHi = uLo;
 
                 // Criteri A: ruptura de densitat (inici de peça editada)
-                var candA = this._pickInferredByDensity(dens, densFine, uLo, uHi, hi);
                 var tCand = null, why = '';
-                if (candA) { tCand = candA.time; why = candA.why; }
+
+                // (2026-10-27 · BUG #193·R6) Si la hora de l'ítem s'ha DESCRTAT per caure
+                // fora del material, l'única regla d'escaleta que queda és la CADENA DE
+                // DURADES: mana sobre la densitat (una CONEXIÓ no comença amb una ruptura
+                // LOW→HIGH, que és el patró dels IPD). L'imant al corte de baix l'afina.
+                if (line._foraMaterial === true) {
+                    const _cadR6 = this._cadenaDuradesSec(ordered, orderIdx, prevNum, idx, prevTime, classData.getEffectiveDuradaSec);
+                    if (_cadR6 && _cadR6.time > uLo - 2.5 && _cadR6.time < uHi + 2.5) {
+                        tCand = _cadR6.time;
+                        why = 'cadena de durades d\'escaleta (+' + _cadR6.acum.toFixed(2) + 's des de ' + prevNum + ') · hora fora del material';
+                    }
+                }
+
+                if (tCand === null) {
+                    var candA = this._pickInferredByDensity(dens, densFine, uLo, uHi, hi);
+                    if (candA) { tCand = candA.time; why = candA.why; }
+                }
 
                 // Criteri B: peça única / clip amb durada outlier dins la finestra
                 // (s'hi passa la finestra SENCERA: la peça pot començar just al límit
@@ -2773,11 +2994,38 @@
                     if (candB) { tCand = candB.time; why = candB.why; }
                 }
 
+                // Criteri D (2026-10-27 · #193): CADENA DE DURADES d'escaleta. Quan ni la densitat
+                // ni la durada outlier diuen res, la posició més fiable és l'últim veí amb
+                // marcador + la suma de durades dels ítems d'escaleta ANTERIORS a este (del veí
+                // inclòs cap ací): un ítem comença on acaba el temps del que el precedix.
+                // Cas real TNM_V1 26/10: `01BT@0` (durada 33 s) → `01dir` = 0 + 33 = 33 s, i el
+                // clamp el deixa dins de la finestra (després l'imant de corts el pot afinar).
+                if (tCand === null) {
+                    var _cadD = this._cadenaDuradesSec(ordered, orderIdx, prevNum, idx, prevTime, classData.getEffectiveDuradaSec);
+                    if (_cadD && _cadD.time > uLo - 2.5 && _cadD.time < uHi + 2.5) {
+                        tCand = _cadD.time;
+                        why = 'cadena de durades d\'escaleta (+' + _cadD.acum.toFixed(2) + 's des de ' + prevNum + ')';
+                    }
+                }
+
                 // Criteri C: punt mig (últim recurs)
                 if (tCand === null) { tCand = (uLo + uHi) / 2; why = 'punt mig de la finestra (sense senyal de densitat)'; }
 
                 var tFinal = Math.min(uHi, Math.max(uLo, tCand));
                 if (tFinal < 0) tFinal = 0;
+
+                // (2026-10-27 · BUG #193·R6) HORA DESCARTADA → mana el MATERIAL: si hi ha un
+                // corte real a prop de la posició deduïda, eixe és el bon lloc (l'escaleta no
+                // pot situar-lo perquè la seua hora cau fora del clip). TNM_V1 27/10: cadena de
+                // durades → 33,00 s, corte real a 34,52 s → 34,52 s.
+                if (line._foraMaterial === true) {
+                    const _cutR6 = this._corteCercaDe(clips, tFinal, 2.5);
+                    if (_cutR6 !== null && _cutR6 >= uLo - 0.05 && _cutR6 <= uHi + 0.05) {
+                        log('   🧲 [F5·Inferits] ' + num + ': ' + tFinal.toFixed(2) + 's → imant al corte ' +
+                            _cutR6.toFixed(2) + 's (hora fora del material)');
+                        tFinal = _cutR6;
+                    }
+                }
 
                 var titol = (line.titol || '').substring(0, 60).trim();
                 var comment = ((num + ' - ') + titol).trim();
@@ -3156,6 +3404,236 @@
             }
         },
 
+        // ═══════════════════════════════════════════════════════════════
+        // F8 · SEPARACIÓ DE MARCADORS SUPERPOSATS (2026-10-27 · BUG #192)
+        //
+        // REGLA IMPERATIVA DE L'USUARI: dos marcadors d'escaleta NO poden quedar
+        // MAI a la mateixa posició. Si coincidixen (típicament perquè tots s'han
+        // hagut d'aferrar al 00:00 en nàixer fora del material), se separen uns
+        // segons i es respecta l'ORDRE D'ESCALETA: el primer de l'escaleta es
+        // queda a la posició del clúster i la resta van darrere, un darrere l'altre.
+        //
+        // Cas real (TNM_V1 26/10): F2 va fer 01dir marcador d'inici a 00:00 i F7
+        // va afegir-hi 01 TE-1, 01 TD-1 i 01BT al MATEIX 0,00 s → 4 marcadors
+        // superposats, i a més en orde d'escaleta invertit (01dir és el 4t del
+        // bloc: seq 28, darrere de 25/26/27).
+        // ═══════════════════════════════════════════════════════════════
+
+        /** Separació per defecte entre marcadors que coincidixen (segons). */
+        _GAP_SEPARACIO: 3.0,
+
+        /**
+         * _calcSeparacioSuperposats(entries, opts): CÀLCUL PUR (sense JSX ni estat)
+         * de la separació de marcadors que compartixen posició.
+         *
+         * @param {Array} entries [{ prefix, time, seq, comment, color, pinned }]
+         *        `seq` = número de `sequencia` de l'escaleta (mana l'orde);
+         *        `pinned` = true si el marcador és OnAir (no es mou mai: OnAir = veritat).
+         * @param {Object} [opts] { gap, tol } — `gap` per defecte `_GAP_SEPARACIO`,
+         *        `tol` = distància (s) per davall de la qual dos marcadors estan superposats.
+         * @returns {Array} placements [{ prefix, timeSec, comment, colorIdx }]
+         */
+        _calcSeparacioSuperposats: function (entries, opts) {
+            var o = opts || {};
+            var GAP = (isFinite(Number(o.gap)) && Number(o.gap) > 0) ? Number(o.gap) : 3.0;
+            var TOL = (isFinite(Number(o.tol)) && Number(o.tol) >= 0) ? Number(o.tol) : 0.20;
+            var MIN = 0.20;   // separació mínima si no hi ha espai per al GAP complet
+
+            var list = [];
+            for (var i = 0; i < (entries || []).length; i++) {
+                var e = entries[i];
+                if (!e || !e.prefix) continue;
+                var t = Number(e.time);
+                var sq = Number(e.seq);
+                if (!isFinite(t) || !isFinite(sq)) continue;
+                list.push({
+                    prefix: String(e.prefix),
+                    time: t,
+                    seq: sq,
+                    comment: e.comment || '',
+                    color: e.color,
+                    pinned: e.pinned === true
+                });
+            }
+            if (list.length < 2) return [];
+
+            var byTime = list.slice().sort(function (a, b) {
+                if (a.time !== b.time) return a.time - b.time;
+                return a.seq - b.seq;
+            });
+
+            var placements = [];
+            var ci = 0;
+            while (ci < byTime.length) {
+                var cluster = [byTime[ci]];
+                var cj = ci + 1;
+                while (cj < byTime.length && (byTime[cj].time - cluster[cluster.length - 1].time) <= TOL) {
+                    cluster.push(byTime[cj]);
+                    cj++;
+                }
+                if (cluster.length > 1) {
+                    // ORDE D'ESCALETA dins del clúster
+                    cluster.sort(function (a, b) {
+                        if (a.seq !== b.seq) return a.seq - b.seq;
+                        return a.time - b.time;
+                    });
+                    var base = cluster[0].time;
+                    for (var b2 = 1; b2 < cluster.length; b2++) {
+                        if (cluster[b2].time < base) base = cluster[b2].time;
+                    }
+                    // No es pot trepitjar el clúster següent: 0,5 s de marge
+                    var limit = (cj < byTime.length) ? (byTime[cj].time - 0.5) : Infinity;
+                    var slots = cluster.length - 1;
+                    var span = limit - base;
+                    var step = GAP;
+                    if (isFinite(span) && span < slots * step) step = Math.max(MIN, span / slots);
+
+                    // OnAir = veritat: les seues posicions són àncores intocables
+                    var pins = [];
+                    for (var p0 = 0; p0 < cluster.length; p0++) {
+                        if (cluster[p0].pinned) pins.push(cluster[p0].time);
+                    }
+
+                    var last = null;
+                    for (var k = 0; k < cluster.length; k++) {
+                        var cur = cluster[k];
+                        if (cur.pinned) continue;   // no es mou mai
+                        var target = (last === null) ? base : (last + step);
+                        // No es pot trepitjar cap àncora OnAir: si hi cau, va darrere
+                        for (var pz = 0; pz < pins.length; pz++) {
+                            if (Math.abs(target - pins[pz]) <= TOL) target = pins[pz] + step;
+                        }
+                        if (isFinite(limit) && target > limit) target = limit;
+                        if (last !== null && target <= last) target = last + MIN;
+                        target = parseFloat(target.toFixed(2));
+                        if (Math.abs(target - cur.time) > 0.001) {
+                            placements.push({
+                                prefix: cur.prefix,
+                                timeSec: target,
+                                comment: cur.comment,
+                                colorIdx: (cur.color != null ? cur.color : 6)
+                            });
+                        }
+                        last = target;
+                    }
+                }
+                ci = cj;
+            }
+            return placements;
+        },
+
+        /**
+         * separateOverlappingMarkers (F8): última passa del pipeline de marcadors.
+         * Llig tots els marcadors de la seqüència, els ordena per `sequencia` de
+         * l'escaleta i separa els que compartixen posició (regla imperativa: mai
+         * dos marcadors superposats; orde d'escaleta i GAP de `_GAP_SEPARACIO`).
+         *
+         * SEGURETAT: només MOU marcadors amb prefix d'escaleta. Els que tenen OnAir
+         * (`pinned`) no es mouen mai. Els congelats per una capa anterior es
+         * descongelen només si NO tenen OnAir (si no, no es podrien separar).
+         *
+         * @returns {Object} { revisats, moguts }
+         */
+        separateOverlappingMarkers: async function () {
+            try {
+                const ctxData = await getAssemblyContext().loadAssemblyContext();
+                if (!ctxData || !ctxData.manifest) {
+                    log('🟢 [F8·Separació] Sense manifest → res a separar. ✓ FINALITZAT.');
+                    return { revisats: 0, moguts: 0 };
+                }
+                const manifest = ctxData.manifest;
+
+                let raw = null;
+                try { raw = await callJSX('Markers.get()'); } catch (eG) { raw = null; }
+                let mks = [];
+                try { mks = raw ? JSON.parse(raw) : []; } catch (eP) { mks = []; }
+                if (!mks || mks.length < 2) {
+                    log('🟢 [F8·Separació] Menys de 2 marcadors → res a separar. ✓ FINALITZAT.');
+                    return { revisats: (mks ? mks.length : 0), moguts: 0 };
+                }
+
+                // núm → sequencia (orde d'escaleta) · núm → té OnAir · minúscules → núm canònic
+                const seqByNum = {}, onAirByNum = {}, canonByLower = {};
+                const all = itemsOf(manifest);
+                for (let i = 0; i < all.length; i++) {
+                    const it = all[i];
+                    if (!it || !it.num) continue;
+                    const nk = String(it.num).trim();
+                    if (!nk) continue;
+                    if (seqByNum[nk] == null) {
+                        seqByNum[nk] = (it.sequencia != null && isFinite(Number(it.sequencia))) ? Number(it.sequencia) : null;
+                    }
+                    if (onAirByNum[nk] == null) {
+                        const oa = it.horaEntradaOnAir;
+                        onAirByNum[nk] = !!(oa && String(oa).trim() !== '' && String(oa).trim() !== '00:00:00');
+                    }
+                    if (canonByLower[nk.toLowerCase()] == null) canonByLower[nk.toLowerCase()] = nk;
+                }
+                const colorByNum = this._colorByNumFromManifest(manifest);
+
+                const entries = [];
+                for (let m = 0; m < mks.length; m++) {
+                    const pfxRaw = this._extractPrefixFromComment(mks[m].comments || '');
+                    if (!pfxRaw) continue;
+                    const num = (seqByNum[pfxRaw] != null) ? pfxRaw : canonByLower[String(pfxRaw).toLowerCase()];
+                    if (!num || seqByNum[num] == null) continue;   // sense escaleta → no es pot ordenar
+                    let col = (colorByNum[num] != null) ? colorByNum[num] : 6;
+                    const nm = (mks[m].name !== undefined && mks[m].name !== null) ? String(mks[m].name) : '';
+                    if (nm.indexOf('color=') === 0) {
+                        const cn = parseInt(nm.substring(6), 10);
+                        if (!isNaN(cn) && cn >= 0) col = cn;
+                    }
+                    entries.push({
+                        prefix: num,
+                        time: Number(mks[m].time),
+                        seq: seqByNum[num],
+                        comment: mks[m].comments || '',
+                        color: col,
+                        pinned: onAirByNum[num] === true
+                    });
+                }
+
+                const placements = this._calcSeparacioSuperposats(entries, { gap: this._GAP_SEPARACIO, tol: 0.20 });
+                if (placements.length === 0) {
+                    log('🟢 [F8·Separació] Cap marcador superposat (' + entries.length + ' amb escaleta). ✓ FINALITZAT.');
+                    return { revisats: entries.length, moguts: 0 };
+                }
+
+                log('🔧 [F8·Separació] Marcadors superposats → separant en ORDE D\'ESCALETA (GAP ' +
+                    this._GAP_SEPARACIO + 's): ' +
+                    placements.map(function (p) { return p.prefix + '@' + p.timeSec + 's'; }).join(', '));
+
+                // CONGELATS: els OnAir no es toquen (OnAir = veritat); la resta es descongela.
+                const desbloquejats = [], bloquejats = [];
+                for (let pi = 0; pi < placements.length; pi++) {
+                    const key = String(placements[pi].prefix).toLowerCase();
+                    if (this._frozen && this._frozen[key] === true) {
+                        if (onAirByNum[placements[pi].prefix] === true) {
+                            placements[pi]._skip = true;
+                            bloquejats.push(placements[pi].prefix);
+                        } else {
+                            delete this._frozen[key];
+                            desbloquejats.push(placements[pi].prefix);
+                        }
+                    }
+                }
+                if (desbloquejats.length) log('   🔓 [F8·Separació] Descongelats per a separar: ' + desbloquejats.join(', '));
+                if (bloquejats.length) log('   ⚠️ [F8·Separació] Amb OnAir (no es mouen): ' + bloquejats.join(', '), 'WARN');
+                const finals = placements.filter(function (p) { return p._skip !== true; });
+                if (finals.length === 0) {
+                    log('🟢 [F8·Separació] Cap marcador separable (tots amb OnAir). ✓ FINALITZAT.');
+                    return { revisats: entries.length, moguts: 0 };
+                }
+
+                const res = await this._safePlaceByPrefixes(finals, 'F8·Separació');
+                log('🔧 [F8·Separació] Ajustats ' + (res.moved || 0) + ' de ' + finals.length + ' marcador(s). ✓ FINALITZAT.');
+                return { revisats: entries.length, moguts: res.moved || 0 };
+            } catch (eSep) {
+                log('⚠️ [F8·Separació] ' + eSep.message, 'WARN');
+                return { revisats: 0, moguts: 0 };
+            }
+        },
+
 
         // 🟢 F5: snapOrphanMarkers — Snap d'huérfans als talls més propers
         // ═══════════════════════════════════════════════════════════════
@@ -3263,6 +3741,128 @@
         },
 
         // ═══════════════════════════════════════════════════════════════
+        /**
+         * _resolveGraphicParents(markers): a QUIN marcador s'ancora cada família de gràfics
+         * (per número base). Funció PURA (sense JSX) → testable a l'smoke.
+         *
+         * (2026-10-27 · BUG #194) UN DIRECTE NO PORTA GRÀFICS MAI: els marcadors de directe
+         * (`dir`, `directe`, `especial`) NO són mai pare. Cas real TNM_V1 26/10:
+         * `01 TE-1`/`01 TD-1` (base 01) s'ancoraven a `01dir` (32,28 s) i queien a
+         * 35,82/37,59 s, DINS de la connexió en directe; el pare correcte és la capçalera
+         * de plató `01BT` (0,00 s) → +10/+15 s, dins del DonaPas.
+         *
+         * Ordre de preferència per a cada número base:
+         *   1) plató clàssic: intro (`i`) → donapas (`dp`) → off (`f`/`off`)
+         *   2) marcador EXACTE del número (`01`), si és posterior a 0 (vídeo propi)
+         *   3) vídeo/estructural del mateix número (sufix estructural o cap) — mai directe
+         *   4) CAPÇALERA/PLATAFORMA del mateix número (`01BT`, `01PG`…): qualsevol marcador
+         *      que no siga directe ni gràfic
+         * Sense cap pare vàlid (només hi ha directe/gràfics) el número NO s'ancora: el
+         * cridador decidix (fallback per Prevista o saltar el marcador).
+         *
+         * @param {Array} markers llista `{time|timeSec, comments}` de `Markers.get()`
+         * @returns {Object} mapa `{ '01': 0, '02': 39.36, … }` (segons) del pare per base
+         */
+        _resolveGraphicParents: function (markers) {
+            var self = this;
+            // Estrategia D11v2: prioriza sufixos estructurals (i > dp > f > off)
+            var PRIORITY_SUFFIXES = ['i', 'dp', 'f', 'off'];
+            // (2026-10-27 · BUG #194) DIRECTE ≠ PLATÓ: `dir` (i `directe`/`especial`) exclòs.
+            var DIRECT_SUFFIXES = ['dir', 'directe', 'especial'];
+            var _sufix = function (pfx) {
+                return String(pfx || '').replace(/^\d+/, '').toLowerCase().replace(/[\s_\-]/g, '');
+            };
+            var _esDirecte = function (pfx) { return DIRECT_SUFFIXES.indexOf(_sufix(pfx)) >= 0; };
+
+            var markersByExactPrefix = {};
+            var markersByBaseNum = {};
+            var list = markers || [];
+            for (var mi = 0; mi < list.length; mi++) {
+                var mk = list[mi] || {};
+                var comment = mk.comments || '';
+                var spaceDashIdx = comment.indexOf(' -');
+                if (spaceDashIdx <= 0) continue;
+                var prefix = comment.substring(0, spaceDashIdx).replace(/^\s+|\s+$/g, '');
+                var bnMatch = prefix.match(/^(\d+)/);
+                if (!bnMatch) continue;
+                var bn = bnMatch[1];
+                var mkTime = (typeof mk.time === 'number') ? mk.time : parseFloat(mk.time);
+                if (isNaN(mkTime) || !isFinite(mkTime)) continue;
+                if (!markersByExactPrefix[prefix] || mkTime < markersByExactPrefix[prefix]) {
+                    markersByExactPrefix[prefix] = mkTime;
+                }
+                if (!markersByBaseNum[bn]) markersByBaseNum[bn] = [];
+                markersByBaseNum[bn].push(mkTime);
+            }
+            var parentMarkerByPrefix = {};
+            for (var base in markersByBaseNum) {
+                if (!markersByBaseNum.hasOwnProperty(base)) continue;
+                var found = false;
+                // 1) plató clàssic: intro → donapas → off
+                for (var pi = 0; pi < PRIORITY_SUFFIXES.length; pi++) {
+                    var candidateKey = base + PRIORITY_SUFFIXES[pi];
+                    if (candidateKey in markersByExactPrefix) {
+                        parentMarkerByPrefix[base] = markersByExactPrefix[candidateKey];
+                        found = true;
+                        break;
+                    }
+                }
+                // 2) marcador EXACTE del número (vídeo propi), si és posterior a 0
+                if (!found && base in markersByExactPrefix) {
+                    parentMarkerByPrefix[base] = markersByExactPrefix[base];
+                    found = true;
+                }
+                // 3) vídeo/estructural del mateix número (mai un directe)
+                if (!found && markersByBaseNum[base].length > 0) {
+                    var structuralTimes = [];
+                    for (var bi = 0; bi < markersByBaseNum[base].length; bi++) {
+                        for (var sk in markersByExactPrefix) {
+                            if (markersByExactPrefix.hasOwnProperty(sk) && markersByExactPrefix[sk] === markersByBaseNum[base][bi]) {
+                                var suff = sk.replace(/^\d+/, '').toLowerCase();
+                                if ((PRIORITY_SUFFIXES.indexOf(suff) >= 0 || suff === '') && !_esDirecte(sk)) {
+                                    structuralTimes.push(markersByBaseNum[base][bi]);
+                                }
+                                break;
+                            }
+                        }
+                    }
+                    if (structuralTimes.length > 0) {
+                        structuralTimes.sort(function (a, b) { return a - b; });
+                        // (2026-09-24) PRIORITAT AL MARCADOR DEL VÍDEO (prefix EXACTE = baseNum):
+                        // ABANS s'agafava el més aviat dels "estructurals" i amb `01dp`@0.00 +
+                        // `01`@63.00 els gràfics s'ancoraven al 0.00 (dins del donapas) → 10s/15s/20s
+                        // fora de lloc (queixa d'usuari 2026-09-24: "los grafismos estan fuera de lugar").
+                        var exacte = markersByExactPrefix[base];
+                        parentMarkerByPrefix[base] = (exacte !== undefined && exacte !== null && exacte > 0) ? exacte : structuralTimes[0];
+                        found = true;
+                    }
+                }
+                // 4) (2026-10-27 · BUG #194) CAPÇALERA/PLATAFORMA del mateix número (01BT, 01PG…):
+                //    qualsevol marcador que NO siga directe ni gràfic. És el cas TNM_V1 26/10:
+                //    `01i`/`01dp` no existixen i el pare passa a ser `01BT`@0,00 (no `01dir`@32,28).
+                if (!found) {
+                    var capTimes = [];
+                    for (var ck in markersByExactPrefix) {
+                        if (!markersByExactPrefix.hasOwnProperty(ck)) continue;
+                        var ckMatch = ck.match(/^(\d+)/);
+                        if (!ckMatch || ckMatch[1] !== String(base)) continue;
+                        if (_esDirecte(ck)) continue;
+                        if (self._isGraphicByNum(ck)) continue;
+                        capTimes.push(markersByExactPrefix[ck]);
+                    }
+                    if (capTimes.length > 0) {
+                        capTimes.sort(function (a, b) { return a - b; });
+                        parentMarkerByPrefix[base] = capTimes[0];
+                        found = true;
+                    }
+                }
+                if (!found) {
+                    log('   ⏭️ [F6·Gràfics] base ' + base + ': només hi ha directe/gràfics → cap pare de plató, no s\'ancora');
+                }
+            }
+            return parentMarkerByPrefix;
+        },
+
         // 🟢 F6: placeGraphicMarkers — Marcadors de gràfics
         // ═══════════════════════════════════════════════════════════════
         placeGraphicMarkers: async function () {
@@ -3291,70 +3891,11 @@
                 try { existingMarkers = JSON.parse(markersRaw); } catch (e) {}
             }
 
-            // Construir mapa de marcadors pare per baseNum
-            // Estrategia D11v2: prioriza sufixos estructurals (i > dp > dir)
-            // Sols items de plato (intro/donapas/directe) son pares validos
-            // Items de video (faros, sin sufixo) NUNCA son pares
-            var PRIORITY_SUFFIXES = ['i', 'dp', 'dir'];
-            var markersByExactPrefix = {};
-            var markersByBaseNum = {};
-            for (var mi = 0; mi < existingMarkers.length; mi++) {
-                var mk = existingMarkers[mi];
-                var comment = mk.comments || '';
-                var spaceDashIdx = comment.indexOf(' -');
-                if (spaceDashIdx <= 0) continue;
-                var prefix = comment.substring(0, spaceDashIdx).replace(/^\s+|\s+$/g, '');
-                var bnMatch = prefix.match(/^(\d+)/);
-                if (!bnMatch) continue;
-                var bn = bnMatch[1];
-                var mkTime = (typeof mk.time === 'number') ? mk.time : parseFloat(mk.time);
-                if (isNaN(mkTime)) continue;
-                if (!markersByExactPrefix[prefix] || mkTime < markersByExactPrefix[prefix]) {
-                    markersByExactPrefix[prefix] = mkTime;
-                }
-                if (!markersByBaseNum[bn]) markersByBaseNum[bn] = [];
-                markersByBaseNum[bn].push(mkTime);
-            }
-            var parentMarkerByPrefix = {};
-            for (var bn in markersByBaseNum) {
-                if (!markersByBaseNum.hasOwnProperty(bn)) continue;
-                var found = false;
-                for (var pi = 0; pi < PRIORITY_SUFFIXES.length; pi++) {
-                    var candidateKey = bn + PRIORITY_SUFFIXES[pi];
-                    if (candidateKey in markersByExactPrefix) {
-                        parentMarkerByPrefix[bn] = markersByExactPrefix[candidateKey];
-                        found = true;
-                        break;
-                    }
-                }
-                if (!found && bn in markersByExactPrefix) {
-                    parentMarkerByPrefix[bn] = markersByExactPrefix[bn];
-                    found = true;
-                }
-                if (!found && markersByBaseNum[bn].length > 0) {
-                    var structuralTimes = [];
-                    for (var bi = 0; bi < markersByBaseNum[bn].length; bi++) {
-                        for (var sk in markersByExactPrefix) {
-                            if (markersByExactPrefix.hasOwnProperty(sk) && markersByExactPrefix[sk] === markersByBaseNum[bn][bi]) {
-                                var suff = sk.replace(/^\d+/, '').toLowerCase();
-                                if (PRIORITY_SUFFIXES.indexOf(suff) >= 0 || suff === '') {
-                                    structuralTimes.push(markersByBaseNum[bn][bi]);
-                                }
-                                break;
-                            }
-                        }
-                    }
-                    if (structuralTimes.length > 0) {
-                        structuralTimes.sort(function(a,b) { return a - b; });
-                        // (2026-09-24) PRIORITAT AL MARCADOR DEL VÍDEO (prefix EXACTE = baseNum):
-                        // ABANS s'agafava el més aviat dels "estructurals" i amb `01dp`@0.00 +
-                        // `01`@63.00 els gràfics s'ancoraven al 0.00 (dins del donapas) → 10s/15s/20s
-                        // fora de lloc (queixa d'usuari 2026-09-24: "los grafismos estan fuera de lugar").
-                        var exacte = markersByExactPrefix[bn];
-                        parentMarkerByPrefix[bn] = (exacte !== undefined && exacte !== null && exacte > 0) ? exacte : structuralTimes[0];
-                    }
-                }
-            }
+            // (2026-10-27 · BUG #194) Els pares es resolen en una funció PURA i testable
+            // (`_resolveGraphicParents`): un DIRECTE no porta gràfics MAI → mai no és pare.
+            // TNM_V1 26/10: `01 TE-1`/`01 TD-1` passen d'anar a 35,82/37,59 s (dins de
+            // `01dir`@32,28) a anar a 10,00/15,00 s (dins de la capçalera `01BT`@0,00).
+            var parentMarkerByPrefix = this._resolveGraphicParents(existingMarkers);
 
             log('   🟢 [F6·Gràfics] Marcadors pare disponibles: ' + Object.keys(parentMarkerByPrefix).length + ' (' + Object.keys(parentMarkerByPrefix).join(', ') + ')');
 

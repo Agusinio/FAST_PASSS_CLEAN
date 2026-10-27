@@ -1,0 +1,1892 @@
+/*
+ * =================================================================================
+ * PROJECTE: FAST >>> PASS
+ * ARXIU: main.js (ENTRY POINT & UI CONTROLLER - v2.6.0 literal)
+ * =================================================================================
+ */
+
+// 1. GLOBALES Y NAMESPACES
+var csInterface = new CSInterface();
+var FASTPASS_UI = window.FASTPASS_UI || {};
+FASTPASS_UI.Sync = FASTPASS_UI.Sync || {}; 
+var isUserDraggingSlider = false;
+var reframeActive = false;
+// (2026-09-22) Ticks seguits (de 500 ms) sense focus del panell abans d'apagar el reencuadre:
+// una pèrdua momentània (AppActivate del VBS en enviar l'ESPAI) NO l'ha d'apagar.
+var _reframeNoFocusTicks = 0;
+// Últim clip objectiu detectat per Sync.syncKfMode (track@start@nom). Serveix per
+// saber quan l'usuari canvia de clip i adoptar el mode (slider/keyframe) d'origen.
+var lastKfClipId = "";
+// Escala física del slider en PÍXELS: slider.min=-351, slider.max=959.
+// seqW (amplada del frame) es guarda per convertir px <-> normalitzat.
+var sliderSeqW = 608;
+
+// ── 📊 PERF (FASE 0 · TEMPORAL 2026-09-16) ───────────────────────────────────
+// Instrumentació del slider de reencuadre: quantes ordres s'envien, quant triga
+// cada round-trip a ExtendScript, quantes queden en vola alhora i quant temps
+// d'I/O de log es consumeix. NO altera el comportament (només mesura).
+var _perf = {
+    on: true,
+    barridos: 0,
+    nInput: 0, nSent: 0, nDescarts: 0, inFlight: 0, inFlightMax: 0,
+    rtSum: 0, rtMin: 0, rtMax: 0, rtN: 0,
+    tFirst: 0, tLastInput: 0, tRelease: 0, drainMs: -1,
+    ticks: 0, ticksKf: 0, pollSkip: 0,
+    timer: 0, id: 0
+};
+FASTPASS_UI.Sync._perf = _perf;
+
+function _perfNow() {
+    return (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+}
+
+function _perfBeginBarrido() {
+    if (!_perf.on) return;
+    if (_perf.timer) { clearTimeout(_perf.timer); _perf.timer = 0; }
+    _perf.id++;
+    _perf.barridos++;
+    _perf.nInput = 0; _perf.nSent = 0; _perf.nDescarts = 0; _perf.inFlight = 0; _perf.inFlightMax = 0;
+    _perf.rtSum = 0; _perf.rtMin = 0; _perf.rtMax = 0; _perf.rtN = 0;
+    _perf.tLastInput = 0; _perf.tRelease = 0; _perf.drainMs = -1;
+    _perf.ticks = 0; _perf.ticksKf = 0; _perf.pollSkip = 0;
+    _perf.tFirst = _perfNow();
+    if (window.FASTPASS_UI.Utils && window.FASTPASS_UI.Utils._perfReset) {
+        window.FASTPASS_UI.Utils._perfReset();
+    }
+}
+
+function _perfSendStart() {
+    if (!_perf.on) return 0;
+    _perf.nSent++;
+    _perf.inFlight++;
+    if (_perf.inFlight > _perf.inFlightMax) _perf.inFlightMax = _perf.inFlight;
+    return _perfNow();
+}
+
+function _perfRecv(t0) {
+    if (!_perf.on) return 0;
+    var d = _perfNow() - t0;
+    if (_perf.inFlight > 0) _perf.inFlight--;
+    _perf.rtSum += d; _perf.rtN++;
+    if (_perf.rtMin === 0 || d < _perf.rtMin) _perf.rtMin = d;
+    if (d > _perf.rtMax) _perf.rtMax = d;
+    return d;
+}
+
+function _perfReport() {
+    if (!_perf.on) return;
+    var U = window.FASTPASS_UI.Utils;
+    var io = (U && U._ioStats) ? U._ioStats : { n: 0, ms: 0, maxMs: 0, bytes: 0, logN: 0, auditN: 0 };
+    var js = (U && U._jsxStats) ? U._jsxStats : { n: 0, byPrefix: {}, other: 0 };
+    var rtAvg = _perf.rtN ? (_perf.rtSum / _perf.rtN) : 0;
+    // Vía d'escriptura detectada (cep_node / require / cep.fs síncron) — diagnòstic Fase 2.
+    var fsKind = 'n/a';
+    try { if (U && U._nodeFs) { U._nodeFs(); fsKind = U._fsKind || 'n/a'; } } catch(eFsk) {}
+    var tEnd = _perf.tRelease || _perf.tLastInput || _perf.tFirst;
+    var barrido = (_perf.tFirst && tEnd) ? ((tEnd - _perf.tFirst) / 1000) : 0;
+    var top = [];
+    for (var k in js.byPrefix) { top.push([k, js.byPrefix[k]]); }
+    top.sort(function (a, b) { return b[1] - a[1]; });
+    var jsxTxt = [];
+    for (var i = 0; i < top.length && i < 6; i++) { jsxTxt.push(top[i][0] + '=' + top[i][1]); }
+    if (js.other) jsxTxt.push('altres=' + js.other);
+    U.forceLog('📊 [PERF·SLIDER #' + _perf.barridos + '] barrido=' + barrido.toFixed(2) + 's' +
+        ' · inputs=' + _perf.nInput + ' · enviats=' + _perf.nSent + ' · descartats=' + _perf.nDescarts +
+        ' · max_en_vola=' + _perf.inFlightMax +
+        ' · rt_avg=' + rtAvg.toFixed(1) + 'ms (min ' + _perf.rtMin.toFixed(0) + ' / max ' + _perf.rtMax.toFixed(0) + ')' +
+        ' · espera_total=' + (_perf.rtSum / 1000).toFixed(2) + 's' +
+        ' · drenatge_final=' + (_perf.drainMs >= 0 ? _perf.drainMs.toFixed(0) + 'ms' : 'n/a') +
+        ' · IO=' + io.n + ' escr ' + io.ms.toFixed(0) + 'ms (max ' + io.maxMs.toFixed(0) + ', BLOC ' + (io.blockMs || 0).toFixed(0) + 'ms, sync ' + (io.syncN || 0) + ' / async ' + (io.asyncN || 0) + ') ' + (io.bytes / 1048576).toFixed(2) + 'MB · FS=' + fsKind +
+        ' · JSX=' + js.n + ' [' + jsxTxt.join(' · ') + ']' +
+        ' · ticks500=' + _perf.ticks + ' (syncKfMode=' + _perf.ticksKf + ', poll_saltat=' + _perf.pollSkip + ')');
+}
+
+// 📊 FASE 0: accessos ràpids per a la consola del panell (F12 / clic dret → Inspect):
+//   FASTPASS_UI.Sync._perf.report()   → torna a escriure l'informe de l'últim barrido
+//   FASTPASS_UI.Sync._perf.reset()    → reinicia els comptadors
+//   FASTPASS_UI.Sync._perf.on = false → atura la instrumentació
+_perf.report = _perfReport;
+_perf.reset = _perfBeginBarrido;
+
+function setReframeActive(on) {
+    reframeActive = on;
+    var zone = document.getElementById('sliderZone');
+    var slider = document.getElementById('slider-move');
+    if (zone) zone.classList.toggle('active', on);
+    if (slider) slider.disabled = !on;
+    if (!on && window.FASTPASS_UI.State) window.FASTPASS_UI.State.isKeyframeMode = false;
+    if (on) applySliderLimits();
+    FASTPASS_UI.Utils.log(on ? "🎛️ Reencuadre manual ACTIVAT (actua sobre el clip SELECCIONAT)" : "🛑 Reencuadre manual desactivat", "DEBUG");
+    // En activar, mostra el mode d'origen del clip objectiu (ja sincronitzat pel poll).
+    if (on && window.FASTPASS_UI.State && FASTPASS_UI.Utils) {
+        var kfMod = !!window.FASTPASS_UI.State.isKeyframeMode;
+        FASTPASS_UI.Utils.status("Reencuadre actiu · mode " + (kfMod ? "KEYFRAME" : "SLIDER"), kfMod ? "exito" : "warn");
+    }
+    // Forçar una sincronització immediata del mode (el poll només corre amb reframe actiu).
+    if (on && window.FASTPASS_UI.Sync && window.FASTPASS_UI.Sync.syncKfMode) {
+        try { window.FASTPASS_UI.Sync.syncKfMode(); } catch (eSync) { }
+    }
+}
+
+/**
+ * syncChyronCasButton: Refresca l'ASPECTE del botó 🔀 (fila CHY) amb l'ESTAT del cas de la
+ * intro que porta el mòdul de Chyrons ('A' = intro LLARGA · 'B' = intro CURTA · 'AUTO').
+ * (2026-10-16 · BUG #170) L'estat és persistent i canvia COM s'insereixen el Tema-Títol i el
+ * Conductor a l'inici del bloc, per això el botó sempre l'ha de mostrar (etiqueta A/B + títol).
+ */
+function syncChyronCasButton() {
+    var btn = document.getElementById('btnChyronCas');
+    if (!btn) return;
+    var mode = 'AUTO';
+    try {
+        var mod = window.FASTPASS_UI && FASTPASS_UI.Workflows && FASTPASS_UI.Workflows.Chyrons;
+        if (mod && typeof mod.getTitolCaseMode === 'function') mode = mod.getTitolCaseMode();
+    } catch (eM) { }
+    btn.classList.toggle('cas-A', mode === 'A');
+    btn.classList.toggle('cas-B', mode === 'B');
+    var comu = ' Un clic alterna l\'ESTAT i TORNA A COL·LOCAR l\'inici del bloc (Conductor + ' +
+        'Tema-Títol); després, totes les col·locacions d\'aquest inici (🎯 COLOCAR, Conduct…) ' +
+        'ixen amb eixe cas. Ctrl+clic = torna a AUTO (auto-detecció).';
+    btn.title = (mode === 'AUTO')
+        ? 'Tema-Títol / Conductor: ESTAT AUTO (auto-detecció per marge). CasA = intro LLARGA ' +
+          '(l\'inici del bloc l\'obre el Tema-Títol) · CasB = intro CURTA (l\'obre el Conductor).' + comu
+        : 'Tema-Títol / Conductor: ESTAT ACTIU = Cas' + mode + ' · intro ' +
+          (mode === 'A' ? 'LLARGA (obre el Tema-Títol; el Conductor va després del gran)'
+                        : 'CURTA (obre el Conductor; el Tema-Títol entra quan acaba la seua animació)') + '.' + comu;
+    if (window.FASTPASS_UI && FASTPASS_UI.LayoutMode) btn.setAttribute('data-cas', mode);
+}
+
+/**
+ * applySliderLimits: Ajusta el recorregut FÍSIC del slider al rang en píxels
+ * del reencuadre horitzontal (min=-351 px, max=959 px). El valor del slider és
+ * directament la posició X en PÍXELS (no una escala relativa), de manera que el
+ * valor màxim físic del <input> és exactament 959 i el mínim -351 → no es pot
+ * arrossegar més enllà ni provocar el "reset" del motor.
+ */
+function applySliderLimits() {
+    var slider = document.getElementById('slider-move');
+    if (!slider || !FASTPASS_UI.Utils) return;
+    // Els límits es calculen sobre el clip SELECCIONAT (o V1 sota CTI si no n'hi ha).
+    // Anim.sliderLimits incorpora la restricció dels recortes si el clip en té.
+    FASTPASS_UI.Utils.callJSX('Anim.sliderLimits()').then(function (raw) {
+        if (!raw || raw.indexOf("ERR") === 0) return;
+        try {
+            var lim = JSON.parse(raw);
+            var minPx = parseFloat(lim.minPx), maxPx = parseFloat(lim.maxPx);
+            var seqW = parseFloat(lim.seqW);
+            var curPx = parseFloat(lim.curPx);
+            if (!isFinite(minPx) || !isFinite(maxPx) || !isFinite(seqW)) return;
+
+            // 🎯 Doble Finestra: ajust FI hardcodejat (±margen px) al voltant de la base
+            // del PAS4 per a V2/V3. Evita que el moviment mostri la imatge de l'altra
+            // finestra. Només s'aplica si la DF s'ha processat i hi ha clip SELECCIONAT
+            // a V2 o V3 (el mateix criteri que decideix el comportament del slider).
+            var base = (window.FASTPASS_UI && FASTPASS_UI._dfReencuadre) ? FASTPASS_UI._dfReencuadre : null;
+            if (base && typeof base.margen === 'number') {
+                FASTPASS_UI.Utils.callJSX('Clips.getSelectedVideo()').then(function (selRaw) {
+                    var bx = null;
+                    if (selRaw && selRaw !== "null") {
+                        try {
+                            var sel = JSON.parse(selRaw);
+                            if (parseInt(sel.track, 10) === 2) bx = parseFloat(base.v2x);
+                            else if (parseInt(sel.track, 10) === 3) bx = parseFloat(base.v3x);
+                        } catch (eSel) {}
+                    }
+                    if (bx != null && isFinite(bx)) {
+                        minPx = bx - parseFloat(base.margen);
+                        maxPx = bx + parseFloat(base.margen);
+                    }
+                    _applySliderRange(minPx, maxPx, seqW, curPx);
+                }).catch(function () { _applySliderRange(minPx, maxPx, seqW, curPx); });
+            } else {
+                _applySliderRange(minPx, maxPx, seqW, curPx);
+            }
+        } catch (e) { /* ignora */ }
+    });
+
+    function _applySliderRange(minPx, maxPx, seqW, curPx) {
+        if (!slider) return;
+        sliderSeqW = seqW;
+        slider.min = Math.round(minPx);
+        slider.max = Math.round(maxPx);
+        // (2026-09-22) NO reposicionar el thumb amb el valor del clip si el slider ja té un
+        // valor: en activar/reactivar el reencuadre (o en recalcular els límits) saltava a la
+        // X del clip objectiu — que pot ser un ALTRE clip (el de sota el CTI) i no el que
+        // l'usuari estava encuadrant → «el slider es col·loca al centre» ✗.
+        // Ara només es recorregeix si queda FORA del rang nou; la sincronització amb el clip
+        // la fa el poll (`updateSliderFromPremiere`).
+        var v = parseInt(slider.value, 10);
+        if (isNaN(v) || !isFinite(v)) v = Math.round(seqW / 2);
+        if (v < slider.min) v = slider.min;
+        else if (v > slider.max) v = slider.max;
+        slider.value = v;
+        // forceLog: salta el filtre de tema perquè el rang del slider sempre es vegi.
+        FASTPASS_UI.Utils.forceLog("🎚️ Slider límits(px): " + Math.round(minPx) + ".." + Math.round(maxPx) + " cur=" + v + " (clip=" + Math.round(curPx) + ") seqW=" + seqW);
+    }
+}
+
+// 2. ARRANQUE DEL SISTEMA (BOOTSTRAP SINCRO)
+(async function () {
+    console.log('🔴 MAIN.JS cargado');
+    var _tBoot = Date.now();
+    // ── TIMING D'ARRENCADA (2026-09-22) ──────────────────────────────────────
+    // Es escriu DIRECTAMENT amb window.cep.fs a <extensió>\_boot_timing.log, sense
+    // dependre de utils.log (que descarta els missatges si encara no ha resolt la
+    // ruta de log — era el motiu pel qual les línies ⏱️ [BOOT] no apareixien).
+    var _bootLines = [];
+    var _bootRoot = null;
+    var _bootLast = _tBoot;    // per calcular el Δ respecte la marca anterior
+    var _bootClosed = false;   // l'arrencada ja ha acabat → les marques de fons no embruten el log
+    // ── VISIBILITAT DEL TIMING (2026-09-29) ─────────────────────────────────
+    // Si l'arrencada supera aquest llindar, el log S'OBRE TOT SOL en acabar (un sol
+    // cop per sessió) perquè es vegi de seguida què ha trigat. 0 = mai.
+    // Canviable des de la consola del panell:
+    //   FASTPASS_UI.Boot.setAutoOpen(0)      → desactivat
+    //   FASTPASS_UI.Boot.setAutoOpen(20000)  → només si l'arrencada passa de 20 s
+    var _bootAutoOpenMs = 15000;
+    var _bootAutoOpened = false;
+    try {
+        var _bootPref = window.localStorage ? parseInt(window.localStorage.getItem('fp_bootAutoOpenMs'), 10) : NaN;
+        if (!isNaN(_bootPref)) _bootAutoOpenMs = _bootPref;
+    } catch (eBPref) { }
+    var _bootPad = function (n, w) { return ('        ' + n).slice(-(w || 7)); };
+    var _bootHead = function () {
+        var d = new Date(_tBoot);
+        var p2 = function (n) { return (n < 10 ? '0' : '') + n; };
+        return 'FASTPASS · timing d\'arrencada del panell\n' +
+            'Inici: ' + p2(d.getHours()) + ':' + p2(d.getMinutes()) + ':' + p2(d.getSeconds()) +
+            '  (ms = des de l\'inici · Δ = des de la marca anterior)\n' +
+            '(les ms NEGATIVES són el tram previ a main.js: navegació + càrrega dels <script>)\n';
+    };
+    var _bootText = function () { return _bootHead() + _bootLines.join('\n') + '\n'; };
+    var _bootFlush = function () {
+        var txt = _bootText();
+        // 1) Carpeta de l'extensió (el destí natural).
+        try {
+            if (_bootRoot) window.cep.fs.writeFile(_bootRoot + '\\_boot_timing.log', txt);
+        } catch (eF) { }
+        // 2) Còpia a C:\temp (per si la ruta nativa fallés o no es trobés el fitxer).
+        try { window.cep.fs.writeFile('C:\\temp\\_boot_timing.log', txt); } catch (eF2) { }
+    };
+    var _bootMark = function (label, lvl) {
+        var now = Date.now();
+        var ms = now - _tBoot;
+        var dt = now - _bootLast;
+        _bootLast = now;
+        // Un cop acabada l'arrencada, els cicles de fons (auto-refresc de 60 s) no
+        // s'escriuen al fitxer: només a consola. Amb lvl = 'force' sí que s'hi afegeixen.
+        if (_bootClosed && lvl !== 'force') {
+            try { console.log('⏱️ [BOOT·post] ' + label + ' (+' + ms + ' ms · Δ' + dt + ')'); } catch (eC2) { }
+            return;
+        }
+        _bootLines.push('+' + _bootPad(ms) + ' ms  (Δ' + _bootPad(dt) + ' ms)  ' + label);
+        _bootFlush();
+        try { console.log('⏱️ [BOOT] ' + label + ' (+' + ms + ' ms · Δ' + dt + ')'); } catch (eC) { }
+        try { if (utils && utils.log) utils.log('⏱️ [BOOT] ' + label + ' (+' + ms + ' ms)', lvl || 'INFO'); } catch (eL) { }
+    };
+    try { _bootRoot = csInterface.getSystemPath(SystemPath.EXTENSION).replace(/[\\/]+$/, ''); } catch (eRoot) { _bootRoot = null; }
+    var _bootMarkSafe = function (label, lvl) { try { _bootMark(label, lvl); } catch (eM) { } };
+    // ── API PÚBLICA DE TIMING D'ARRENCADA ───────────────────────────────────
+    // Qualsevol mòdul pot marcar fites amb:  FASTPASS_UI.Boot.mark('[Context] …')
+    // (els mòduls ho fan de manera silenciosa si l'API encara no hi és).
+    try {
+        window.FASTPASS_UI = window.FASTPASS_UI || {};
+        window.FASTPASS_UI.Boot = {
+            logPath: function () { return _bootRoot ? (_bootRoot + '\\_boot_timing.log') : 'C:\\temp\\_boot_timing.log'; },
+            mark: function (label, lvl) { _bootMarkSafe(label, lvl); },
+            text: function () { return _bootText(); },
+            /**
+             * TRAM PREVI A MAIN.JS (2026-10-27). El cronòmetre comença en este
+             * fitxer, que és l'últim dels 48 <script> de l'index.html: el temps
+             * de navegació + càrrega dels mòduls no eixia enlloc i l'usuari veia
+             * un minut que el log resumia en 146 ms. `index.html` deixa les
+             * marques a window.__FP_PAGE (script inline del <head>, ABANS de cap
+             * recurs extern); ací es bolquen com a línia amb ms NEGATIVES.
+             * Torna un resum curt (per a qui vullga pintar-lo en un toast).
+             */
+            page: function () {
+                try {
+                    var P = window.__FP_PAGE;
+                    if (!P || !P.headAt) { return ''; }
+                    var nowPerf = (window.performance && performance.now) ? performance.now() : 0;
+                    var preHead = Math.round(nowPerf - P.headAt);                        // <head> → main.js
+                    var preNav = P.navStart ? Math.round(Date.now() - P.navStart) : preHead; // navegació → main.js
+                    var nSrc = 0;
+                    try { nSrc = document.querySelectorAll('script[src]').length; } catch (eQS) { }
+                    var msHead = Math.round(P.headAt);
+                    _bootLines.push('-' + _bootPad(preNav) + ' ms  (Δ' + _bootPad(preHead) +
+                        ' ms)  pàgina: navegació → main.js · marca del head +' + msHead +
+                        ' ms · ' + (nSrc || 48) + ' mòduls al DOM');
+                    _bootFlush();
+                    return 'navegació→main ' + preNav + ' ms · head→main ' + preHead + ' ms';
+                } catch (ePg) { return ''; }
+            },
+            /**
+             * FINAL DE LA CÀRREGA (load): DCL, quants recursos de js/ s'han baixat,
+             * la suma de les seues durades i els 3 més lents. És el que dirà si el
+             * tram de ~0,5 s és arrencada del motor o parseig dels mòduls.
+             */
+            pageLoad: function () {
+                try {
+                    var P = window.__FP_PAGE;
+                    if (!P || !P.load) { return ''; }
+                    var msLoad = P.navStart ? (P.load - P.navStart) : P.load;
+                    var dcl = P.dcl && P.navStart ? (P.dcl - P.navStart) : 0;
+                    var top = '';
+                    if (P.slow && P.slow.length) {
+                        var t = [], i;
+                        for (i = 0; i < P.slow.length; i++) { t.push(P.slow[i].n + ' ' + P.slow[i].d + ' ms'); }
+                        top = ' · top: ' + t.join(', ');
+                    }
+                    var resum = (P.res > 0)
+                        ? ((P.scripts || 0) + ' recursos js · Σ ' + P.res + ' ms')
+                        : ((P.scripts || 0) + ' mòduls · sense timing de recursos');
+                    _bootLines.push('+' + _bootPad(msLoad) + ' ms  (Δ' + _bootPad(P.load - _tBoot) +
+                        ' ms)  pàgina: load · DCL ' + dcl + ' ms · ' + resum + top);
+                    _bootFlush();
+                    return 'load ' + msLoad + ' ms · DCL ' + dcl + ' ms';
+                } catch (ePL) { return ''; }
+            },
+            autoOpenMs: function () { return _bootAutoOpenMs; },
+            setAutoOpen: function (ms) {
+                _bootAutoOpenMs = (typeof ms === 'number' && ms >= 0) ? ms : (parseInt(ms, 10) || 0);
+                try { window.localStorage.setItem('fp_bootAutoOpenMs', String(_bootAutoOpenMs)); } catch (eSA) { }
+                _bootMarkSafe('Boot.setAutoOpen(' + _bootAutoOpenMs + ' ms)', 'force');
+                return _bootAutoOpenMs;
+            },
+            /**
+             * Obre _boot_timing.log per llegir-lo còmodament.
+             * 1) ShellExecute del sistema (l'aplicació associada al .log).
+             * 2) Fallback: Notepad via el shell JSX atòmic ja existent (IO.executeShell).
+             */
+            openLog: function () {
+                var p = _bootRoot ? (_bootRoot + '\\_boot_timing.log') : 'C:\\temp\\_boot_timing.log';
+                var pFwd = p.replace(/\\/g, '/'); // ExtendScript: barras normals → el nom no s'ha d'escapar
+                try { csInterface.openURLInDefaultBrowser('file:///' + encodeURI(pFwd)); return true; } catch (eOL1) { }
+                try {
+                    var U = window.FASTPASS_UI.Utils;
+                    if (U && U.isJsxReady) { U.callJSX("FASTPASS.IO.executeShell('notepad \"" + pFwd + "\"')"); return true; }
+                } catch (eOL2) { }
+                return false;
+            }
+        };
+    } catch (eBootApi) { }
+    // ── TRAM PREVI A MAIN.JS (2026-10-27) ───────────────────────────────────
+    // El cronòmetre comença en este fitxer: tot el que ha tardat el navegador a
+    // baixar l'HTML i els 48 mòduls queda a window.__FP_PAGE (marca del bloc del
+    // head) i s'escriu com a línia NEGATIVA al mateix _boot_timing.log, ABANS de
+    // la marca de main.js perquè el log es llija en ordre cronològic.
+    try {
+        if (window.FASTPASS_UI && FASTPASS_UI.Boot && FASTPASS_UI.Boot.page) {
+            FASTPASS_UI.Boot.page();
+        }
+    } catch (ePgPre) { }
+    _bootMarkSafe('main.js: arrencada');
+    // Al `load` s'afig el recompte de recursos de js/ + els 3 més lents.
+    try {
+        if (window.FASTPASS_UI && FASTPASS_UI.Boot && FASTPASS_UI.Boot.pageLoad) {
+            if (document.readyState === 'complete') { FASTPASS_UI.Boot.pageLoad(); }
+            else {
+                window.addEventListener('load', function () {
+                    try { FASTPASS_UI.Boot.pageLoad(); } catch (ePgLd) { }
+                });
+            }
+        }
+    } catch (ePgLst) { }
+    // ── CAPACITATS DEL CEP PER AL DIÀLEG DE CARPETES (2026-10-22 · #178b 3a) ──
+    // Queda al log de sessió (`FASTPASS.log` / `_keyframe_trace.log`) encara que
+    // ningú no arribe a clicar 📁: el 22/10 es va perdre una vesprada perquè el
+    // manifest NO declara `--enable-nodejs` i el transport `child_process` no
+    // arrancava mai, sense cap rastre. `cep.process` és el que sí que hi és.
+    try {
+        var _U = window.FASTPASS_UI.Utils;
+        var _capNode = !!(window.cep_node && window.cep_node.require);
+        var _capCp = !!_U._nodeReq('child_process');
+        var _capProc = !!(window.cep && window.cep.process && typeof window.cep.process.createProcess === 'function');
+        _U.forceLog('🧰 [CAP] Node=' + _capNode + ' · child_process=' + _capCp +
+            ' · cep.process=' + _capProc + ' · escriptura=' + (_U._fsKind || '?'));
+    } catch (eCap) { }
+    // ── ESTAT D'ESPERA DEL BOTÓ MAIN ─────────────────────────────────────────
+    // Mentre el motor JSX i el primer checkContext no acabin, el botó MAIN no ha de
+    // mostrar "NOU" ni acceptar clics: es posa en estat BUSY. Es desactiva sol quan
+    // updateButton() pinta el primer estat real (NEW/UPDATE/MASSA/…).
+    try {
+        if (window.FASTPASS_UI && FASTPASS_UI.Core && FASTPASS_UI.Core.Context
+            && typeof FASTPASS_UI.Core.Context.setMainBusy === 'function') {
+            FASTPASS_UI.Core.Context.setMainBusy('ESPERA', "Carregant el motor de Premiere i l'estat del dia…");
+        }
+    } catch (eBusy) { }
+    var utils = window.FASTPASS_UI ? window.FASTPASS_UI.Utils : null;
+
+    try {
+        // 1. Obtenemos la ruta nativa
+        var extensionRoot = csInterface.getSystemPath(SystemPath.EXTENSION);
+
+        // 2. BLINDAJE TOTAL:
+        // Convertimos todas las barras a inclinadas / (formato URL/Unix)
+        // Esto evita que Windows interprete \U o \T como caracteres especiales
+        var safeRoot = extensionRoot.replace(/\\/g, "/");
+
+        utils.log("📂 Ruta detectada: " + safeRoot, "DEBUG");
+        _bootMarkSafe('ruta de l\'extensió resolta');
+
+        // ── ESCALETES: LLISTAT NATIU EN PARAL·LEL (2026-10-21) ────────────────
+        // (2026-10-23) RETIRAT: el llistat de la carpeta central d'escaletes del
+        // NAS ja no existeix al flux (model local-first). L'escaleta del bloc es
+        // busca al DIRECTORI DEL PROJECTE (`findInFolder` / `lookupLocalStatus`)
+        // i, si no hi és, el flux de CREAR fa una FOTO. No hi ha res a escalfar
+        // a l'arrencada: checkContext només llista la carpeta del projecte.
+
+        // 3. LLAMADA QUIRÚRGICA:
+        // Usamos comillas simples para el envoltorio y dobles para el contenido
+        // ── DIAGNOSTIC D'ARRENCADA (2026-10-08, TEMPORAL · es pot treure) ──────
+        // L'arrencada arriba a 63 s i TOTS es consumeixen en aquesta crida. Com que
+        // el bootstrap nomes fa 13 $.evalFile petits i ~30 $.writeln, es mesura per
+        // separat per saber qui se'ls menja (tot en JS, sense codi JSX nou):
+        //   P1 = primera crida trivial  -> cost del MOTOR (1a crida de la sessio)
+        //   P2 = $.writeln              -> cost d'una linia de trace del motor
+        //   P3 = jsx_BOOTSTRAP          -> cua al motor | execucio | tornada
+        // HB TEMPORAL (2026-10-08): si el fil del panell esta viu, marca cada 1,5 s.
+        // Marques que segueixen durant l'atac -> el panell viu (qui no respon es
+        // Premiere/el motor). Marques aturades en sec -> bloqueig DINS del panell.
+        var _hbN = 0, _hbT0 = Date.now();
+        var _hb = setInterval(function () {
+            _hbN++;
+            _bootMarkSafe('DIAG HB ' + _hbN + ' viu a +' + (Date.now() - _hbT0) + ' ms');
+            if (_hbN >= 60) { clearInterval(_hb); }
+        }, 1500);
+
+        var _tP1 = Date.now();
+        try { await utils.callJSX("1+1"); } catch (eP1) { }
+        _bootMarkSafe('DIAG P1 ping motor JSX (' + (Date.now() - _tP1) + ' ms)');
+
+        var _tP2 = Date.now();
+        try { await utils.callJSX('$.writeln("fp_probe_writeln")'); } catch (eP2) { }
+        _bootMarkSafe('DIAG P2 $.writeln del motor (' + (Date.now() - _tP2) + ' ms)');
+
+        var _tSend = Date.now();
+        var _sendStr = 'var _fpT0=(new Date()).getTime(),_fpR=jsx_BOOTSTRAP("' + safeRoot + '"),' +
+            '_fpT1=(new Date()).getTime(); _fpR + "|" + _fpT0 + "|" + (_fpT1-_fpT0)';
+        var result = await utils.callJSX(_sendStr);
+        var _tRecv = Date.now();
+        var _fpD = String(result).split("|");
+        if (_fpD.length >= 3 && _fpD[0].indexOf("OK_BOOT") === 0) {
+            var _fpT0 = parseInt(_fpD[1], 10) || _tSend;
+            var _fpExec = parseInt(_fpD[2], 10) || 0;
+            result = _fpD[0];
+            _bootMarkSafe('DIAG P3 bootstrap · cua motor=' + (_fpT0 - _tSend) + ' ms | execucio=' +
+                _fpExec + ' ms | tornada=' + (_tRecv - _fpT0 - _fpExec) + ' ms');
+        }
+
+        if (result && result.indexOf("OK") !== -1) {
+            window.FASTPASS_UI.Utils.isJsxReady = true; // 📍 ESTA LÍNEA ES VITAL
+            utils.log("✅ Motor JSX montado con éxito.");
+            _bootMarkSafe('motor JSX a punt (jsx_BOOTSTRAP)');
+
+            // ── Detecció de motor JSX desactualitzat ─────────────────────────────
+            // Si la carpeta de l'extensió té .jsx més nous que els que el motor va
+            // carregar, es recarrega automàticament: així no cal reiniciar Premiere
+            // cada cop que s'actualitza l'extensió.
+            var _tFresh = Date.now();
+            try {
+                const bootRaw = await utils.callJSX("System.bootInfo()");
+                const bootStamp = parseInt((JSON.parse(bootRaw || "{}")).stamp, 10) || 0;
+                const diskStamp = parseInt(await utils.callJSX("System.jsxDiskStamp()"), 10) || 0;
+                if (diskStamp > bootStamp + 1000) {
+                    utils.log("🔄 [JSX] Extensió més nova que el motor (disk=" + diskStamp + " boot=" + bootStamp + "). Recarregant mòduls...", "INFO");
+                    const rl = await utils.callJSX("System.reloadModules()");
+                    utils.status("Motor JSX recarregat (" + rl + ")", "exito");
+                    _bootMarkSafe('recàrrega de mòduls JSX (motor desactualitzat)');
+                } else {
+                    utils.log("✅ [JSX] Motor al dia (disk=" + diskStamp + " boot=" + bootStamp + ")", "DEBUG");
+                }
+            } catch (eJsx) {
+                utils.log("⚠️ [JSX] Comprovació de frescor fallida: " + eJsx.message, "DEBUG");
+            }
+            _bootMarkSafe('comprovació de frescor JSX (' + (Date.now() - _tFresh) + ' ms)');
+            //utils.isJsxReady = true;
+
+            if (FASTPASS_UI.Core && FASTPASS_UI.Core.Context) {
+                var _tInit = Date.now();
+                await FASTPASS_UI.Core.Context.init();
+                _bootMarkSafe('Context.init (config + 1r checkContext) (' + (Date.now() - _tInit) + ' ms)');
+            }
+            var _totBoot = Date.now() - _tBoot;
+            _bootMarkSafe('ARRENCADA COMPLETA');
+            _bootClosed = true; // a partir d'aquí el log no creix amb els cicles de fons
+            try { clearInterval(_hb); } catch (eHb) { } // HB de diagnòstic: mor amb l'arrencada
+            utils.status("⏱️ Panell a punt (" + (Math.round(_totBoot / 100) / 10) + " s)", "info");
+            // ── ARRENCADA LENTA → S'OBRE EL LOG TOT SOL (2026-09-29) ────────────
+            // Un sol cop per sessió, perquè es vegi QUÈ ha trigat sense haver de
+            // buscar el fitxer a mà. Desactivable: FASTPASS_UI.Boot.setAutoOpen(0)
+            try {
+                if (!_bootAutoOpened && _bootAutoOpenMs > 0 && _totBoot >= _bootAutoOpenMs) {
+                    _bootAutoOpened = true;
+                    _bootMarkSafe('⚠️ arrencada lenta (' + (Math.round(_totBoot / 100) / 10) + ' s ≥ ' +
+                        Math.round(_bootAutoOpenMs / 1000) + ' s) → s\'obre _boot_timing.log', 'force');
+                    setTimeout(function () {
+                        try { if (window.FASTPASS_UI.Boot) window.FASTPASS_UI.Boot.openLog(); } catch (eOL3) { }
+                    }, 1200);
+                }
+            } catch (eAO) { }
+        } else {
+            // Si el motor falla, ahora el 'result' nos dirá EXACTAMENTE en qué línea del JSX falló
+            console.error("❌ Fallo en el motor: " + result);
+            _bootMarkSafe('ERROR: el motor JSX no ha carregat → ' + String(result).substring(0, 100));
+            // El botó es queda en BUSY perquè no es pot treballar sense motor.
+            try {
+                if (FASTPASS_UI.Core && FASTPASS_UI.Core.Context && FASTPASS_UI.Core.Context.setMainBusy) {
+                    FASTPASS_UI.Core.Context.setMainBusy('ERROR', 'El motor JSX no s\'ha carregat: ' + String(result).substring(0, 120));
+                }
+            } catch (eB2) { }
+        }
+
+    } catch (error) {
+        console.error("💥 Error fatal:", error);
+        _bootMarkSafe('ERROR fatal: ' + (error && error.message ? error.message : String(error)));
+    }
+})();
+
+// 3. CONTROLADOR DE LA INTERFAZ (BOTONES)
+(function () {
+    'use strict';
+
+
+    function applyLayoutMode(mode) {
+        if (mode === 'work') {
+            document.body.classList.add('mode-work');
+        } else {
+            document.body.classList.remove('mode-work');
+        }
+        window.FASTPASS_UI.LayoutMode = mode;
+        // Persistir el mode: si no, en recarregar el panell torna a TEST i el botó
+        // OUT deixa de disparar el pipeline de marcadors (s'ha de passar a TREBALL).
+        try { localStorage.setItem('fastpass_v1_layout', mode); } catch (e) { }
+        var btnMode = document.getElementById('btnMode');
+        if (btnMode) btnMode.textContent = (mode === 'work') ? '👤' : '🧪';
+        FASTPASS_UI.Utils.log('🔀 Layout mode: ' + mode.toUpperCase(), 'INFO');
+    }
+
+    function initSplitter() {
+        var splitter = document.getElementById('splitter');
+        var left = document.querySelector('.upper-left');
+        var right = document.querySelector('.right-zone');
+        var mainUpper = document.querySelector('.main-upper');
+        if (!splitter || !left || !right || !mainUpper) return;
+
+        var dragging = false;
+        splitter.addEventListener('mousedown', function (e) {
+            e.preventDefault();
+            dragging = true;
+            document.body.style.cursor = 'col-resize';
+            document.body.style.userSelect = 'none';
+        });
+        document.addEventListener('mousemove', function (e) {
+            if (!dragging) return;
+            var rect = mainUpper.getBoundingClientRect();
+            var x = e.clientX - rect.left;
+            var total = rect.width;
+            var splitterW = splitter.getBoundingClientRect().width;
+            var leftW = x - splitterW / 2;
+            if (leftW < 80) leftW = 80;
+            if (leftW > total - 120) leftW = total - 120;
+            left.style.flex = '0 0 ' + leftW + 'px';
+            right.style.flex = '1 1 auto';
+        });
+        var stop = function () {
+            if (!dragging) return;
+            dragging = false;
+            document.body.style.cursor = '';
+            document.body.style.userSelect = '';
+        };
+        document.addEventListener('mouseup', stop);
+    }
+
+    function initPanel() {
+        FASTPASS_UI.Utils.log("🚀 Vinculando botones...");
+
+        // --- WORKFLOW: CUT ---
+        // ═══════════════════════════════════════════════════════════════════
+        // (2026-09-23) FILTRE ANTI-CLICK FANTASMA per als botons DESTRUCTIUS
+        // (classe `.btn-destructivo`: IN · OUT&GO · KEYFRAME).
+        //
+        // BUG que arregla: al deixar anar el ratolí a la REGLA de l'editor de subtítols,
+        // el navegador del panell podia entregar el `click` a un altre botó (el primer de
+        // la botonera de tall = IN) i això feia un `ripple trim in` a V1 i movia l'OUT de
+        // la seqüència (queixa d'usuari 2026-09-23). També cobreix el cas de tecles
+        // sintètiques (VBS) que activaven el botó que tingués el focus.
+        //
+        // Guardes:
+        //   (B) cap clic en aquests botons dins dels 350 ms següents a un `mouseup` fet
+        //       FORA d'ells (p. ex. a la regla de l'editor);
+        //   (A) cal que hi hagi hagut un `mouseup` DINS del propi botó fa menys de 2,5 s
+        //       (clic real) i que `event.isTrusted !== false`.
+        // El filtre va en fase de CAPTURA, així s'executa ABANS dels listeners dels
+        // botons: no cal tocar-los.
+        // ═══════════════════════════════════════════════════════════════════
+        let _ultimoMouseUpFuera = 0;
+        let _ultimoMouseUpDentro = 0;
+        document.addEventListener('mouseup', function (ev) {
+            let dentro = false;
+            try { dentro = !!(ev && ev.target && ev.target.closest && ev.target.closest('.btn-destructivo')); } catch (e) { }
+            if (dentro) _ultimoMouseUpDentro = Date.now(); else _ultimoMouseUpFuera = Date.now();
+        }, true);
+        document.addEventListener('click', function (ev) {
+            let btn = null;
+            try { btn = (ev && ev.target && ev.target.closest) ? ev.target.closest('.btn-destructivo') : null; } catch (e) { }
+            if (!btn) return;
+            const ahora = Date.now();
+            const trasMouseUpFuera = (ahora - _ultimoMouseUpFuera) < 350;
+            const huboDownDentro = (ahora - _ultimoMouseUpDentro) < 2500;
+            if (ev.isTrusted === false || trasMouseUpFuera || !huboDownDentro) {
+                ev.stopPropagation();
+                ev.preventDefault();
+                try {
+                    FASTPASS_UI.Utils.log('🛡️ [BLINDATGE] Click ignorat a "' + (btn.id || btn.textContent) +
+                        '" (fantasma: ' + (ev.isTrusted === false ? 'sintètic' : (trasMouseUpFuera ? 'mouseup de fora' : 'sense down propi')) + ')', 'WARN');
+                } catch (e) { }
+                return;
+            }
+        }, true);
+
+        const btnIn = document.getElementById('btnIn');
+        console.log('🔍 btnIn:', btnIn);
+        if (!btnIn) alert('❌ btnIn no encontrado en el DOM');
+        const btnScene = document.getElementById('btnScene');
+        const btnOut = document.getElementById('btnOut');
+        // (2026-09-16) TROSSEJA i REFRAME: botons eliminats del panell d'usuari.
+        //  - TROSSEJA es fa dins del pipeline d'OUT & GO (Cut.runScene).
+        //  - REFRAME (KF.runAutoReframe) no permet col·locar l'efecte de reencuadre.
+        // (2026-09-24) TROSSEJA RECUPERAT com a botó TEST-ONLY (id btnScene, grup VÍDEO):
+        // l'usuari necessita provar cada fase del pipeline OUT & GO per separat. És
+        // exactament la fase 2 (`CallWorkflow('Cut','runScene')`), no una variant.
+        const btnPrevClip = document.getElementById('btnPrevClip');
+        const btnNextClip = document.getElementById('btnNextClip');
+        const btnKey = document.getElementById('btnKey');
+
+        if (btnIn) btnIn.addEventListener('click', function (ev) { console.log('🔘 Botón IN clickeado'); callWorkflow('Cut', 'runCutIn', ev); });
+        // (2026-09-24) TROSSEJA: fase 2 del pipeline OUT & GO (Cut.runScene), recuperada com a
+        // botó TEST-ONLY per poder-la provar per separat.
+        if (btnScene) btnScene.addEventListener('click', function () { console.log('🔘 Botón TROSSEJA clickeado'); callWorkflow('Cut', 'runScene'); });
+        if (btnOut) btnOut.addEventListener("click", function () { runOutHandler(); });
+        if (btnPrevClip) btnPrevClip.addEventListener('click', function () { callWorkflow('Cut', 'runPrevClip'); });
+        if (btnNextClip) btnNextClip.addEventListener('click', function () { callWorkflow('Cut', 'runNextClip'); });
+
+        if (btnKey) {
+            btnKey.addEventListener('click', async function (ev) {
+                // DIAGNÒSTIC: Ctrl+clic a KEY = probeRange (límit real de la Position)
+                if (ev && (ev.ctrlKey || ev.metaKey)) {
+                    if (FASTPASS_UI.Utils) {
+                        FASTPASS_UI.Utils.log('🔬 [PROBE] Provant límit real de la Position al clip del CTI...', 'INFO');
+                        try {
+                            const pr = await FASTPASS_UI.Utils.callJSX('Anim.probeRange()');
+                            FASTPASS_UI.Utils.log('🔬 [PROBE] RESULTAT: ' + pr, 'INFO');
+                            try { alert('PROBE límit Position:\n\n' + pr); } catch (eAl) {}
+                        } catch (ePr) {
+                            FASTPASS_UI.Utils.log('🔬 [PROBE] Error: ' + ePr.message, 'ERROR');
+                            try { alert('PROBE Error: ' + ePr.message); } catch (eAl2) {}
+                        }
+                    }
+                    return;
+                }
+                if (FASTPASS_UI.Workflows.KF) FASTPASS_UI.Workflows.KF.runAddKF();
+            });
+        }
+
+        // --- SLIDER: MOVIMIENTO Y ANIMACIÓN (zona sensible toggle) ---
+        const slider = document.getElementById('slider-move');
+        const sliderZone = document.getElementById('sliderZone');
+        if (slider && sliderZone) {
+            sliderZone.addEventListener('click', function (e) {
+                // El clic sobre el mateix slider (thumb) no ha de fer toggle
+                if (e.target === slider) return;
+                setReframeActive(!reframeActive);
+            });
+
+            var kfMode = function () {
+                return !!(window.FASTPASS_UI.State && window.FASTPASS_UI.State.isKeyframeMode);
+            };
+
+            // El slider actua sobre el clip SELECCIONAT (Anim.sliderApply ho decideix:
+            // V1 sense recorte → x(); V2 sense recorte → posició normal;
+            // clip amb recorte (V3 de la doble finestra) → PAN amb compensació).
+            // ── 🚀 FASE 1 (2026-09-16): enviament coalescent (últim-gana) ────────
+            // Mesura Fase 0: 105 inputs → 106 evalScript, fins a 25 en vola, rt_avg
+            // 592 ms i 62,8 s d'espera acumulada per a un barrido de 4,5 s. Ara:
+            //  · com a màxim 1 crida en vola (la resta espera),
+            //  · els valors intermedis obsolets es DESCARTEN (només compta l'últim),
+            //  · el COMMIT (isFinal) s'envia SEMPRE com a última operació del barrido.
+            var slPending = null, slInFlight = false, slRaf = 0;
+
+            var slSend = function (job) {
+                slInFlight = true;
+                var _t = _perfSendStart();                                 // 📊 FASE 0
+                var script = job.final
+                    ? `Anim.sliderApply(${job.norm}, true, ${kfMode()})`
+                    : `Anim.sliderApply(${job.norm}, false)`;
+                return FASTPASS_UI.Utils.callJSX(script).then(function (res) {
+                    _perfRecv(_t);                                         // 📊 FASE 0
+                    slInFlight = false;
+                    var px = Math.round(job.norm * sliderSeqW);
+                    if (job.final) {
+                        _perf.drainMs = _perfNow() - (_perf.tRelease || _perfNow());   // 📊 FASE 0
+                        // forceLog: salta el filtre de tema perquè el resultat (dx/crops del
+                        // panRecorte) sempre aparegui al log de diagnòstic.
+                        FASTPASS_UI.Utils.forceLog(`🎚️ Slider FINAL ${px}px → ${res}`);
+                        // 📊 FASE 0: informe del barrido (2,5 s d'espera perquè dreni la cua).
+                        if (_perf.on) {
+                            var _myId = _perf.id;
+                            if (_perf.timer) clearTimeout(_perf.timer);
+                            _perf.timer = setTimeout(function () {
+                                _perf.timer = 0;
+                                if (_perf.id === _myId) _perfReport();
+                            }, 2500);
+                        }
+                    } else {
+                        FASTPASS_UI.Utils.log(`🎚️ Slider ${px}px → ${res}`, "DEBUG");
+                    }
+                    // Si ha arribat un valor nou mentre volava → s'envia ARA (només l'últim).
+                    if (slPending) { slFlush(); }
+                });
+            };
+
+            var slFlush = function () {
+                slRaf = 0;
+                if (slInFlight || !slPending) return;
+                // Si el reencuadre s'ha desactivat pel camí, descarta els valors
+                // intermedis (el COMMIT final sí que s'envia sempre).
+                if (!reframeActive && !slPending.final) { slPending = null; return; }
+                var job = slPending;
+                slPending = null;
+                slSend(job);
+            };
+
+            slider.oninput = function () {
+                if (!reframeActive) return;
+                if (!isUserDraggingSlider) _perfBeginBarrido();            // 📊 FASE 0
+                isUserDraggingSlider = true;
+                _perf.nInput++; _perf.tLastInput = _perfNow();             // 📊 FASE 0
+                // El valor del slider ja és la X en PÍXELS → normalitzar (0..1)
+                if (slPending) _perf.nDescarts++;                          // 📊 FASE 0: intermedi obsolet
+                slPending = { norm: parseInt(slider.value, 10) / sliderSeqW, final: false };
+                if (!slRaf) slRaf = requestAnimationFrame(slFlush);        // 🚀 FASE 1
+            };
+
+            slider.onchange = function () {
+                if (!reframeActive) return;
+                isUserDraggingSlider = false;
+                _perf.tRelease = _perfNow();                               // 📊 FASE 0
+                // En soltar: isFinal=true per fer el COMMIT (refresc) a Premiere.
+                if (slPending) _perf.nDescarts++;                          // 📊 FASE 0
+                slPending = { norm: parseInt(slider.value, 10) / sliderSeqW, final: true };
+                if (slRaf) { cancelAnimationFrame(slRaf); slRaf = 0; }
+                slFlush();                                                 // 🚀 FASE 1: COMMIT garantit
+                // (2026-09-22) El codi ORIGINAL cridava aquí `Timeline.nuclearRefresh()`, que
+                // incloïa `app.setAppFocus()`: per això l'ESPAI (Play/Pausa de Premiere) funcionava
+                // després d'usar el slider. Es recupera aquell efecte: el focus del teclat torna a
+                // Premiere en deixar anar el slider (amb debounce, vegeu devolverFocoHost).
+                devolverFocoHost('slider');
+            };
+        }
+
+        // --- WORKFLOW: MARCADORS (Fases independents) ---
+        const btnMarksF1 = document.getElementById('btnMarksF1');
+        const btnMarksF2 = document.getElementById('btnMarksF2');
+        const btnMarksF3 = document.getElementById('btnMarksF3');
+        const btnMarksF35 = document.getElementById('btnMarksF35');
+        const btnMarksF4 = document.getElementById('btnMarksF4');
+        const btnMarksF5 = document.getElementById('btnMarksF5');
+        const btnMarksF6 = document.getElementById('btnMarksF6');
+        const btnMarksF6GF = document.getElementById('btnMarksF6GF');
+        const btnMapaImport = document.getElementById('btnMapaImport');
+
+        // (2026-09-24) GRUP MARCADORS (TEST) = EXACTAMENT les 8 fases que el pipeline OUT&GO
+        // executa automàticament (runFullPipelineOut). Si una fase canvia al pipeline, cal
+        // canviar-la aquí també: són el mateix callWorkflow(module, method).
+        //   F1   OnAir      → Markers.placeOnAirMarkers
+        //   F2   Deducit    → Markers.placeDeducedOnAirMarkers
+        //   F3   Previst    → Markers.placeScheduledMarkers
+        //   F3.5 Correlació → Markers.correlationSnapMarkers
+        //   F4   Densitat   → Assembly.snapFaroMarkers
+        //   F5   Inferits   → Markers.placeInferredItems  (Ctrl+clic = antic OrphanSnap)
+        //   F6   Ordre      → Markers.enforceMarkerOrder
+        //   F6·GF Gràfics   → Markers.placeGraphicMarkers
+        // (2026-09-25) Botó "F1 OnAir" ELIMINAT: la seva feina la fa la CAPA 1 (3·C1).
+        // La fase interna placeOnAirMarkers segueix existint per al pipeline OUT & GO.
+        if (btnMarksF2) btnMarksF2.addEventListener('click', () => callWorkflow('Markers', 'placeDeducedOnAirMarkers'));
+        if (btnMarksF3) btnMarksF3.addEventListener('click', () => callWorkflow('Markers', 'placeScheduledMarkers'));
+        if (btnMarksF35) btnMarksF35.addEventListener('click', () => callWorkflow('Assembly', 'correlationSnapMarkers'));
+        if (btnMarksF4) btnMarksF4.addEventListener('click', () => callWorkflow('Assembly', 'snapFaroMarkers'));
+        if (btnMarksF5) btnMarksF5.addEventListener('click', (ev) => {
+            // El pipeline OUT&GO fa placeInferredItems (Inferits). L'antic OrphanSnap queda
+            // accessible amb Ctrl+clic per poder comparar els dos algorismes.
+            if (ev && (ev.ctrlKey || ev.metaKey)) return callWorkflow('Markers', 'snapOrphanMarkers', ev);
+            return callWorkflow('Markers', 'placeInferredItems', ev);
+        });
+        // (2026-09-23) Botó GF = F6·Gràfics de l'escaleta (marcadors GROCS dels ítems gràfics:
+        // P2 foto, P2 MAPA, GF, TE…). Viu al grup MARCADORS (TEST) perquè en TREBALL aquesta
+        // fase ja s'executa dins del pipeline OUT&GO (runFullPipelineOut).
+        if (btnMarksF6GF) btnMarksF6GF.addEventListener('click', () => callWorkflow('Markers', 'placeGraphicMarkers'));
+
+// (2026-09-25) SISTEMA PER CAPES (TEST): SIL = mapa de silencis (només lectura) ·
+// C0 = capa 0 (setup + marcador d'inici immutable) · C1 = capa 1 (OnAir dur + densitat + Δ + congelat)
+const btnMarksSIL = document.getElementById('btnMarksSIL');
+const btnMarksC0 = document.getElementById('btnMarksC0');
+const btnMarksC1 = document.getElementById('btnMarksC1');
+if (btnMarksSIL) btnMarksSIL.addEventListener('click', () => callWorkflow('Markers', 'sil_dump'));
+if (btnMarksC0) btnMarksC0.addEventListener('click', () => callWorkflow('Markers', 'capa0_prep'));
+if (btnMarksC1) btnMarksC1.addEventListener('click', () => callWorkflow('Markers', 'capa1_onAir'));
+        // (2026-09-24) F6·Ordre: fase 9 del pipeline (Markers.enforceMarkerOrder). ABANS no
+        // existia cap botó per a aquesta fase al grup MARCADORS: no es podia testejar a mà.
+        if (btnMarksF6) btnMarksF6.addEventListener('click', () => callWorkflow('Markers', 'enforceMarkerOrder'));
+        // (2026-09-18) Botó 🎨 "Gráfica" → importador MAPA (ZZZ_GRAFISME → bin GRAF → V6).
+        // (2026-09-24) Canvi d'id (btnMarksF6 → btnMapaImport): el seu antic id xocava amb la
+        // fase F6·Ordre del grup MARCADORS.
+        if (btnMapaImport) btnMapaImport.addEventListener('click', () => callWorkflow('Mapa', 'run'));
+
+        // --- BOTONS CHYRONS (6 tipus independents via marcadors) ---
+        const btnChyronTitol = document.getElementById('btnChyronTitol');
+        const btnChyronConductor = document.getElementById('btnChyronConductor');
+        const btnChyronLloc = document.getElementById('btnChyronLloc');
+        const btnChyronNom = document.getElementById('btnChyronNom');
+        const btnChyronTraduccio = document.getElementById('btnChyronTraduccio');
+        const btnChyronResto = document.getElementById('btnChyronResto');
+
+        if (btnChyronTitol) btnChyronTitol.addEventListener('click', () => callWorkflow('Chyrons', 'placeChyronTitol'));
+        if (btnChyronConductor) btnChyronConductor.addEventListener('click', () => callWorkflow('Chyrons', 'placeChyronConductor'));
+        if (btnChyronLloc) btnChyronLloc.addEventListener('click', () => callWorkflow('Chyrons', 'placeChyronLloc'));
+        if (btnChyronNom) btnChyronNom.addEventListener('click', () => callWorkflow('Chyrons', 'placeChyronNom'));
+        if (btnChyronTraduccio) btnChyronTraduccio.addEventListener('click', () => callWorkflow('Chyrons', 'placeChyronTraduccio'));
+        if (btnChyronResto) btnChyronResto.addEventListener('click', () => callWorkflow('Chyrons', 'placeChyronResto'));
+        const btnChyronRepartir = document.getElementById('btnChyronRepartir');
+        if (btnChyronRepartir) btnChyronRepartir.addEventListener('click', () => callWorkflow('Chyrons', 'repartirChyronTraduccio'));
+        // (2026-10-16 · BUG #170) 🔀 ESTAT de la intro del bloc: TOC entre intro LLARGA
+        // (CasA: l'obri el Tema-Títol) ⇄ intro CURTA (CasB: l'obri el Conductor). Canvia
+        // l'ESTAT (com s'insereixen aquests chyrons) i re-col·loca l'inici del bloc.
+        // Ctrl+clic = torna l'estat a AUTO (auto-detecció), sense tocar el timeline.
+        const btnChyronCas = document.getElementById('btnChyronCas');
+        if (btnChyronCas) btnChyronCas.addEventListener('click', async (e) => {
+            await callWorkflow('Chyrons', 'switchTitolConductorCase',
+                (e && (e.ctrlKey || e.metaKey)) ? 'AUTO' : null);
+            syncChyronCasButton();
+        });
+        syncChyronCasButton();
+        const btnChyronColocar = document.getElementById('btnChyronColocar');
+        if (btnChyronColocar) btnChyronColocar.addEventListener('click', () => runPlaceAllChyrons());
+
+        // --- BOTONS GRÀFICS (IPD, IPD+, Doble Pantalla, MAPA, TOTEM, GRÀFICA/MAPA-GRAF) ---
+        const btnGrafIpd = document.getElementById('btnGrafIpd');
+        const btnGrafIpdPlus = document.getElementById('btnGrafIpdPlus');
+        const btnGrafDoblePantalla = document.getElementById('btnGrafDoblePantalla');
+        const btnGrafMapa = document.getElementById('btnGrafMapa');
+        const btnGrafTotem = document.getElementById('btnGrafTotem');
+        if (btnGrafIpd) btnGrafIpd.addEventListener("click", function (ev) {
+            if (ev && (ev.ctrlKey || ev.metaKey)) {
+                callWorkflow("Markers", "runAplicarIpdDesdeMarkers");
+            } else {
+                callWorkflow("Graphics", "runIpd");
+            }
+        });
+        // (2026-09-23) IPD+ = doble finestra VERTICAL (mateixa maquinària que la DF amb el
+        // perfil de Motion 'ipdplus'). Ctrl+clic = reset de l'estat del flux (com a la DF).
+        if (btnGrafIpdPlus) btnGrafIpdPlus.addEventListener('click', (e) => callWorkflow('Graphics', 'runIpdPlus', e));
+        if (btnGrafDoblePantalla) btnGrafDoblePantalla.addEventListener('click', (e) => callWorkflow('Graphics', 'runDoblePantalla', e));
+        if (btnGrafMapa) btnGrafMapa.addEventListener('click', () => callWorkflow('Graphics', 'runMapa'));
+        if (btnGrafTotem) btnGrafTotem.addEventListener('click', () => callWorkflow('Graphics', 'runTotem'));
+        // --- WORKFLOW: SRT EDITOR (SUBTÍTULOS) ---
+        const btnSrtLoad = document.getElementById('btnSrtLoad');
+        const btnSrtPlay = document.getElementById('btnSrtPlay');
+        const btnSrtIn = document.getElementById('btnSrtIn');
+        const btnSrtOut = document.getElementById('btnSrtOut');
+        const btnSrtAdjust = document.getElementById('btnSrtAdjust');
+        const btnSrtExport = document.getElementById('btnSrtExport');
+        const btnSrtReset = document.getElementById('btnSrtReset');
+        const btnSrtFill = document.getElementById('btnSrtFill');
+
+        if (btnSrtLoad) {
+            btnSrtLoad.addEventListener('click', async function (e) {
+                const u = FASTPASS_UI.Utils;
+                // (2026-10-23 · BUG #184) TRAÇA INCONDICIONAL del clic. Abans, si
+                // `window.SrtEditor` no existia, només es pintava un status al panell i
+                // el FASTPASS.log quedava net: era IMPOSSIBLE distingir "el botó no
+                // escolta" de "el flux ha fallat" (queixa d'usuari: "no fa res").
+                // forceLog salta el filtre de tema i força l'escriptura immediata.
+                const _ed = window.SrtEditor ||
+                    (window.FASTPASS_UI && FASTPASS_UI.Editor && FASTPASS_UI.Editor.SrtEditor) || null;
+                const _wfSrt = !!(window.FASTPASS_UI && FASTPASS_UI.Workflows &&
+                    FASTPASS_UI.Workflows.Srt && FASTPASS_UI.Workflows.Srt.runSrtLoad);
+                u.forceLog("[SRT_CARREGAR] CLIC · editor=" + (!!_ed) +
+                    " · loadEmergencySrt=" + !!(_ed && _ed.loadEmergencySrt) +
+                    " · Workflows.Srt.runSrtLoad=" + _wfSrt);
+                // El mecanisme ÚNIC de CARREGAR són els SRT dels blocs de 15 min
+                // (`SrtEditor.loadEmergencySrt`). Ctrl+clic = SUBTÍTOLS SINTÈTICS del dia
+                // (i el segon Ctrl+clic torna al SRT normal). L'antic Alt+clic (fallback a
+                // la carpeta de VERTICALITZACIÓ) ha desaparegut amb eixa carpeta.
+                if (e && (e.ctrlKey || e.metaKey)) e.preventDefault();
+                if (_ed && _ed.loadEmergencySrt) {
+                    if (e && (e.ctrlKey || e.metaKey)) {
+                        u.log("[SRT_CARREGAR] Ctrl+clic → SUBTITOLS SINTETICS del dia...");
+                        await callWorkflow('Srt', 'runSrtLoadSynthetic');
+                        return;
+                    }
+                    u.log("[SRT_CARREGAR] Carregant SRT (blocs de 15 min)...");
+                    await callWorkflow('Srt', 'runSrtLoad');
+                } else {
+                    // ERROR → escriptura immediata al log, a més de l'avís al panell.
+                    u.log("[SRT_CARREGAR] ❌ Editor SRT no disponible (js/editor/srt_editor.js " +
+                        "no s'ha carregat o ha petat en carregar-se)", "ERROR");
+                    u.status("Error: SrtEditor no disponible", "error");
+                }
+            });
+        }
+        if (btnSrtPlay) btnSrtPlay.addEventListener('click', function () {
+            if (window.SrtEditor) window.SrtEditor.togglePlay();
+        });
+        if (btnSrtIn) btnSrtIn.addEventListener('click', function () {
+            if (window.SrtEditor) window.SrtEditor.applyIn();
+        });
+        if (btnSrtOut) btnSrtOut.addEventListener('click', function () {
+            if (window.SrtEditor) window.SrtEditor.applyOut();
+        });
+        if (btnSrtAdjust) btnSrtAdjust.addEventListener('click', function () {
+            if (window.SrtEditor) window.SrtEditor.applyAdjust();
+        });
+        // (F3.3) 🧩 REOMLIR: SINT del dia (els carrega si cal) dins dels buits del normal (vista MOD)
+        if (btnSrtFill) btnSrtFill.addEventListener('click', () => callWorkflow('Srt', 'runSrtFillGaps'));
+        // (2026-10-23) RETIRAT el botó 🗑 ESBORRAR: suprimia la selecció igual que
+        // Supr/Backspace (`SrtEditor.deleteSelected`), que segueix viu al canvas.
+        if (btnSrtExport) btnSrtExport.addEventListener('click', function (e) {
+            if (!window.SrtEditor) return;
+            // (F3.2) Ctrl+clic = forca l'exportacio a S2 (els SINT ja hi van sols)
+            const toS2 = !!(e && (e.ctrlKey || e.metaKey));
+            // (F3.6 · 2026-10-23 · BUG #186) Ctrl+clic = AFEGIR NOMÉS EL QUE FALTA: no
+            // es reescriu el que ja té clip al timeline, va a S2 i els clips nous es
+            // pinten amb una ALTRA etiqueta de color (`srtGapColorLabel`).
+            let col = 7;
+            try {
+                const cfgG = (FASTPASS_UI.Config && FASTPASS_UI.Config.get) ? FASTPASS_UI.Config.get() : null;
+                if (cfgG && cfgG.srtGapColorLabel != null) col = Number(cfgG.srtGapColorLabel);
+            } catch (eCfg) { }
+            window.SrtEditor.exportToPremiere(toS2 ? { track: 1, onlyMissing: true, colorLabel: col } : undefined);
+        });
+        // (2026-09-22) RESET ♻️ → reinicia la taula I **torna a buscar els .SRT del tema**
+        // del bloc (abans només restaurava el SRT que ja hi havia carregat, així que si
+        // s'havia carregat el subtítol equivocat no hi havia manera de refrescar-lo).
+        if (btnSrtReset) btnSrtReset.addEventListener('click', () => callWorkflow('Srt', 'runSrtReset'));
+
+        // --- WORKFLOW: RENDER ---
+        const btnRenderVideo = document.getElementById('btnRenderVideo');
+        const btnRenderPortada = document.getElementById('btnRenderPortada');
+        const btnRenderClose = document.getElementById('btnRenderClose');
+
+        if (btnRenderVideo) btnRenderVideo.addEventListener('click', () => callWorkflow('Render', 'runVideo'));
+        // (2026-10-16 · BUG #172) La portada es exporta en 10-30 s: el botó queda OCUPAT
+        // (desactivat + pols `.btn-busy` + hora de rellotge) mentre dura i es restaura al
+        // final. Un segon clic el descarta la guarda de re-entrada del flux.
+        if (btnRenderPortada) btnRenderPortada.addEventListener('click', async () => {
+            markBtnBusy(btnRenderPortada, '⏳');
+            try {
+                await callWorkflow('Render', 'runPortada');
+            } finally {
+                clearBtnBusy(btnRenderPortada);
+            }
+        });
+        if (btnRenderClose) btnRenderClose.addEventListener('click', () => callWorkflow('Render', 'runClose'));
+
+        // --- SETUP Y SELECTORES ---
+        const btnSetup = document.getElementById('btnSetup');
+        const selectPrograma = document.getElementById('programa');
+        const selectBloc = document.getElementById('bloc');
+
+        if (btnSetup) btnSetup.addEventListener('click', () => callWorkflow('Config', 'toggleSetup', true));
+
+        // --- BOTÓ RESET GENERAL (2026-10-07): tanca el projecte del bloc seleccionat,
+        //     n'esborra la carpeta sencera del NAS i el torna a crear de zero ---
+        const btnReset = document.getElementById('btnReset');
+        if (btnReset) btnReset.addEventListener('click', () => callWorkflow('MainButton', 'runReset'));
+
+        // --- BOTÓ FER FOTO ESCALETA ---
+        const btnFetchEscaleta = document.getElementById('btnFetchEscaleta');
+        if (btnFetchEscaleta) {
+            btnFetchEscaleta.addEventListener('click', async function (ev) {
+                const reader = window.FASTPASS_UI.EscaletaReader;
+                const utils = window.FASTPASS_UI.Utils;
+                if (!reader || !reader.fetchNewEscaleta) {
+                    console.error('❌ EscaletaReader.fetchNewEscaleta no disponible');
+                    return;
+                }
+                utils.log('📷 [Fetch] Sol·licitant foto actualitzada de l\'escaleta...', 'INFO');
+                btnFetchEscaleta.innerText = '⏳ FOTO...';
+                btnFetchEscaleta.disabled = true;
+
+                try {
+                    const config = window.FASTPASS_UI.Config.get();
+                    const elProg = document.getElementById('programa');
+                    const elBloc = document.getElementById('bloc');
+                    if (!elProg || !elBloc || !elProg.value || elBloc.value === '---') {
+                        utils.log('⚠️ [Fetch] Selecciona programa i bloc primer', 'WARN');
+                        btnFetchEscaleta.innerText = '📷 FOTO';
+                        btnFetchEscaleta.disabled = false;
+                        return;
+                    }
+                    const progId = elProg.value;
+                    const progData = config.mapeoProgramas[progId];
+                    // escaletaId es opcional: si no ve de config, es dedueix per programa dins de fetchNewEscaleta
+                    const blocId = elBloc.value;
+
+                    // Ctrl+FOTO → foto de l'escaleta d'AHIR (per comparar/corregir el dia anterior).
+                    const useYesterdayFoto = !!(ev && (ev.ctrlKey || ev.metaKey));
+                    let fotoDateDir = useYesterdayFoto
+                        ? utils.getYesterdayDateDir()
+                        : utils.getFormattedDate().replace(/\"/g, "").trim();
+                    try {
+                        const coreCtx = window.FASTPASS_UI.Core && window.FASTPASS_UI.Core.Context;
+                        if (coreCtx && coreCtx._targetDateDir && !useYesterdayFoto) {
+                            fotoDateDir = coreCtx._targetDateDir();
+                        }
+                        const wt = (window.FASTPASS_UI.State && window.FASTPASS_UI.State.workTarget) || 'today';
+                        utils.log('[Fetch] FOTO data de treball: ' + fotoDateDir + (useYesterdayFoto ? ' (Ctrl+FOTO = AHIR)' : ' (workTarget=' + wt + ')'), 'INFO');
+                    } catch (eDate) {
+                        utils.log('[Fetch] No s\'ha pogut resoldre la data de treball: ' + eDate.message, 'WARN');
+                    }
+                    // ── PRIORITAT 0 · DATA DEL PROJECTE OBERT (2026-10-14 · BUG #156) ──────
+                    // (2026-10-21 · #177) NOMÉS en mode correcció (`workTarget` = 'yesterday').
+                    // SENSE Ctrl la data de treball és la D'AVUI, SEMPRE: si el panell ve
+                    // d'una sessió amb el projecte d'AHIR obert, la FOTO no pot baixar
+                    // l'escaleta d'AHIR i guardar-la al directori d'AHIR mentre el botó
+                    // principal treballa amb el dia d'AVUI. Per a un projecte d'AHIR cal
+                    // Ctrl (Ctrl+clic a MAIN o Ctrl+FOTO).
+                    const _wtFoto = (window.FASTPASS_UI.State && window.FASTPASS_UI.State.workTarget) || 'today';
+                    if (!useYesterdayFoto && _wtFoto === 'yesterday') {
+                        let projDateDir = null;
+                        try {
+                            const ctxDate = window.FASTPASS_UI.Core && window.FASTPASS_UI.Core.Context;
+                            if (ctxDate && ctxDate._resolveProjectDateDir) {
+                                projDateDir = await ctxDate._resolveProjectDateDir();
+                            }
+                        } catch (eProjDate) { projDateDir = null; }
+                        if (projDateDir) {
+                            const StFoto = window.FASTPASS_UI.State;
+                            if (StFoto && StFoto.projectDateDir !== projDateDir) {
+                                utils.log('📍 [Fetch] Re-ancorant la data de treball a la del PROJECTE OBERT: '
+                                    + (StFoto.projectDateDir || 'null') + ' → ' + projDateDir, 'WARN');
+                                StFoto.projectDateDir = projDateDir;
+                            }
+                            if (projDateDir !== fotoDateDir) {
+                                utils.log('📍 [Fetch] FOTO re-datada pel projecte obert: ' + fotoDateDir + ' → ' + projDateDir, 'WARN');
+                                fotoDateDir = projDateDir;
+                            }
+                        }
+                    }
+                    if (window.FASTPASS_UI && window.FASTPASS_UI.State) {
+                        window.FASTPASS_UI.State.dateDir = fotoDateDir;
+                    }
+                    const stateDateDir = fotoDateDir;
+                    // (2026-09-24) Carpeta del BLOC: <base><prog>_PROJECTES/<data>/<V*>
+                    const folderDest = utils.workFolder({ config: config, progData: progData, dateDir: stateDateDir, bloque: blocId });
+
+                    utils.log(`📷 [Fetch] Programa: ${progId}, Bloc: ${blocId}`, 'INFO');
+                    // Guarda de temps: si l'API d'escaletes o el motor JSX no responen
+                    // (xarxa/VPN), el botó no pot quedar-se penjat en "⏳ FOTO...".
+                    // 45 s: el fetch fa un intent (curl --max-time 20 + marge).
+                    // Guarda de temps: si l'API d'escaletes o el motor JSX no responen
+        // (2026-09-17): 45 s era insuficient. El handshake TLS amb digition triga
+        // ~26 s en aquesta xarxa, i la FOTO pot provar 2-3 candidats d'escaletaId
+        // abans d'encertar -> cal marge per a 3 intents (~30 s cadascun).
+        const FOTO_TIMEOUT_MS = 180000;
+                    const result = await Promise.race([
+                        reader.fetchNewEscaleta(
+                            progData.escaletaId || null,
+                            stateDateDir,
+                            progData.archivo,
+                            blocId,
+                            folderDest
+                        ),
+                        new Promise(function (resolve) {
+                            setTimeout(function () { resolve('__TIMEOUT__'); }, FOTO_TIMEOUT_MS);
+                        })
+                    ]);
+                    if (result === '__TIMEOUT__') {
+                        utils.log(`❌ [Fetch] Sense resposta de l'API d'escaletes (${FOTO_TIMEOUT_MS / 1000}s). Comprova la xarxa/VPN i torna-ho a provar.`, 'ERROR');
+                        utils.status("FOTO: l'API no respon", 'error');
+                        return;
+                    }
+
+                    if (result) {
+                        utils.log(`✅ [Fetch] Nova escaleta guardada: ${result.filename}`, 'INFO');
+                        utils.status('Escaleta actualitzada! Recalculant...', 'exito');
+
+                        // ─── REGENERAR MANIFEST DES DE LA CÒPIA LOCAL ──
+                        // La extensió treballa amb la còpia de l'escaleta al directori
+                        // del projecte. Després de generar una nova (botó FOTO), es
+                        // regenera el manifest des de l'últim JSON del directori.
+                        const ctxFoto = {
+                            config: config,
+                            progData: progData,
+                            bloque: blocId,
+                            dateDir: stateDateDir
+                        };
+                        if (window.FASTPASS_UI.Workflows && window.FASTPASS_UI.Workflows.MainButton
+                            && window.FASTPASS_UI.Workflows.MainButton._rebuildManifestFromLocal) {
+                            await window.FASTPASS_UI.Workflows.MainButton._rebuildManifestFromLocal(ctxFoto);
+                        }
+
+                        // Forçar recàrrega del context (force=true per saltar el debounce
+                        // de checkContext: la foto on_demand acabada de generar s'ha de
+                        // detectar en aquest mateix instant, no en el següent poll).
+                        if (window.FASTPASS_UI.Core && window.FASTPASS_UI.Core.Context) {
+                            await window.FASTPASS_UI.Core.Context.checkContext({ force: true });
+                        }
+                    } else {
+                        // El motiu REAL ja l'ha registrat EscaletaReader.fetchNewEscaleta al log
+                        // (missatge/debugInfo de l'API de digition).
+                        utils.log('❌ [Fetch] No s\'ha pogut obtenir la foto de l\'escaleta (mira el motiu de l\'API més amunt al log)', 'ERROR');
+                        utils.status("FOTO: l'API no ha donat escaleta (mira el log)", 'error');
+                    }
+                } catch (e) {
+                    utils.log(`❌ [Fetch] Error: ${e.message}`, 'ERROR');
+                } finally {
+                    btnFetchEscaleta.innerText = '📷 FOTO';
+                    btnFetchEscaleta.disabled = false;
+                }
+            });
+        }
+        // FIX A4: Els handlers 'change' de programa/bloc ja estan definits a
+        // Context.init() (p.onchange / b.onchange). Eliminem els addEventListener
+        // duplicats per evitar doble disparament i possibles race conditions.
+
+        // --- INICIALIZACIÓN DE VALORES ---
+        if (FASTPASS_UI.Config && FASTPASS_UI.Config.loadSelection) FASTPASS_UI.Config.loadSelection();
+
+        const _progEl = document.getElementById('programa');
+        const progInicial = _progEl ? _progEl.value : '';
+        if (progInicial && FASTPASS_UI.Core.Context.syncConductorUI) {
+            FASTPASS_UI.Core.Context.syncConductorUI(progInicial);
+        }
+
+        // Inicialitzar SRT Editor
+        // (2026-10-23 · BUG #184) Si `js/editor/srt_editor.js` no s'ha carregat (error de
+        // sintaxi o excepció dins del IIFE), `window.SrtEditor` no existeix i el botó ⬇️
+        // CARREGAR quedava MUT (només un status al panell, cap traça al log). Ara es
+        // prova també el mòdul intern i es deixa constància explícita al FASTPASS.log.
+        const _edInit = window.SrtEditor ||
+            (window.FASTPASS_UI && FASTPASS_UI.Editor && FASTPASS_UI.Editor.SrtEditor) || null;
+        if (_edInit && typeof _edInit.init === 'function') {
+            _edInit.init();
+            FASTPASS_UI.Utils.log("✅ SRT Editor inicialitzat");
+        } else {
+            FASTPASS_UI.Utils.log("❌ SRT Editor NO disponible: js/editor/srt_editor.js no s'ha " +
+                "carregat o ha petat (els botons de SUBTÍTOLS no faran res)", "ERROR");
+        }
+        FASTPASS_UI.Utils.forceLog("[SRT-INIT] btnSrtLoad=" + !!btnSrtLoad +
+            " · btnSrtExport=" + !!btnSrtExport +
+            " · editor=" + !!_edInit +
+            " · Workflows.Srt.runSrtLoad=" + !!(window.FASTPASS_UI && FASTPASS_UI.Workflows &&
+                FASTPASS_UI.Workflows.Srt && FASTPASS_UI.Workflows.Srt.runSrtLoad));
+
+        callContextAudit();
+        FASTPASS_UI.Utils.log("✅ TODOS LOS BOTONES VINCULADOS");
+        initSplitter();
+        var btnMode = document.getElementById('btnMode');
+        if (btnMode) {
+            btnMode.addEventListener('click', function () {
+                var cur = window.FASTPASS_UI.LayoutMode || 'test';
+                applyLayoutMode(cur === 'test' ? 'work' : 'test');
+            });
+        }
+        // El mode de layout es recorda entre sessions: TREBALL és el de producció
+        // (i el que fa que el botó OUT dispari el pipeline de marcadors).
+        var savedMode = 'test';
+        try { savedMode = localStorage.getItem('fastpass_v1_layout') || 'test'; } catch (e) { }
+        applyLayoutMode(window.FASTPASS_UI.LayoutMode || savedMode);
+        if (typeof sizeVideoToFit === 'function') sizeVideoToFit();
+    }
+
+    /**
+     * markBtnBusy / clearBtnBusy: (2026-10-16 · BUG #172) Estat OCUPAT d'un botó mentre dura
+     * un flux llarg. Es guarda l'etiqueta original al dataset i es restaura en acabar.
+     * S'usa amb la PORTADA (còpia a la zona neta + captura QE + neteja = 10-30 s): sense
+     * senyal visual, es tornava a clicar i el segon clic muntava una segona composició
+     * (el flux també té la seva pròpia guarda de re-entrada `_portadaRunning`).
+     */
+    function markBtnBusy(btn, text) {
+        if (!btn) return;
+        try {
+            if (!btn.dataset) btn.dataset = {};
+            if (btn.dataset.label === undefined) btn.dataset.label = btn.innerText;
+            btn.disabled = true;
+            btn.classList.add('btn-busy');
+            if (text) btn.innerText = text;
+        } catch (e) { }
+    }
+
+    function clearBtnBusy(btn) {
+        if (!btn) return;
+        try {
+            btn.disabled = false;
+            btn.classList.remove('btn-busy');
+            if (btn.dataset && btn.dataset.label !== undefined) btn.innerText = btn.dataset.label;
+        } catch (e) { }
+    }
+
+    async function callWorkflow(module, method, ...args) {
+        console.log(`🔘 callWorkflow: ${module}.${method}`);
+        // (2026-10-23 · BUG #184) El dispatch també va al FITXER (abans només a la
+        // consola del panell): si un botó no fa res, el log ha de dir si la crida ha
+        // eixit o si el mòdul/mètode no existeix.
+        const _u = window.FASTPASS_UI && FASTPASS_UI.Utils;
+        if (_u && _u.log) _u.log(`🔘 [DISPATCH] ${module}.${method}`, 'INFO');
+        if (FASTPASS_UI.Workflows[module] && FASTPASS_UI.Workflows[module][method]) {
+            try {
+                await FASTPASS_UI.Workflows[module][method](...args);
+            } catch (e) {
+                console.error("💥 Error en Workflow " + module + "." + method + ":", e);
+                if (FASTPASS_UI.Utils && FASTPASS_UI.Utils.handleError) {
+                    FASTPASS_UI.Utils.handleError(e, module + "." + method);
+                }
+            }
+        } else {
+            console.error("⚠️ Error: " + module + "." + method + " no existe.");
+            if (_u && _u.log) _u.log("⚠️ [DISPATCH] Workflow inexistent: " + module + "." + method, "ERROR");
+        }
+    }
+
+    /**
+     * runFullPipelineOut: Marcadors del botó OUT en mode TREBALL.
+     * Ordre: OUT (recorte i neteja), TROSSEJA, Dedu (F2), Prev (F3),
+     * Correl (F3.5), Density (F4), Inferits (F5), Ordre (F6), Gràfics (F6·GF:
+     * marcadors grocs dels ítems gràfics de l'escaleta) i Vermells (ítems no
+     * agrupats, agrupacio:null → color 1). Els chyrons es col·loquen
+     * després (botó COLOCAR), un cop l'usuari ha verificat els marcadors.
+     *
+     * NOTA (2026-09-29 · BUG #110): aquest docstring deia que F1 (OnAir) era al
+     * pipeline però l'array de fases NO el contenia (els marcadors OnAir els crea
+     * F3·Coinc). L'única cosa que hi faltava de debò era la fase dels VERMELLS.
+     */
+    async function runFullPipelineOut() {
+        const utils = FASTPASS_UI.Utils;
+        const phases = [
+            ['OUT · recorte i neteja', () => callWorkflow('Cut', 'runCutOut')],
+            ['TROSSEJA',               () => callWorkflow('Cut', 'runScene')],
+            ['Dedu (F2)',             () => callWorkflow('Markers', 'placeDeducedOnAirMarkers')],
+            ['Prev (F3)',              () => callWorkflow('Markers', 'placeScheduledMarkers')],
+            ['Correl (F3.5)',          () => callWorkflow('Assembly', 'correlationSnapMarkers')],
+            ['Density (F4)',           () => callWorkflow('Assembly', 'snapFaroMarkers')],
+            ['Inferits (F5)',          () => callWorkflow('Markers', 'placeInferredItems')],
+            ['Ordre (F6)',             () => callWorkflow('Markers', 'enforceMarkerOrder')],
+            ['Gràfics (F6·GF)',        () => callWorkflow('Markers', 'placeGraphicMarkers')],
+            // (2026-09-29) BUG #110: els marcadors VERMELLS (ítems no agrupats,
+            // agrupacio:null) només es creaven dins de placeOnAirMarkers (F1), que no
+            // formava part d'aquest pipeline → en el flux automàtic OUT&GO no apareixia
+            // cap vermell (cas real 28/09 TNV_V2: `02dir`). Fase pròpia i idempotent.
+            ['Vermells (no agrupats)', () => callWorkflow('Markers', 'placeUngroupedMarkers')],
+            // (2026-10-27 · BUG #192) NORMA IMPERATIVA d'usuari: dos marcadors NO poden
+            // quedar mai superposats. És l'última passada del pipeline (després de F6·GF i
+            // dels vermells, que també poden afegir marcadors al 00:00): separa els que
+            // coincidixen en orde d'escaleta amb GAP de 3 s (flow_markers: F8·Separació).
+            ['Separació (F8)',         () => callWorkflow('Markers', 'separateOverlappingMarkers')]
+        ];
+        utils.log('🚀 [PIPE] Marcadors post-OUT: ' + phases.map(p => p[0]).join(' → ') + '. Verifica els marcadors i usa COLOCAR per als chyrons.', 'INFO');
+        // [2026-09-17] NOMES MARCADORS: si la V1 ja esta trocejada (>=2 clips) no tornem a
+        // fer OUT ni TROSSEJA: nomes es re-col·loquen els marcadors (F1-F6). Es substitueix
+        // la funcio de les dues primeres fases (l'array es const, pero els seus elements son
+        // mutables), aixi el bucle de sota queda intacte.
+        try {
+            const nV1 = parseInt(await utils.callJSX("FASTPASS.Clips.count(1,'video')") || "0", 10) || 0;
+            if (nV1 >= 2) {
+                phases[0][1] = async function () { utils.log('   [PIPE] OUT omes (V1 ja trocejada)', 'INFO'); };
+                phases[1][1] = async function () { utils.log('   [PIPE] TROSSEJA omes (V1 ja trocejada)', 'INFO'); };
+                utils.log('   [PIPE] V1 ja te ' + nV1 + ' clips -> saltant OUT i TROSSEJA (nomes marcadors)', 'INFO');
+            }
+        } catch (eNV) { }
+
+        for (const ph of phases) {
+            const t0 = Date.now();
+            utils.log('🔄 [PIPE] ' + ph[0] + '...', 'INFO');
+            try {
+                await ph[1]();
+            } catch (e) {
+                utils.log('⚠️ [PIPE] ' + ph[0] + ' ha llançat: ' + e.message, 'ERROR');
+            }
+            await utils.delay(350);
+            utils.log('✅ [PIPE] ' + ph[0] + ' finalitzada (' + ((Date.now() - t0) / 1000).toFixed(1) + 's)', 'INFO');
+        }
+        utils.log('🏁 [PIPE] Marcadors col·locats. Verifica la seqüència i prem COLOCAR per posar els chyrons.', 'INFO');
+        // SNAPSHOT: deixar constància de COM han quedat els marcadors (posició,
+        // comentari, color) abans que l'usuari els mogui a mà. Es desa a la carpeta
+        // del projecte com a MARCADORS_<data>_<hora>.txt i .json.
+        try {
+            const MK = FASTPASS_UI.Workflows && FASTPASS_UI.Workflows.Markers;
+            if (MK && MK.dumpMarkersSnapshot) {
+                const nSnap = await MK.dumpMarkersSnapshot();
+                if (typeof nSnap === 'number' && nSnap >= 0) {
+                    utils.log('💾 [PIPE] Snapshot de marcadors desat (' + nSnap + ' marcadors) a la carpeta del projecte.', 'INFO');
+                }
+            }
+        } catch (eSnap) {
+            utils.log('⚠️ [PIPE] Snapshot de marcadors: ' + eSnap.message, 'WARN');
+        }
+        utils.status('Marcadors col·locats — prem COLOCAR', 'exito');
+    }
+
+    /**
+     * runPlaceAllChyrons: Col·loca TOTS els chyrons del bloc (botó COLOCAR).
+     * Ordre: Conductor, Titol, Lloc, Nom, Resto, Traducció.
+     */
+    async function runPlaceAllChyrons() {
+        const utils = FASTPASS_UI.Utils;
+        const phases = [
+            ['Conduct',   () => callWorkflow('Chyrons', 'placeChyronConductor')],
+            ['Titol',     () => callWorkflow('Chyrons', 'placeChyronTitol')],
+            ['Lloc',      () => callWorkflow('Chyrons', 'placeChyronLloc')],
+            ['Nom',       () => callWorkflow('Chyrons', 'placeChyronNom')],
+            ['Resto',     () => callWorkflow('Chyrons', 'placeChyronResto')],
+            ['Traducció', () => callWorkflow('Chyrons', 'placeChyronTraduccio')]
+        ];
+        utils.log('🚀 [CHY] Col·locant TOTS els chyrons: ' + phases.map(p => p[0]).join(' → '), 'INFO');
+        for (const ph of phases) {
+            const t0 = Date.now();
+            utils.log('🔄 [CHY] ' + ph[0] + '...', 'INFO');
+            try {
+                await ph[1]();
+            } catch (e) {
+                utils.log('⚠️ [CHY] ' + ph[0] + ' ha llançat: ' + e.message, 'ERROR');
+            }
+            await utils.delay(350);
+            utils.log('✅ [CHY] ' + ph[0] + ' finalitzat (' + ((Date.now() - t0) / 1000).toFixed(1) + 's)', 'INFO');
+        }
+        utils.log('🏁 [CHY] Tots els chyrons col·locats.', 'INFO');
+        utils.status('Chyrons col·locats', 'exito');
+
+        // ── IPD (auto): si hi ha algun marcador IPD (color turquesa=7) a la seqüència,
+        //    repassa els clips del tram (des del marcador IPD fins al següent marcador
+        //    d'estructura) i hi col·loca l'efecte de ZOOM + POSICIÓ (mecànica IPD aplicada,
+        //    mai toggle: no reverteix els clips que ja tinguin l'efecte).
+        let ipdMarkers = [];
+        try {
+            const markersRaw = await utils.callJSX('Markers.get()');
+            try { ipdMarkers = JSON.parse(markersRaw || '[]'); } catch (eM) {}
+        } catch (eI) {
+            utils.log('⚠️ [CHY] No s\'ha pogut llegir els marcadors per revisar IPD: ' + eI.message, 'ERROR');
+        }
+        ipdMarkers = (ipdMarkers || []).filter(m => m && (m.color === 7 || String(m.comments || m.title || '').toUpperCase().indexOf('IPD') !== -1));
+        if (ipdMarkers.length > 0) {
+            utils.log(`🔎 [CHY] ${ipdMarkers.length} marcador(s) IPD detectat(s) (turquesa o títol amb IPD) → col·locant zoom+posició als clips del tram fins al següent estructural...`, 'INFO');
+            try {
+                await callWorkflow('Markers', 'runAplicarIpdDesdeMarkers');
+            } catch (eI2) {
+                utils.log('⚠️ [CHY] La revisió IPD ha llançat: ' + eI2.message, 'ERROR');
+            }
+        } else {
+            utils.log('➖ [CHY] Sense marcadors IPD (turquesa o títol amb IPD): no cal revisar IPD.', 'INFO');
+        }
+
+        // ── GRAFISMES ASSOCIATS (2026-09-23): repassar els marcadors GROCS (F6·GF) i
+        //    col·locar el grafisme de la carpeta del dia al TC de cada marcador quan el
+        //    títol porta una paraula clau (MAPA…). Si no es troba el fitxer, s'obre el
+        //    navegador de fitxers. És la mateixa maquinària que el botó 🎨, però guiada
+        //    pels marcadors (GRAF_KEYWORDS a flow_mapa.js, ampliable).
+        try {
+            await callWorkflow('Mapa', 'runFromMarkers');
+        } catch (eG) {
+            utils.log('⚠️ [CHY] La revisió de grafismes (MAPA) ha llançat: ' + eG.message, 'ERROR');
+        }
+
+        // ── FOCUS FINAL (2026-09-21): deixar el targeting NOMÉS a V1/A1 i el clip de V1
+        //    seleccionat (el "clip objectiu" del panell). Sense això, després de COL·LOCAR
+        //    quedaven totes les pistes enfocades i el slider/KEYFRAME no apuntaven a V1.
+        try {
+            await utils.targetOnlyV1('Col·locar');
+            await utils.focusV1('Col·locar');
+        } catch (eF) {
+            utils.log('⚠️ [CHY] No s\'ha pogut restaurar el focus a V1: ' + eF.message, 'WARN');
+        }
+    }
+
+    /**
+     * runOutHandler: Comportament del botó OUT segons el layout.
+     *  - mode TEST: només el tancament clàssic (runCutOut), per poder provar les peces per separat.
+     *  - mode TREBALL: dispara el pipeline complet automàtic.
+     */
+    async function runOutHandler() {
+        const layoutMode = window.FASTPASS_UI.LayoutMode || 'test';
+        if (layoutMode === 'work') {
+            await runFullPipelineOut();
+        } else {
+            // Mode TEST: només el tancament clàssic. Avisem ben clar perquè el log
+            // no deixi cap dubte de per què no s'han col·locat els marcadors.
+            FASTPASS_UI.Utils.log('⚠️ [OUT] Mode TEST: només tancament (CUT OUT). El pipeline de marcadors ' +
+                '(TROSSEJA → OnAir → Deduc → Prev → Correl → Density) només s\'executa en mode TREBALL (👤).', 'WARN');
+            try { FASTPASS_UI.Utils.status('Mode TEST: només tancament — passa a 👤 TREBALL', 'warn'); } catch (eS) { }
+            await callWorkflow('Cut', 'runCutOut');
+        }
+    }
+
+    function handleSelectionChange(e) {
+        if (e.target.id === 'programa' && FASTPASS_UI.Core.Context.updateConductorSelector) {
+            FASTPASS_UI.Core.Context.updateConductorSelector(e.target.value);
+        }
+        if (FASTPASS_UI.Config) FASTPASS_UI.Config.saveSelection(e.target);
+        callContextAudit();
+    }
+
+    function callContextAudit() {
+        if (!window.FASTPASS_UI.Utils.isJsxReady) return;
+        if (FASTPASS_UI.Core.Context && FASTPASS_UI.Core.Context.checkContext) {
+            FASTPASS_UI.Core.Context.checkContext();
+        }
+    }
+
+    if (document.readyState === 'loading') {
+        window.addEventListener('DOMContentLoaded', initPanel);
+    } else {
+        initPanel();
+    }
+})();
+
+// 4. SINCRONIZACIÓN (POLLING DEL SLIDER)
+FASTPASS_UI.Sync.updateSliderFromPremiere = function () {
+    if (!reframeActive) return;          // polling només amb el reencuadre actiu
+    if (isUserDraggingSlider) { _perf.pollSkip++; return; }   // 📊 FASE 0
+    // Llegeix la X del clip objectiu (el SELECCIONAT, o V1 sota CTI): Anim.sliderApply().
+    FASTPASS_UI.Utils.callJSX('Anim.sliderApply()').then(val => {
+        const slider = document.getElementById('slider-move');
+        if (slider && val && val !== "undefined" && val !== "") {
+            const norm = parseFloat(val);
+            slider.value = Math.round(norm * sliderSeqW);   // normalitzat -> px
+        }
+    });
+};
+
+// 5. SINCRONITZACIÓ DEL MODE (SLIDER / KEYFRAME) AMB EL CLIP SELECCIONAT
+FASTPASS_UI.Sync.syncKfMode = function () {
+    if (!window.FASTPASS_UI.Utils || !window.FASTPASS_UI.Utils.isJsxReady) return;
+    // 🚀 FASE 3 (2026-09-16): mentre s'arrossega el slider no es fa cap crida de
+    // sincronització (competia a la mateixa cua d'ExtendScript: 15 Anim.modeInfo
+    // per barrido). Es reprendrà al tick següent de deixar anar el slider.
+    if (isUserDraggingSlider) { _perf.ticksKf++; return; }   // 📊 FASE 0
+    // El clip objectiu (Anim.modeInfo) és el SELECCIONAT (o V1 sota CTI com a
+    // fallback), el mateix sobre el qual actuen el slider i el botó KEYFRAME.
+    FASTPASS_UI.Utils.callJSX('Anim.modeInfo()').then(function (raw) {
+        if (!raw || raw === "null" || raw.indexOf("ERR") === 0) return;
+        var o;
+        try { o = JSON.parse(raw); } catch (eP) { return; }
+        var clipId = (o.track || "") + "@" + (o.start || "") + "@" + (o.name || "");
+        var kf = !!o.kf;
+        if (clipId !== lastKfClipId) {
+            // Ha canviat el clip → adoptem el mode "d'origen" d'aquest clip:
+            // sense keyframes → mode SLIDER; amb keyframes → mode KEYFRAME.
+            lastKfClipId = clipId;
+            if (FASTPASS_UI.State) FASTPASS_UI.State.isKeyframeMode = kf;
+            var nom = o.name ? (' "' + o.name + '"') : '';
+            var trackTxt = o.track ? ("V" + o.track) : "?";
+            FASTPASS_UI.Utils.log("🎬 Clip " + trackTxt + nom + " → mode " + (kf ? "KEYFRAME (té keyframes)" : "SLIDER (sense keyframes)"), "DEBUG");
+            // El status només es mostra amb el reencuadre actiu (l'usuari està a la
+            // zona del slider); així no pisa els missatges d'altres workflows.
+            if (reframeActive) {
+                FASTPASS_UI.Utils.status("Clip " + trackTxt + ": mode " + (kf ? "KEYFRAME" : "SLIDER"), kf ? "exito" : "warn");
+            }
+        } else if (FASTPASS_UI.State && kf !== !!FASTPASS_UI.State.isKeyframeMode) {
+            // El mode del mateix clip ha canviat (s'ha afegit o eliminat un key).
+            FASTPASS_UI.State.isKeyframeMode = kf;
+        }
+    });
+};
+
+// 6. DESACTIVAR EL REENCUADRE QUAN ES TOCA UN ALTRE CONTROL
+document.addEventListener('click', function (e) {
+    if (!reframeActive) return;
+    var zone = document.getElementById('sliderZone');
+    if (zone && !zone.contains(e.target)) {
+        // No desactivar amb els controls de navegació ni KEYFRAME
+        var keep = ['btnPrevClip', 'btnNextClip', 'btnKey'];
+        var id = e.target && e.target.id;
+        if (id && keep.indexOf(id) !== -1) return;
+        setReframeActive(false);
+    }
+});
+
+// 7.b (2026-09-22) PLAY/PAUSA des del panell: quines APIs hi ha en AQUESTA versió de Premiere?
+// El log del 22/09 (14:54) mostra que el play del panell mai ha funcionat:
+//   💥 [JSX ERROR]: ERR:qe.project.getActiveSequence().play is not a function
+//   💥 [JSX ERROR]: ERR:qe.project.getActiveSequence().stop is not a function
+// → el QE DOM d'aquesta versió NO té play()/stop(). Es comprova UNA vegada i es diu al log.
+let _qePlayOk = null;
+let _focusApis = null;        // { setAppFocus:bool, bringToFront:bool } (del diagnòstic)
+function comprobarApisPlay() {
+    if (_qePlayOk !== null) return;
+    try {
+        FASTPASS_UI.Utils.callJSX(
+            "(function(){try{var out=[];try{app.enableQE();var s=qe.project.getActiveSequence();" +
+            "out.push('qe.seq.play='+(s&&typeof s.play==='function'?'SI':'NO'));" +
+            "out.push('qe.seq.stop='+(s&&typeof s.stop==='function'?'SI':'NO'));}catch(e){out.push('qe=ERR:'+e.message)}" +
+            "try{var a=app.project.activeSequence;out.push('app.seq.play='+(a&&typeof a.play==='function'?'SI':'NO'));}catch(e2){out.push('app.seq=ERR:'+e2.message)}" +
+            "try{out.push('bringToFront='+(typeof app.bringToFront==='function'?'SI':'NO'));}catch(e3){}" +
+            "try{out.push('setAppFocus='+(typeof app.setAppFocus==='function'?'SI':'NO'));}catch(e5){}" +
+            "return out.join(' · ');}catch(e4){return 'ERR:'+e4.message}})()"
+        ).then(function (r) {
+            var s = String(r);
+            _qePlayOk = (s.indexOf('qe.seq.play=SI') !== -1);
+            _focusApis = {
+                setAppFocus: (s.indexOf('setAppFocus=SI') !== -1),
+                bringToFront: (s.indexOf('bringToFront=SI') !== -1)
+            };
+            var via = _qePlayOk ? 'QE (SrtEditor.togglePlay)'
+                : (_focusApis.setAppFocus ? 'app.setAppFocus()'
+                    : (_focusApis.bringToFront ? 'app.bringToFront()'
+                        : 'tecla ESPAI via bin/send_space.vbs (VBS, wscript sense consola)'));
+            FASTPASS_UI.Utils.log('🔎 [PLAY] APIs → ' + r + ' → via: ' + via, 'WARN');
+        }).catch(function () { _qePlayOk = false; _focusApis = { setAppFocus: false, bringToFront: false }; });
+    } catch (e) { _qePlayOk = false; }
+}
+
+// 7.c (2026-09-22) RETORNAR EL FOCUS DEL TECLAT A PREMIERE
+// Amb el panell enfocat, l'ESPAI no pot arribar a Premiere (i el panell no té cap API de
+// play usable). La solució bona és NO quedar-se el focus: després de cada interacció amb el
+// panell (mouseup) el focus del teclat torna a Premiere amb `app.bringToFront()` (el panell
+// està acoblat dins de la finestra de Premiere → no canvia res visualment) i es fa `blur()`
+// dels controls. Així l'ESPAI és Play/Pausa natiu de Premiere, sempre.
+// NO es fa mai si el focus és en un CAMP DE TEXT (l'usuari està escrivint).
+let _focoTimer = null;
+function devolverFocoHost(motiu) {
+    var abans = null;
+    try { abans = document.hasFocus(); } catch (eH1) { }
+    try {
+        var a = document.activeElement;
+        if (a && a.blur) a.blur();
+    } catch (eB) { }
+    try { window.blur(); } catch (eW) { }
+    var despres = null;
+    try { despres = document.hasFocus(); } catch (eH2) { }
+    FASTPASS_UI.Utils.log('🖱 [FOCUS] (' + motiu + ') hasFocus del panell: ' + abans + ' → ' + despres, 'DEBUG');
+    clearTimeout(_focoTimer);
+    _focoTimer = setTimeout(function () {
+        try {
+            // Només es criden les APIs que el diagnòstic ha confirmat (aquesta versió de Premiere
+            // no té ni setAppFocus ni bringToFront → no es torna a intentar i no s'embruta el log).
+            var apis = _focusApis || { setAppFocus: true, bringToFront: true };
+            var parts = ['var out=[];'];
+            if (apis.setAppFocus) parts.push('try{app.setAppFocus();out.push("setAppFocus=OK")}catch(e){out.push("setAppFocus=ERR")}');
+            if (apis.bringToFront) parts.push('try{app.bringToFront();out.push("bringToFront=OK")}catch(e2){out.push("bringToFront=ERR")}');
+            if (parts.length === 1) {
+                FASTPASS_UI.Utils.log('🖱 [FOCUS] (' + motiu + ') sense APIs natives de focus a Premiere (es fa servir el VBS de la tecla)', 'DEBUG');
+                return;
+            }
+            parts.push('return out.join(" · ")');
+            FASTPASS_UI.Utils.callJSX('(function(){' + parts.join('') + '})()')
+                .then(function (r) {
+                    FASTPASS_UI.Utils.log('🖱 [FOCUS] focus del teclat → Premiere (' + motiu + ') → ' + r, 'DEBUG');
+                }).catch(function () { });
+        } catch (eC) { }
+    }, 60);
+}
+function _focusEsCampDeText() {
+    try {
+        var el = document.activeElement;
+        if (!el) return false;
+        var tag = String(el.tagName || '').toUpperCase();
+        var tipo = String(el.type || '').toLowerCase();
+        if (tag === 'TEXTAREA' || tag === 'SELECT' || el.isContentEditable === true) return true;
+        if (tag === 'INPUT' && ['range', 'checkbox', 'radio', 'button', 'submit', 'reset'].indexOf(tipo) === -1) return true;
+        return false;
+    } catch (e) { return false; }
+}
+
+// 7.d (2026-09-22) FALLBACK FINAL: enviar la TECLA ESPAI a Premiere.
+// El log demostra que en aquesta versió de Premiere NO existeixen `app.setAppFocus()` ni
+// `app.bringToFront()` (⇒ "is not a function") i el QE no té `play()`. Com que el panell, amb
+// el focus del teclat, no deixa arribar l'ESPAI a Premiere, l'única via que queda és enviar la
+// tecla des del sistema: `bin/send_space.vbs` (AppActivate del PID de Premiere + SendKeys " "),
+// llançat amb `File.execute()` → s'obre amb wscript.exe (SENSE consola ni parpadeig).
+function _rutaExtensioWindows() {
+    try {
+        if (typeof SystemPath !== 'undefined' && SystemPath.EXTENSION && window.__adobe_cep__) {
+            var cs = new CSInterface();
+            var ext = cs.getSystemPath(SystemPath.EXTENSION);
+            if (ext) return String(ext).replace(/\//g, '\\').replace(/[\\]+$/, '');
+        }
+    } catch (e1) { }
+    try {
+        var href = window.location.href;
+        var qi = href.indexOf('/index.html');
+        if (qi > 0) {
+            var p = decodeURIComponent(href.substring(0, qi));
+            if (p.indexOf('file:///') === 0) p = p.substring(8);
+            return p.replace(/\//g, '\\');
+        }
+    } catch (e2) { }
+    return '';
+}
+let _teclaEnviadaTs = 0;      // anti-rebot + talla de bucle
+function enviarTeclaEspai(motiu) {
+    var ara = Date.now();
+    if (ara - _teclaEnviadaTs < 250) return;    // dues crides seguides → només una
+    var root = _rutaExtensioWindows();
+    if (!root) {
+        FASTPASS_UI.Utils.log('⌨️ [TECLAT] no puc resoldre la ruta de l\'extensió per enviar la tecla', 'WARN');
+        return;
+    }
+    _teclaEnviadaTs = ara;
+    var vbs = root + '\\bin\\send_space.vbs';
+    var esc = vbs.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+    FASTPASS_UI.Utils.callJSX(
+        "(function(){try{var f=new File('" + esc + "');" +
+        "if(!f.exists) return 'ERR_NO_VBS';" +
+        "return f.execute() ? 'OK' : 'ERR_EXEC';}catch(e){return 'ERR:'+e.message}})()"
+    ).then(function (r) {
+        FASTPASS_UI.Utils.log('⌨️ [TECLAT] tecla ESPAI enviada a Premiere (' + (motiu || '') + ') → ' + r, 'DEBUG');
+    }).catch(function () { });
+}
+
+document.addEventListener('mouseup', function () {
+    if (_focusEsCampDeText()) return;      // escrivint en un camp → no es toca el focus
+    devolverFocoHost('mouseup');
+}, true);
+
+// Comprovació única de les APIs de play, quan el motor JSX ja està calent.
+setTimeout(function () { try { comprobarApisPlay(); } catch (e) { } }, 1500);
+
+// 7. (2026-09-22) BARRA ESPACIADORA / ENTER — PROBLEMA DE FOC
+// El navegador "pulsa" l'element que té el FOCUS quan es prem ESPAI o ENTER. Com que el
+// panell no netejava mai el focus, després de clicar un botó (p. ex. ▶ de clip següent)
+// el focus s'hi quedava ENGANXAT i cada ESPAI tornava a executar aquell botó: "saltava al
+// clip següent" en lloc de fer PLAY/PAUSA ✗.
+// Aquí:
+//   1) ESPAI/ENTER sobre un botó o enllaç: es neutralitza el clic fantasma (preventDefault)
+//      i es treu el focus (blur) perquè no es repetisca.
+//   2) ESPAI (fora de camps de text): PLAY/PAUSA real de Premiere via
+//      SrtEditor.togglePlay() → QE DOM (no cal que el visor tingui vídeo carregat).
+// Els camps de text (INPUT/TEXTAREA/SELECT/contenteditable) NO es toquen: allà l'espai és
+// contingut i Enter confirma.
+document.addEventListener('keydown', function (e) {
+    var esSpace = (e.key === ' ' || e.key === 'Spacebar' || e.code === 'Space');
+    var esEnter = (e.key === 'Enter' || e.code === 'Enter' || e.code === 'NumpadEnter');
+    if (!esSpace && !esEnter) return;
+
+    var el = document.activeElement;
+    var tag = el ? String(el.tagName || '').toUpperCase() : '';
+    var tipo = (el && el.type) ? String(el.type).toLowerCase() : '';
+    // "Camp de text" (INPUT de text, TEXTAREA, SELECT, contenteditable): allà ESPAI/ENTER són
+    // contingut i NO s'hi toca res. Els controls que NO són de text sí que s'han de gestionar:
+    // el slider d'encuadre deixa el focus en el <input type="range"> i l'ESPAI hi ha de fer
+    // PLAY/PAUSA (abans no feia res i el focus hi quedava enganxat).
+    var NO_TEXT = ['range', 'checkbox', 'radio', 'button', 'submit', 'reset', 'color', 'file'];
+    var esCampText = (tag === 'TEXTAREA' || tag === 'SELECT' ||
+        (el && el.isContentEditable === true) ||
+        (tag === 'INPUT' && NO_TEXT.indexOf(tipo) === -1));
+    if (esCampText) return;
+
+    // 1) Que ESPAI/ENTER no "cliquin" el botó/control que té el focus (i que el focus no s'hi quedi)
+    if (tag === 'BUTTON' || tag === 'A' ||
+        (tag === 'INPUT' && ['button', 'submit', 'reset'].indexOf(tipo) !== -1)) {
+        e.preventDefault();
+        e.stopPropagation();
+        try { el.blur(); } catch (eB) { }
+    }
+    if (esEnter) return;
+
+    // 2) ESPAI → PLAY/PAUSA
+    // (2026-09-22) En aquesta versió de Premiere el QE DOM NO té play()/stop()
+    // (`ERR:qe.project.getActiveSequence().play is not a function` al log). Per tant:
+    //   · si el QE hi fos → SrtEditor.togglePlay() (play/stop via QE)
+    //   · si no → es retorna el focus del teclat a Premiere perquè l'ESPAI sigui el
+    //     Play/Pausa NATIU (sense consola, sense processos externs).
+    e.preventDefault();
+    if (_qePlayOk === true && window.SrtEditor && typeof window.SrtEditor.togglePlay === 'function') {
+        FASTPASS_UI.Utils.log('⌨️ [TECLAT] ESPAI → play/pausa (QE)', 'DEBUG');
+        window.SrtEditor.togglePlay();
+    } else {
+        // (2026-09-22) En aquesta versió de Premiere no hi ha cap API de play ni de focus
+        // (QE sense play(), sense app.setAppFocus/bringToFront) → si el panell té el focus del
+        // teclat, l'ESPAI no pot arribar a Premiere: s'envia la tecla des del sistema (VBS).
+        // Guarda anti-bucle: si aquest ESPAI és l'eco del que acabem d'enviar (<1,5 s), no
+        // se n'envia cap altre.
+        var esEco = (Date.now() - _teclaEnviadaTs) < 1500;
+        if (document.hasFocus() && !esEco) {
+            FASTPASS_UI.Utils.log('⌨️ [TECLAT] ESPAI → enviant la tecla a Premiere (focus al panell)', 'DEBUG');
+            enviarTeclaEspai('espai');
+            // (2026-09-22) Aquí NO es fa `devolverFocoHost`: el VBS ja porta el focus a Premiere
+            // (AppActivate) i el `blur()` del panell només afegia una pèrdua de focus extra que
+            // feia que el tick apagués el reencuadre (i el slider saltava de posició) ✗.
+        } else {
+            FASTPASS_UI.Utils.log('⌨️ [TECLAT] ESPAI → ' + (esEco
+                ? 'eco del nostre enviament: ignorat'
+                : 'focus retornat a Premiere (Play/Pausa natiu)'), 'DEBUG');
+            devolverFocoHost('espai');
+        }
+    }
+}, true);
+
+
+/**
+ * sizeVideoToFit: Dimensiona el visor de vídeo (9:16) perquè quedi pegat a la
+ * columna de botons i es redueixi quan la vista es compacta.
+ * Amplada = min(ample disponible, 9/16 de l'altura de la columna).
+ */
+function sizeVideoToFit(force) {
+    try {
+        var wrap = document.getElementById('srtVideoWrap');
+        var zone = document.querySelector('.right-zone');
+        var col = document.querySelector('.upper-left');
+        if (!wrap || !zone || !col) return;
+        var aw = zone.clientWidth;
+        if (aw <= 0) return;
+        /* 1) Alçada de la columna de controls. Només es mesura quan cal:
+              - la primera vegada (normalment encara no hi ha vídeo), o
+              - en redimensionar el panell (force).
+              Mesurar obliga a treure el visor del flux i, amb un <video> carregat,
+              qualsevol canvi de layout el deixa a mig pintar: és el parpadeig negre
+              de la part inferior (passava cada 500 ms, també en pausa). */
+        if (!wrap._fitAh) {
+            var pW = wrap.style.width, pH = wrap.style.height;
+            wrap.style.width = '10px';
+            wrap.style.height = '0';
+            wrap._fitAh = col.offsetHeight;
+            wrap.style.width = pW;      // restaurar (no inventar 'auto'): el CSS mana
+            wrap.style.height = pH;
+        } else if (force) {
+            var prevW = wrap.style.width, prevH = wrap.style.height;
+            wrap.style.width = '10px';
+            wrap.style.height = '0';
+            wrap._fitAh = col.offsetHeight;
+            wrap.style.width = prevW;
+            wrap.style.height = prevH;
+        }
+        var ah = wrap._fitAh;
+        if (!ah || ah <= 0) return;
+        /* 2) Mida EXACTA en px enters (9:16). Amb aspect-ratio la alçada surt amb
+              decimals i el compositor rasteritza el <video> a mig píxel: d'aquí
+              surten les franges "mig negres". */
+        var w = Math.min(aw, Math.floor(ah * 9 / 16));
+        var h = Math.round(w * 16 / 9);
+        // Si la mida calculada no ha canviat, NO tocar estils del visor:
+        // reescriure width/height invalida el layout de la zona del <video>.
+        if (wrap._fitW === w) return;
+        wrap._fitW = w;
+        wrap.style.width = w + 'px';
+        wrap.style.height = h + 'px';
+    } catch (e) { /* no crític */ }
+}
+window.addEventListener('resize', function () { sizeVideoToFit(true); });
+
+// AUTO-REFRESC DE L'ESTAT D'ARRENCADA (cada 15 s)
+// Mentre no tenim el senyal que desbloqueja el CREAR (wotts del bloc d'avui) el
+// semàfor es recalcula sol: el botó passa de MASSA D'HORA a CREAR tot sol en
+// quant l'emissió acaba i el generador deixa els wotts al NAS. S'atura mentre el
+// visor SRT reprodueix i quan l'estat ja no és MASSA (o hi ha un projecte obert).
+//
+// (2026-10-21) Aquest poll pot anar a 15 s perquè checkContext ja NO escaneja el
+// NAS: mira el directori del projecte (Node, ~20 ms) i data els wotts amb
+// `birthtime` + caché per nom (~35 ms en règim estable). Abans costava 5,4 s i
+// per això s'espaciava a 60 s.
+var _ctxRefreshBusy = false;
+// (2026-10-14 · BUG #156) Comptador de cicles seguits sense projecte actiu llegit pel
+// Registry. Calen 2 (~2 min) per desancorar `State.projectDateDir`: una sola lectura buida
+// (poll de Registry limitat a 1 cicle/2 s, System.clear() del mouseenter, etc.) no pot
+// deixar la sessió sense data de treball.
+var _projDateMissTicks = 0;
+var _ctxRefreshPollMs = 15000;
+setInterval(async function () {
+    var srA = window.FASTPASS_UI && FASTPASS_UI.Editor && FASTPASS_UI.Editor.SrtEditor;
+    if (srA && (srA._isPlaying || srA._timelineRunning)) return;
+    if (_ctxRefreshBusy) return;   // un escaneig en curs: no n'arrenquem un altre
+    var ctA = window.FASTPASS_UI && window.FASTPASS_UI.Core && window.FASTPASS_UI.Core.Context;
+    if (!ctA || !ctA.checkContext) return;
+    // ── DATA DEL PROJECTE OBERT ─────────────────────────────────────────────
+    // Si el projecte obert és d'un altre dia (ex: correcció d'AHIR), no hi
+    // haurà cap fitxer nou d'aquell dia: no cal escanejar res (escaleta, media,
+    // wotts). Si no hi ha cap projecte ancorat obert, tornem a la data del
+    // sistema (HOY) perquè el botó principal pugui oferir CREAR el de avui.
+    var StA = window.FASTPASS_UI.State;
+    var regA = window.FASTPASS_UI.Registry;
+    if (StA && StA.projectDateDir) {
+        var activeA = regA ? regA.activeProjectName : null;
+        if (activeA) _projDateMissTicks = 0;   // projecte actiu llegit OK: el comptador torna a zero
+        if (!activeA) {
+            // (2026-10-14 · BUG #156) El desancoratge silenciós d'una sola lectura era la
+            // causa que la FOTO demanés l'escaleta de HOY amb un projecte d'AHIR obert.
+            _projDateMissTicks++;
+            if (_projDateMissTicks < 2) {
+                FASTPASS_UI.Utils.log('⚠️ [dateDir] Cap projecte actiu detectat (' + _projDateMissTicks + '/2). Es conserva projectDateDir=' + StA.projectDateDir, 'DEBUG');
+            } else {
+                FASTPASS_UI.Utils.log('🔓 [dateDir] Desancorant projectDateDir=' + StA.projectDateDir + ' (2 cicles seguits sense projecte actiu)', 'WARN');
+                StA.projectDateDir = null;
+                StA.lastOpenedProjectName = "";
+                _projDateMissTicks = 0;
+            }
+        } else if (StA.lastOpenedProjectName && activeA === StA.lastOpenedProjectName) {
+            var todayA = (FASTPASS_UI.Utils.getFormattedDate() || '').replace(/["\s]/g, '').trim();
+            if (todayA && StA.projectDateDir !== todayA) return;
+        }
+    }
+    var stA = ctA._lastConclusion;
+    var semA = (ctA._lastButtonData && ctA._lastButtonData.semaforo) || null;
+    var pendA = !!(semA && (semA.mp4 === "pending" || semA.wot === "pending"));
+    // (2026-10-21) Només mentre s'espera el senyal d'arrencada: MASSA D'HORA
+    // (sense wotts ni escaleta), estat encara desconegut, o material pendent.
+    if (stA === "MASSA" || stA === null || pendA) {
+        _ctxRefreshBusy = true;
+        try { await ctA.checkContext(); } catch (eA) { } finally { _ctxRefreshBusy = false; }
+    }
+}, _ctxRefreshPollMs);
+
+setInterval(function () {
+    if (isUserDraggingSlider) _perf.ticks++;   // 📊 FASE 0: ticks de 500 ms amb el slider arrossegant
+    // Mentre el visor SRT està reproduint, NO es fa cap mesura de layout ni JSX
+    // extern (Registry/slider/reframe): competirien amb el polling del cabezal
+    // (250ms) i causarien talls al <video>. Fora de la reproducció es manté tot.
+    var _sr = window.FASTPASS_UI && FASTPASS_UI.Editor && FASTPASS_UI.Editor.SrtEditor;
+    var _visorRunning = !!(_sr && (_sr._isPlaying || _sr._timelineRunning));
+    if (_visorRunning) return;
+    sizeVideoToFit();
+    // SLIDER / MODE KF: NOMES amb el reencuadre actiu (recuadro azul).
+    // Fora d'aquest mode el slider esta desactivat i NO s'ha de fer cap crida JSX
+    // de slider (Anim.sliderApply / Anim.modeInfo). Si el panell no te el focus
+    // (l'usuari es a Premiere) el poll es pausa i el reencuadre s'apaga, per no
+    // quedar sondejant en segon pla (cas real: 17 min de poll a 2 Hz).
+    if (reframeActive) {
+        if (!document.hasFocus()) {
+            // (2026-09-22) NO apagar el reencuadre de seguida: quan el panell envia la tecla
+            // ESPAI a Premiere (AppActivate del VBS) el focus del teclat se'n va un instant i el
+            // reencuadre s'apagava → al reactivar-lo el slider saltava a la X del clip objectiu
+            // (un altre clip, el de sota el CTI) ✗. Ara calen 2 ticks seguits (~1 s) sense focus
+            // per apagar-lo; una pèrdua momentània no el toca.
+            _reframeNoFocusTicks++;
+            if (_reframeNoFocusTicks >= 2) {
+                _reframeNoFocusTicks = 0;
+                setReframeActive(false);
+            }
+        } else {
+            _reframeNoFocusTicks = 0;
+            if (FASTPASS_UI.Sync && FASTPASS_UI.Sync.updateSliderFromPremiere) {
+                FASTPASS_UI.Sync.updateSliderFromPremiere();
+            }
+            if (FASTPASS_UI.Sync && FASTPASS_UI.Sync.syncKfMode) {
+                FASTPASS_UI.Sync.syncKfMode();
+            }
+        }
+    }
+    // Registry.poll es limita sol a 1 cicle cada 2 s (vegeu project_registry.js).
+    // 🚀 FASE 3 (2026-09-16): tampoc no ha de competir amb la cua del slider mentre
+    // s'arrossega (la mesura Fase 0 hi comptava Timeline.get / Context.list).
+    if (!isUserDraggingSlider && FASTPASS_UI.Registry && FASTPASS_UI.Registry.poll) {
+        FASTPASS_UI.Registry.poll();
+    }
+}, 500);
+
+// Neteja de memòria al entrar amb el ratolí
+window.onmouseenter = function () {
+    FASTPASS_UI.Utils.callJSX('System.clear()');
+};
+
+// Escalfament de rutes de xarxa
+async function warmUpNetwork() {
+    var config = FASTPASS_UI.Config.get();
+    if (!config.rutas) return;
+    console.log("🔥 [SYSTEM] Escalfant rutes de xarxa...");
+    // (2026-10-23) Ja NO s'escalfa la carpeta de VERTICALITZACIÓ (no existeix al flux):
+    // només els rètols (CHY) i l'arrel dels projectes.
+    var esc = function (p) { return String(p || '').replace(/\\/g, '\\\\'); };
+    if (config.rutas.chyrons) FASTPASS_UI.Utils.callJSX("IO.exists('" + esc(config.rutas.chyrons) + "')");
+    if (config.rutas.projectes) FASTPASS_UI.Utils.callJSX("IO.exists('" + esc(config.rutas.projectes) + "')");
+};
