@@ -147,6 +147,44 @@
         // busca enlloc: ix de la captura del cleanFeed (extracció ffmpeg amb els
         // bounds calculats) i els subtítols, del .srt que viu al costat del .prproj.
 
+        /**
+         * _blocKey: NORMALITZA el tros de BLOC d'un nom de wott a «LLETRA|NUMERO».
+         * (2026-10-26) Els wotts del generador porten el bloc com un TROS del nom
+         * separat per guions baixos, però NO sempre igual:
+         *     Wott_TNM_V3_...   → bloc 'V3'   → clau 'V|3'
+         *     Wott_TNM_V03_...  → bloc 'V03'  → clau 'V|3'   (zero davant = mateix bloc)
+         *     Wott_TNM_V_...    → bloc 'V'    → clau 'V|'    (FLOTANT: bloc a seques)
+         * Comparar CLAUS (i no `indexOf('TNM_V3_')`) és el que fa possible acceptar
+         * el bloc sense número sense obrir la porta a 'V1', 'V10' o 'V2'.
+         * @param {string} tok - Tros del nom (ex: 'V3')
+         * @returns {string|null} Clau normalitzada, o null si el tros no és un bloc
+         */
+        _blocKey: function (tok) {
+            var m = String(tok || '').toUpperCase().match(/^([A-Z]+)0*(\d*)$/);
+            if (!m) return null;
+            return m[1] + '|' + (m[2] || '');
+        },
+
+        /**
+         * _wottBlocOf: Tros de BLOC del nom d'un wott, normalitzat amb `_blocKey`.
+         * Es busca el PRIMER tros que siga exactament el programa (`TNM`) i el bloc
+         * és el tros SEGÜENT. Així `Wott_TNM_V_00_00.00_...` → 'V|' i
+         * `Wott_TNM_V3_...` → 'V|3' (el rol `XARXES-TEXT`, que va més arrere al nom,
+         * no es pot confondre amb el bloc).
+         * @param {string} name - Nom del fitxer
+         * @param {string} prog - Programa (`TNV`, `TNM`...)
+         * @returns {string|null} Clau del bloc, o null si el nom no és d'eixe programa
+         */
+        _wottBlocOf: function (name, prog) {
+            var p = String(prog || '').toUpperCase();
+            if (!p) return null;
+            var t = String(name || '').toUpperCase().split('_');
+            for (var i = 0; i < t.length - 1; i++) {
+                if (t[i] === p) return this._blocKey(t[i + 1]);
+            }
+            return null;
+        },
+
         wotts: async function (ctx) {
             try {
                 const pathNAS = ctx.config.rutas.chyrons;
@@ -184,13 +222,27 @@
                 if (allFiles.length === 0) return { tema: "PENDENT", list: [] };
     
                 var fProg = (ctx.progData && ctx.progData.wott) ? ctx.progData.wott.toUpperCase() : 'TNV';
-                var fBloc = ctx.bloque ? '_' + ctx.bloque + '_' : '_V1_';
-                var prefix = (fProg + fBloc).toUpperCase();
+                // (2026-10-26) El bloc es compara per CLAU de tros del nom (`_blocKey`) i
+                // no per `indexOf('PROG_BLOC_')`: així 'V3' i 'V03' són el mateix bloc i
+                // el bloc BUIT (`Wott_TNM_V_...`, els XARXES-TEXT flotants) es pot
+                // reconéixer com a FLOTANT en lloc de quedar fora del projecte.
+                var blocKey = this._blocKey(ctx.bloque || 'V1') || 'V|1';
+                var floatKey = String(blocKey).split('|')[0] + '|';   // 'V|3' → 'V|' (a seques)
     
-                let filtered = allFiles.filter(function (f) {
-                    var name = f.name.toUpperCase();
-                    return name.indexOf(prefix) !== -1 && name.endsWith('.MOV');
-                });
+                var self = this;
+                var isMovWott = function (f) { return /\.MOV$/.test(String(f.name || '').toUpperCase()); };
+                var isBlocWott = function (f) {
+                    return isMovWott(f) && self._wottBlocOf(f.name, fProg) === blocKey;
+                };
+                // FLOTANT = mateixa LLETRA de bloc però SENSE número (bloc «V» a seques).
+                var isFloatWott = function (f) {
+                    return isMovWott(f) && self._wottBlocOf(f.name, fProg) === floatKey;
+                };
+    
+                let filtered = allFiles.filter(isBlocWott);
+                // Si el bloc demanat ja ve sense número, no hi ha res «flotant» a part.
+                let flotants = (floatKey === blocKey) ? [] : allFiles.filter(isFloatWott);
+
                 // MECÀNICA D'INICI (2026-09-04): eliminada la guarda per mtime (22h).
                 // El filtre per data del projecte (a continuació) és l'únic criteri vàlid.
 
@@ -205,13 +257,19 @@
                 // MECANISME ÚNIC de filtrat per data (Scan.filterByWorkDate).
                 var dateTarget = ctx.dateDir ? String(ctx.dateDir).replace(/_/g, '') : null;
                 if (dateTarget) {
-                    var resF = this.filterByWorkDate(filtered, ctx.dateDir);
-                    utils.log('[SCAN:wotts] Filtre per data projecte ' + dateTarget + ': ' + filtered.length + ' -> ' + resF.keep.length +
+                    // (2026-10-26) Es data la UNIÓ (bloc + flotants) d'una sola passada i
+                    // després es torna a separar: el TEMA del projecte només pot eixir
+                    // dels wotts DEL BLOC (un XARXES-TEXT flotant no pot batejar el projecte).
+                    var resF = this.filterByWorkDate(filtered.concat(flotants), ctx.dateDir);
+                    utils.log('[SCAN:wotts] Filtre per data projecte ' + dateTarget + ': ' + filtered.length +
+                        ' del bloc + ' + flotants.length + ' flotant(s) -> ' + resF.keep.length +
                         (resF.dropped.length ? ' (descartats ' + resF.dropped.length + " d'altres dies: " + resF.dropped.slice(0, 3).map(function(x){ return x.name; }).join(', ') + '...)' : '') +
                         (resF.noDate.length ? ' (NO datables descartats: ' + resF.noDate.slice(0, 3).map(function(x){ return x.name; }).join(', ') + '...)' : ''), 'INFO');
-                    filtered = resF.keep;
+                    filtered = resF.keep.filter(isBlocWott);
+                    flotants = resF.keep.filter(isFloatWott);
                     if (filtered.length === 0) {
-                        utils.log('[SCAN:wotts] Cap chyron de la data del projecte (' + dateTarget + "). No s'importara cap retol.", 'WARN');
+                        utils.log('[SCAN:wotts] Cap chyron del bloc de la data del projecte (' + dateTarget + "). No s'importara cap retol." +
+                            (flotants.length ? ' (' + flotants.length + ' flotant(s) del dia descartats: sense wotts de bloc no hi ha TEMA per al projecte)' : ''), 'WARN');
                         return { tema: 'PENDENT', list: [] };
                     }
                 }
@@ -249,9 +307,21 @@
 
                 utils.log(`🏷️ Tema detectat (Smart Filter): [${tema}]`, "INFO");
 
+                // ── WOTTS FLOTANTS (2026-10-26) ─────────────────────────────
+                // Els wotts amb el bloc a seques (`Wott_TNM_V_...`) són els XARXES-TEXT
+                // que el generador no lliga a cap ítem de l'esquema. S'importen igualment
+                // (van al bin del projecte) però `Parse.assign` no els troba cap línia,
+                // així que queden SENSE col·locar. Fins ara ni tan sols s'importaven.
+                if (flotants.length > 0) {
+                    utils.log('🪁 [SCAN:wotts] ' + flotants.length + ' wott(s) FLOTANT(S) (bloc «' +
+                        String(blocKey).split('|')[0] + '» a seques) → s\'importen sense ítem: ' +
+                        flotants.slice(0, 5).map(function (x) { return x.name; }).join(' · ') +
+                        (flotants.length > 5 ? ' …' : ''), 'INFO');
+                }
+
                 return { 
                     tema: tema, 
-                    list: filtered.map(f => ({
+                    list: filtered.concat(flotants).map(f => ({
                         name: f.name, 
                         path: (pathNAS + f.name).replace(/\\/g, "/")
                     }))

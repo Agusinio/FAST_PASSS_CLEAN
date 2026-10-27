@@ -1650,7 +1650,56 @@ nous.
 del programa o si la carpeta no es pot llegir. El 23/10, per al V1 de TN_COMARQUES, cal
 generar/pujar el sintètic de la peça (`TN_COMARQUES_…_Subtitles.srt`) a `SRT_SINTETICS`.
 
-## 3. Bugs en curs / pendents
+### #191 - implementat_pendent_test (2026-10-26)
+
+**SIMPTOMA**: els wotts que el generador deixa amb el bloc **a seques** (`Wott_TNM_V_00_00.00_…`,
+els `XARXES-TEXT` de verticalització) **no s'importaven mai** al projecte: el filtre del Scanner
+exigia el prefix literal `PROG_BLOC_` (`TNM_V3_`) i `TNM_V_` no hi encaixa. Els 3 wotts flotants del
+`2026_10_25/V3/TNM_V3` es veien al NAS però el panell no els baixava.
+
+**CAUSA ARREL**: `js/logic/Scanner.js` · `wotts()` filtrava amb
+`name.indexOf((fProg + '_' + ctx.bloque + '_').toUpperCase()) !== -1` (un `indexOf` del prefix
+`TNM_V3_`). Qualsevol wott amb el bloc sense número queda fora per construcció, i a més el `indexOf`
+no distingix `V3` de `V03`.
+
+**SOLUCIO** (tot JS; `jsx/**` intacte):
+
+1. `js/logic/Scanner.js` · nous àtoms **`_blocKey(tok)`** (normalitza el tros de bloc a
+   `LLETRA|NUMERO`: `V3`→`V|3`, `V03`→`V|3`, `V`→`V|`) i **`_wottBlocOf(name, prog)`** (busca el
+   primer tros igual al programa i llig el tros SEGÜENT com a bloc; el rol `XARXES-TEXT` del nom no
+   es pot confondre amb el bloc).
+2. `wotts()` · `filtered` (bloc) i **`flotants`** (bloc a seques) es construeixen amb eixos àtoms;
+   el filtre per data (`filterByWorkDate`) s'aplica a la **unió** i després es torna a separar, de
+   manera que el **TEMA** del projecte continua eixint NOMÉS dels wotts del bloc (un `XARXES-TEXT`
+   flotant —«LUCYS VERTICALITZACIÓ»— no pot batejar el projecte). El retorn és
+   `filtered.concat(flotants)` i queda una línia de log `🪁 [SCAN:wotts] N wott(s) FLOTANT(S)…`.
+   Guarda: si no hi ha cap wott DE BLOC eixe dia es manté `PENDENT` i no s'importa res (sense bloc
+   no hi ha TEMA); els flotants es nomenen al missatge.
+3. Cache-bust `index.html`: `Scanner.js?v=22 → 23` (i `#WOTT/24`, `#WOTT/39`, `#F3/25` al dia).
+4. `js/logic/13_Parse.js` · nou àtom **`_esFlotant(name)`** i guarda al bucle de `files()`: un flotant
+   (`parts[2]` només LLETRES i `parts[3]` = `00`) **no entra a l'estructura**. Sense la guarda es
+   creava un bloc fantasma `00` dins `State.structure` i, si l'escaleta tinguera un ítem `00`, els
+   `XARXES-TEXT` es col·locarien damunt d'eixe ítem. El criteri és estricte (les dos condicions): un
+   programa amb el nom partit en dos trossos (`Wott_TN_COMARQUES_V1_…`) té `parts[3]` = `V1`, no zero,
+   i no es prendria per flotant. Cache-bust `13_Parse.js?v=5 → 6`.
+
+**VALIDACIO**: `bin/check_all.ps1 -Only js,smoke` → **js 94/94 | smoke 451/451** (l'única línia
+roja és la guarda `jsx`, amb 10 mòduls marcats «nou» al baseline des d'abans d'este canvi: cap
+`.jsx` s'ha tocat hui — l'últim és del 2026-10-23). Proves noves a `bin/smoke/fp_probe_wotts.js`:
+`#WOTT/50` (bloc `V3` accepta `V3` + `V03` + els 2 flotants del dia i descarta `V1`/`V2`/altre
+programa/ahir), `#WOTT/51` (el TEMA ix del bloc, no del flotant), `#WOTT/52` (el bloc `V1` també rep
+els flotants), `#WOTT/53` (només flotants → `PENDENT` i cap import) i `#WOTT/54` (`Parse.files` no
+crea el bloc `00`; `_esFlotant` no es deixa enganyar per un programa de dos trossos). `13_Parse.js`
+s'ha afegit al bundle de smoke (`bin/smoke/fp_smoke_build.ps1`) per a poder provar-ho en viu.
+
+**PENDENT DE VALIDAR EN VIU**: recarregar el panell (`Scanner.js?v=23`) i tornar a escanejar el
+`2026_10_25/V3/TNM_V3`: al log hi ha d'eixir `🪁 [SCAN:wotts] 3 wott(s) FLOTANT(S)` i els 3
+`XARXES-TEXT` han d'aparéixer al bin del projecte. **NO queden col·locats**: `Parse.assign` no els
+troba cap línia de l'esquema i cap fase de `flow_chyrons` els busca (la cadena de grafisme cremat
+només recorre `entry.chyrons`). Col·locar-los exigix decidir la regla (detector per ROI/text vs.
+deixar-los al bin per a col·locar-los a mà).
+
+
 
 
 

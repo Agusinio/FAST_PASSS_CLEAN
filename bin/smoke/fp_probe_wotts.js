@@ -246,7 +246,7 @@
             var idxW = await readRepo('index.html');
             ok('#WOTT/24 cache-bust al dia (4_Context, flow_chyrons, Scanner)',
                 /4_Context\.js\?v=31/.test(idxW) && /flow_chyrons\.js\?v=85/.test(idxW) &&
-                /Scanner\.js\?v=22/.test(idxW),
+                /Scanner\.js\?v=23/.test(idxW),
                 (idxW.match(/4_Context\.js\?v=\d+/) || '') + ' ' +
                 (idxW.match(/flow_chyrons\.js\?v=\d+/) || '') + ' ' +
                 (idxW.match(/Scanner\.js\?v=\d+/) || ''));
@@ -513,8 +513,8 @@
                 /else if \(escReady\) \{/.test(ctxSrc) &&
                 ctxSrc.indexOf('CREA: escaleta local') > 0);
 
-            ok('#WOTT/39 cache-bust del #182 (4_Context 31 · Scanner 22)',
-                /4_Context\.js\?v=31/.test(idxW) && /Scanner\.js\?v=22/.test(idxW),
+            ok('#WOTT/39 cache-bust del #182 (4_Context 31 · Scanner 23)',
+                /4_Context\.js\?v=31/.test(idxW) && /Scanner\.js\?v=23/.test(idxW),
                 (idxW.match(/4_Context\.js\?v=\d+/) || '') + ' ' + (idxW.match(/Scanner\.js\?v=\d+/) || ''));
 
             // (2026-10-22 · #182) TESTIMONI al log: si el stat d'UNC no dóna cap data,
@@ -664,6 +664,71 @@
             } finally {
                 UI.Utils.callJSX = savedCJZ;
             }
+        // ── K. WOTTS FLOTANTS (2026-10-26) ──────────────────────────────
+        // Wotts amb el bloc A SEQUES (`Wott_TNM_V_...`): el generador no els lliga a
+        // cap ítem de l'esquema (XARXES-TEXT) i fins hui ni tan sols s'importaven.
+        // Ara: `V` (flotant) i `V03` (zero davant) compten com a bloc, el filtre per
+        // data s'aplica a tots, i el TEMA només pot eixir dels wotts DEL BLOC.
+        if (Scan && typeof Scan.wotts === 'function') {
+            var fB1 = 'Wott_TNV_V1_10_00.01_TEMA A_111_Tema-Titol_a.00000001.MOV';
+            var fB03 = 'Wott_TNV_V03_10_02.00_TEMA C_333_Tema-Titol_c.00000003.MOV';
+            var fF1 = 'Wott_TNV_V_00_00.00_LUCYS VERTICALITZACIÓ_660688_XARXES-TEXT_tp_SILVIA ORRIOLS_Aliança Cat_k_00660901.mov';
+            var fF2 = 'Wott_TNV_V_00_00.00_LUCYS VERTICALITZACIÓ_660688_XARXES-TEXT_tp_JORDI TURULL_PSC_k_00660902.mov';
+            var fV2 = 'Wott_TNV_V2_00_00.00_ALTRE BLOC_444_XARXES-TEXT_tp_X_Y_k_00660903.mov';
+            var fTC = 'Wott_TNC_V_00_00.00_ALTRE PROG_555_XARXES-TEXT_tp_X_Y_k_00660904.mov';
+            var fAhir = 'Wott_TNV_V_00_00.00_AHIR_556_XARXES-TEXT_tp_X_Y_k_00660905.mov';
+            var mkW = function (n, d) {
+                return { name: n, created: localMs(2026, 10, d || 21, 12), mtime: localMs(2026, 10, d || 21, 12) };
+            };
+            var setWotts = function (arr) {
+                Scan._readCache = {};
+                UI.Utils.readFolder = function () { return Promise.resolve(arr); };
+            };
+            var ctxW = function (bloc) {
+                return {
+                    config: { rutas: { chyrons: FOLDER } }, progData: { archivo: 'TN_VESPRE', wott: 'TNV' },
+                    bloque: bloc, dateDir: '2026_10_21'
+                };
+            };
+            setWotts([mkW(fB1), mkW(fB03), mkW(fF1), mkW(fF2), mkW(fV2), mkW(fTC), mkW(fAhir, 20)]);
+            var w50 = await Scan.wotts(ctxW('V3'));
+            ok('#WOTT/50 wotts: el bloc V3 accepta V3 i V03 i, a més, els FLOTANTS «V» del dia (fora V1, V2, altre programa i ahir)',
+                w50.list.length === 3 &&
+                w50.list.some(x => x.name === fB03) &&
+                w50.list.some(x => x.name === fF1) && w50.list.some(x => x.name === fF2) &&
+                !w50.list.some(x => x.name === fB1 || x.name === fV2 || x.name === fTC || x.name === fAhir),
+                'n=' + w50.list.length + ' [' + w50.list.map(x => x.name.split('_').slice(1, 3).join('_')).join(', ') + ']');
+
+            ok('#WOTT/51 wotts: el TEMA ix NOMÉS del bloc (un XARXES-TEXT flotant no pot batejar el projecte)',
+                w50.tema === 'TEMA C', 'tema=' + w50.tema);
+
+            var w52 = await Scan.wotts(ctxW('V1'));
+            ok('#WOTT/52 wotts: el bloc V1 també rep els flotants del dia (V1 + 2 flotants = 3)',
+                w52.list.length === 3 && w52.list.some(x => x.name === fB1) &&
+                w52.list.some(x => x.name === fF1) && !w52.list.some(x => x.name === fB03),
+                'n=' + w52.list.length);
+
+            setWotts([mkW(fF1), mkW(fF2)]);
+            var w53 = await Scan.wotts(ctxW('V3'));
+            ok('#WOTT/53 wotts: només flotants (cap wott de bloc) → PENDENT i cap import (sense TEMA no hi ha projecte)',
+                w53.tema === 'PENDENT' && w53.list.length === 0,
+                'tema=' + w53.tema + ' n=' + w53.list.length);
+
+            // (2026-10-26 · BUG #191) Els FLOTANTS no tenen ÍTEM: `Parse.files` no els
+            // pot convertir en un bloc fantasma «00» (que, amb un ítem «00» a l'escaleta,
+            // els col·locaria damunt d'eixe ítem). Han d'arribar al bin, no a l'estructura.
+            var ParseAPI = UI.Logic && UI.Logic.Parse;
+            var st54 = (ParseAPI && typeof ParseAPI.files === 'function')
+                ? ParseAPI.files([{ name: fF1, path: 'x' }, { name: fB03, path: 'y' }], 'TNM', 'V3')
+                : [];
+            ok('#WOTT/54 Parse.files: els FLOTANTS (bloc a seques) no creen cap bloc «00» ni entren a l\'estructura',
+                !!ParseAPI && typeof ParseAPI._esFlotant === 'function' &&
+                ParseAPI._esFlotant(fF1) === true && ParseAPI._esFlotant(fB03) === false &&
+                ParseAPI._esFlotant('Wott_TN_COMARQUES_V1_10_00.01_TEMA_1_Tema-Titol_a.00000001.MOV') === false &&
+                st54.length === 1 && st54[0].id === '10' && st54[0].chyrons.length === 1,
+                'Parse=' + !!ParseAPI + ' ids=' + st54.map(function (b) { return b.id + ':' + b.chyrons.length; }).join(',') +
+                ' flotF1=' + (ParseAPI ? ParseAPI._esFlotant(fF1) : '-'));
+        }
         } finally {
             UI.Utils._nodeFs = realNodeFs;
             UI.Utils.readFolder = realReadFolder;

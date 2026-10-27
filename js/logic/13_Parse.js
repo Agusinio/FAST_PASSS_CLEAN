@@ -18,6 +18,31 @@
         bloqueMaster: { id: null, titulo: "" },
 
         /**
+         * _esFlotant: Detecta un wott FLOTANT (bloc A SEQUES) pel nom.
+         *
+         * (2026-10-26 · BUG #191) Els `XARXES-TEXT` de la xarxa venen com
+         * `Wott_<PROG>_<LLETRA>_00_00.00_<tema>_<id>_<rol>_…`: el tros del BLOC
+         * (`parts[2]`) porta només la LLETRA (V) i el de la LÍNIA (`parts[3]`) és
+         * `00`. Sense esta guarda es creava un bloc fantasma «00» dins
+         * `State.structure` i, si l'escaleta tinguera un ítem «00», els flotants
+         * es col·locarien damunt d'eixe ítem (col·locació errònia).
+         *
+         * El criteri és ESTRICTE (les dos condicions alhora): si un programa
+         * tinguera el nom partit en dos trossos (`Wott_TN_COMARQUES_V1_…`),
+         * `parts[3]` seria el bloc (`V1`, no zero) i NO es prendria per flotant.
+         *
+         * @param {String} name - nom del fitxer wott.
+         * @returns {Boolean}
+         */
+        _esFlotant: function(name) {
+            var p = String(name || '').split('_');
+            if (p.length < 5) return false;
+            var bloc = p[2] || '';
+            var lini = p[3] || '';
+            return /^[A-Za-z]+$/.test(bloc) && /^\d+$/.test(lini) && Number(lini) === 0;
+        },
+
+        /**
          * files: Genera l'estructura a partir d'una llista de fitxers Wott.
          */
         files: function(fileList, program, block) {
@@ -26,6 +51,9 @@
 
             for (var i = 0; i < fileList.length; i++) {
                 var f = fileList[i];
+                // (2026-10-26 · BUG #191) Els FLOTANTS no tenen ítem: no entren a
+                // l'estructura (es queden al bin del projecte, sense col·locar).
+                if (this._esFlotant(f.name)) continue;
                 var meta = this.meta(f.name);
                 if (!meta) continue;
 

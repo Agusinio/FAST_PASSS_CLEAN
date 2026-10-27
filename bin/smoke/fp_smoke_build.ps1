@@ -74,6 +74,10 @@ $files = @(
     # físic (wotts del bloc d'avui, datats per birthtime amb Node). El prova la
     # prova 23-wotts.
     (Join-Path $repo 'js\logic\Scanner.js'),
+    # (2026-10-26 · BUG #191) WOTTS FLOTANTS: `13_Parse.files` no ha de crear el
+    # bloc fantasma «00» amb els `XARXES-TEXT` (bloc a seques). El prova la prova
+    # 23-wotts (#WOTT/54). Modul pur: nomes definix objectes, no toca el DOM.
+    (Join-Path $repo 'js\logic\13_Parse.js'),
     (Resolve-Harness 'fp_probe_f45.js'),
     # (2026-10-16 · BUG #167) Rètol de localització del directe → ítem IPD/directe.
     (Resolve-Harness 'fp_probe_ipd_chyron.js'),
