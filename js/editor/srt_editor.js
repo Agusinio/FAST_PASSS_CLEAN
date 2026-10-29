@@ -3346,19 +3346,49 @@
         },
 
         reset: function () {
-            this.stop();
-            this._entries = []; this._loadedEntries = []; this._originalEntries = []; this._playheadSec = 0; this._isDirty = false; this._srtPath = ""; this._srtName = ""; this._srtFingerprint = "";
-            this._clearSelection(); this._kind = 'NORMAL'; this._views = {}; this._timelineSubs = null; this._timelineSubsAt = 0;
-            this._waveformPeaks = null; this._waveformPPS = 480; this._wfCacheKey = ""; this._wfPixelHeights = null; this._isPlaying = false;
-            this._waveformSegments = []; this._waveformMediaTag = ""; this._pollCount = 0;
-            this._gapAdded = [];   // (F3.6) res pendent d'exportar a S2
-            this._wfMediaStart = 0; this._wfMediaEnd = 0;
-            this._clearEditWindow();   // (#132)
-            this._markers = []; this._originalMarkers = []; this._dragIdx = -1;
-            this._lastCtiSec = -1; this._lastLocalT = -1; this._lastLocalPx = -1;
-            this._pendingSeek = null;
-            if (this._ctx) this._ctx.clearRect(0, 0, this._canvas.width, this._canvas.height);
-            this._hideEditor();
+            // (2026-10-28 · BUG #198) A PROVA D'EXCEPCIONS. Abans era una llista
+            // plana d'assignacions: si qualsevol crida llançava (canvas, visor de
+            // vídeo, selecció…), les instruccions del darrere —inclosa
+            // `_hideEditor()`— no s'executaven i el panell es quedava amb la taula
+            // i el canvas pintats. Ara cada bloc va aïllat i l'editor SEMPRE
+            // acaba ocult.
+            var self = this;
+            function pas(fn) {
+                try { fn(); } catch (e) { try { log('⚠️ SRT_EDIT: reset parcial: ' + e.message); } catch (e2) { } }
+            }
+            pas(function () { self.stop(); });
+            pas(function () {
+                self._entries = []; self._loadedEntries = []; self._originalEntries = [];
+                self._playheadSec = 0; self._isDirty = false;
+                self._srtPath = ""; self._srtName = ""; self._srtFingerprint = "";
+            });
+            pas(function () { self._clearSelection(); });
+            pas(function () {
+                self._kind = 'NORMAL'; self._views = {};
+                self._timelineSubs = null; self._timelineSubsAt = 0;
+                self._sintShiftSec = 0;
+            });
+            pas(function () {
+                self._waveformPeaks = null; self._waveformPPS = 480; self._wfCacheKey = "";
+                self._wfPixelHeights = null; self._isPlaying = false;
+            });
+            pas(function () {
+                self._waveformSegments = []; self._waveformMediaTag = "";
+                self._pollCount = 0;
+                self._gapAdded = [];   // (F3.6) res pendent d'exportar a S2
+                self._wfMediaStart = 0; self._wfMediaEnd = 0;
+            });
+            pas(function () { self._clearEditWindow(); });   // (#132)
+            pas(function () {
+                self._markers = []; self._originalMarkers = []; self._dragIdx = -1;
+                self._lastCtiSec = -1; self._lastLocalT = -1; self._lastLocalPx = -1;
+                self._pendingSeek = null;
+            });
+            pas(function () {
+                if (self._ctx) self._ctx.clearRect(0, 0, self._canvas.width, self._canvas.height);
+            });
+            // El panell s'oculta PASSI EL QUE PASSE (és el que veu l'operador).
+            pas(function () { self._hideEditor(); });
         }
     };
 

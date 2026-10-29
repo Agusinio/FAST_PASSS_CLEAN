@@ -93,8 +93,8 @@
     <!-- (2026-10-21 · revisat 2026-10-22 #178b) SELECTOR DE CARPETES/FITXERS:
          ÚLTIMA xarxa de seguretat (accessos ràpids + ruta enganxable + navegació).
          El botó 📁 del dashboard obri ABANS el diàleg modern de l'Explorador
-         (`scripts/pick_folder.ps1`); este selector només apareix si Node o el
-         script no estan disponibles. -->
+         (`scripts/pick_folder.ps1`); este selector només apareix si `cep.process`
+         o el script no estan disponibles. -->
     <div id="fp-picker" class="fp-picker-backdrop">
         <div class="fp-picker">
             <div class="fp-picker-head">
@@ -542,16 +542,18 @@
         // («Selecciona una carpeta»): `scripts/pick_folder.ps1` amb
         // IFileOpenDialog + FOS_PICKFOLDERS. Cascada de transports (la primera
         // que arranca guanya):
-        //   1. Node `child_process` → NOMÉS si el manifest declara --enable-nodejs
-        //   2. `cep.process`       → API nativa de CEP 10+, SENSE Node (3a volta)
-        //   3. cep.fs.showOpenDialog (SHBrowseForFolder) → xarxa de seguretat
-        //   4. selector HTML del dashboard → última xarxa de seguretat
+        //   1. `cep.process`       → API nativa de CEP 10+ (3a volta)
+        //   2. cep.fs.showOpenDialog (SHBrowseForFolder) → xarxa de seguretat
+        //   3. selector HTML del dashboard → última xarxa de seguretat
+        //
+        // (2026-10-29) Fora el transport `child_process` de Node: el manifest
+        // d'este panell no declara `--enable-nodejs`, així que eixa branca no
+        // s'arrancava mai i només embolcallava el diagnòstic.
         //
         // (3a volta) La 2a volta escrivia la traça amb `fs` de Node i sondejava
         // el .ps1 amb `fs.existsSync`: sense Node, les dos coses desapareixien en
         // SILENCI i sempre guanyava el diàleg vell. Ara la traça va al log del
-        // panell (`fpDiag` → `FASTPASS_UI.Utils.forceLog`) i el transport bo és
-        // `cep.process`, que no necessita Node.
+        // panell (`fpDiag` → `FASTPASS_UI.Utils.forceLog`).
         //
         // El botó 🧪 (provaRuta) i el camp de text NO canvien: es pot seguir
         // enganxant la ruta a mà i desant sense obrir cap diàleg.
@@ -855,7 +857,6 @@
 
         // ── 1) DIÀLEG MODERN DE L'EXPLORADOR (2026-10-22 · BUG #178b) ─────────
         var _fpPickBusy = false;
-        var _fpNodeMods = {};
 
         /**
          * fpExtRoot: carpeta de l'extensió (`''` si no es pot resoldre).
@@ -937,55 +938,17 @@
         /**
          * fpEnvTxt: què hi ha disponible en este CEP, en UNA línia de log.
          * Servix per a saber, sense obrir res més, si el diàleg podrà ser el
-         * modern: `Node`/`child_process` (cal `--enable-nodejs` al manifest) o
-         * `cep.process` (API nativa de CEP 10+, NO necessita Node).
+         * modern: `cep.process` (API nativa de CEP 10+, NO necessita Node).
+         * (2026-10-29) Fora `Node`/`child_process` i `Utils._fsKind`: el manifest
+         * no declara `--enable-nodejs` i `fsKind` sempre era `cep.fs`.
          * @returns {string}
          */
         function fpEnvTxt() {
-            var node = false, cp = false, proc = false, fsKind = '?';
-            try { node = !!(window.cep_node && window.cep_node.require); } catch (e1) { }
-            try { cp = !!fpNodeReq('child_process'); } catch (e3) { }
+            var proc = false;
             try { proc = !!fpCepProc(); } catch (e4) { }
-            var fr = fpFrames();
-            for (var i = 0; i < fr.length; i++) {
-                try {
-                    var U = fr[i].FASTPASS_UI && fr[i].FASTPASS_UI.Utils;
-                    if (U && U._fsKind) { fsKind = U._fsKind; break; }
-                } catch (e5) { }
-            }
             return 'url=' + String(window.location.href || '') +
-                ' · Node=' + node + ' · child_process=' + cp + ' · cep.process=' + proc +
-                ' · escriptura=' + fsKind + ' · ext=' + (fpExtRoot() || '?');
-        }
-
-        /**
-         * fpNodeReq: mòdul de Node (cascada cep_node → require → cep.node).
-         *
-         * `setup.html` va dins d'un <iframe> i en CEP el mòdul de Node pot estar
-         * exposat NOMÉS al marc principal: si en este marc no hi és, es prova
-         * `parent`/`top` (mateix origen). Sense això el 📁 queia sempre al
-         * diàleg vell de CEP i pareixia que el #178b no s'havia aplicat.
-         * @param {string} name
-         * @returns {Object|null}
-         */
-        function fpNodeReq(name) {
-            if (_fpNodeMods[name] !== undefined) return _fpNodeMods[name];
-            var wins = fpFrames();
-            var mod = null;
-            for (var i = 0; i < wins.length && !mod; i++) {
-                var w = wins[i];
-                // 0) La cascada del panell (Utils._nodeReq) ja sap on mirar primer.
-                try {
-                    if (w.FASTPASS_UI && w.FASTPASS_UI.Utils && typeof w.FASTPASS_UI.Utils._nodeReq === 'function') {
-                        mod = w.FASTPASS_UI.Utils._nodeReq(name);
-                    }
-                } catch (e0) { mod = null; }
-                try { if (!mod && w.cep_node && w.cep_node.require) mod = w.cep_node.require(name); } catch (e1) { mod = null; }
-                if (!mod) { try { if (typeof w.require === 'function') mod = w.require(name); } catch (e2) { mod = null; } }
-                if (!mod) { try { if (w.cep && w.cep.node && w.cep.node.require) mod = w.cep.node.require(name); } catch (e3) { mod = null; } }
-            }
-            _fpNodeMods[name] = mod || null;
-            return _fpNodeMods[name];
+                ' · cep.process=' + proc +
+                ' · escriptura=cep.fs · ext=' + (fpExtRoot() || '?');
         }
 
         /**
@@ -1030,76 +993,6 @@
         function fpPickCursor(on) {
             try { document.body.classList.toggle('fp-picking', !!on); } catch (e) { }
         }
-        /**
-         * fpPickViaNode: transport A — `child_process.execFile` de Node.
-         *
-         * NOMÉS existix si el manifest declara `--enable-nodejs` (este panell NO
-         * el declara: vore `fpCepProc`). Es manté perquè és el camí amb stdout i
-         * codi d'eixida, i funciona igual si algun dia s'habilita Node.
-         *
-         * @param {string} id
-         * @param {string} initial
-         * @returns {boolean} false = Node no hi és (que seguisca la cascada)
-         */
-        function fpPickViaNode(id, initial) {
-            var cp = fpNodeReq('child_process');
-            if (!cp || !cp.execFile) return false;
-            var script = fpPickScript();
-            if (!script) { fpDiag('KO · falta el .ps1 (root=' + fpExtRoot() + ')'); return false; }
-            var el = document.getElementById(id);
-
-            // Títol i ruta inicial: per ENTORN (`FP_PICK_*`) si el marc té
-            // `process`, i SEMPRE per arguments — `execFile` no passa per cap
-            // shell, així que espais, accents i `\\srv\share` hi arriben intactes.
-            // (Si `process` no hi és, l'entorn del fill s'hereta sencer: sense
-            // `PATH`/`SystemRoot` PowerShell no arranca de manera fiable.)
-            var initialTxt = String(initial == null ? '' : initial);
-            var env = null;
-            try {
-                var pe = (typeof process !== 'undefined') ? process.env : null;
-                if (pe) {
-                    env = {};
-                    for (var k in pe) { if (Object.prototype.hasOwnProperty.call(pe, k)) env[k] = pe[k]; }
-                    env.FP_PICK_TITLE = 'Tria una carpeta';
-                    env.FP_PICK_INITIAL = initialTxt;
-                }
-            } catch (eEnv) { env = null; }
-
-            var argv = ['-NoProfile', '-STA', '-ExecutionPolicy', 'Bypass', '-File', script,
-                        '-Title', 'Tria una carpeta', '-Initial', initialTxt];
-            var opts = { windowsHide: true };
-            if (env) opts.env = env;
-
-            _fpPickBusy = true;
-            fpPickCursor(true);
-            fpDiag('obre (Node) id=' + id + ' · initial=' + initialTxt);
-            try {
-                cp.execFile('powershell.exe', argv, opts,
-                    function (err, stdout, stderr) {
-                        _fpPickBusy = false;
-                        fpPickCursor(false);
-                        var code = err ? (typeof err.code === 'number' ? err.code : -1) : 0;
-                        var out = String(stdout || '').replace(/[\r\n]+/g, '').trim();
-                        if (code === 0 && out) {
-                            if (el) el.value = out;
-                            fpDiag('OK (Node) exit=0 · ' + out);
-                            return;
-                        }
-                        if (code === 3) { fpDiag('cancel·lat (exit=3)'); return; }
-                        var why = String(stderr || (err && err.message) || '').replace(/[\r\n]+/g, ' ').trim();
-                        fpDiag('KO (Node) exit=' + code + ' · ' + why);
-                        // El mecanisme ha fallat de debò: xarxa de seguretat.
-                        if (!pickNative(id, 'folder')) pickerOpen(id, { mode: 'folder' });
-                    });
-            } catch (eSp) {
-                _fpPickBusy = false;
-                fpPickCursor(false);
-                fpDiag('KO execFile · ' + ((eSp && eSp.message) || eSp));
-                return false;
-            }
-            return true;
-        }
-
         /**
          * fpCepProc: l'objecte `cep` amb l'API de processos (`cep.process`, CEP 10+).
          *
@@ -1276,10 +1169,11 @@
          * quan l'usuari tria, posa la ruta al camp `id`. És ASÍNCRON.
          *
          * Cascada de transports (la primera que arranca guanya):
-         *   A) Node `child_process`  → cal `--enable-nodejs` al manifest (ací NO).
-         *   B) `cep.process`         → API nativa de CEP 10+, SENSE Node (#178b 3a).
-         * I si cap arranca, el cridador seguix amb `cep.fs.showOpenDialog` i, al
+         *   A) `cep.process`         → API nativa de CEP 10+, SENSE Node (#178b 3a).
+         * I si no arranca, el cridador seguix amb `cep.fs.showOpenDialog` i, al
          * final, amb el selector HTML del dashboard.
+         * (2026-10-29) Fora el transport `child_process` de Node: el manifest no
+         * declara `--enable-nodejs` i eixa branca no s'arrancava mai.
          *
          * @param {string} id      - id de l'input destí
          * @param {string} initial - carpeta on començar ('' = última recordada)
@@ -1290,9 +1184,8 @@
             var el = document.getElementById(id);
             if (!el) return true;
             if (_fpPickBusy) return true;                     // ja n'hi ha un d'obert
-            if (fpPickViaNode(id, initial)) return true;
             if (fpPickViaCep(id, initial)) return true;
-            fpDiag('KO id=' + id + ' · cap transport (ni Node ni cep.process) → diàleg de CEP');
+            fpDiag('KO id=' + id + ' · cap transport (cep.process) → diàleg de CEP');
             return false;
         };
 

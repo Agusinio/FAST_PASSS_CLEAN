@@ -431,6 +431,17 @@ button.btn-debug {
     0%, 100% { opacity: 1; }
     50% { opacity: 0.22; }
 }
+/* Blau lategant: el panell ESTÀ TREBALLANT (escaneig del NAS, FOTO, ingest…).
+   No s'ha de confondre amb el verd intermitent, que vol dir «ja importable». */
+.light.busy {
+    background: #007acc;
+    box-shadow: 0 0 7px #007acc;
+    animation: fpBusy 0.8s ease-in-out infinite;
+}
+@keyframes fpBusy {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.2; }
+}
 
 .semaforo-strip {
     display: flex; gap: 8px; padding: 2px 6px;
@@ -477,6 +488,148 @@ button.btn-debug {
     border: none;
     width: 100%;
     height: 100%;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   OVERLAY: TWITTS — tria del tuit (2026-10-29)
+   Ctrl+clic a la DIANA 🎯. Només ix quan el match per OCR no ha decidit:
+   ensenya els .mov de tuit (XARXES) del DIA DEL PROJECTE, no la carpeta
+   sencera. El navegador natiu queda al botó «Buscar al disc…».
+   ═══════════════════════════════════════════════════════════════════════════*/
+#twitts-pick {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.72);
+    z-index: 9998;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    padding: 12px;
+    box-sizing: border-box;
+}
+#twitts-pick.active {
+    display: flex;
+}
+#twitts-pick .tw-pick-box {
+    background: var(--color-fons-seccio);
+    border: 1px solid var(--color-vora);
+    border-radius: 6px;
+    width: 100%;
+    max-width: 520px;
+    max-height: 100%;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6);
+}
+#twitts-pick .tw-pick-head {
+    padding: 8px 10px;
+    font-weight: 600;
+    border-bottom: 1px solid var(--color-vora);
+    color: var(--color-text);
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+#twitts-pick .tw-pick-day {
+    color: var(--color-accent);
+    font-weight: 400;
+    font-size: 10px;
+}
+#twitts-pick .tw-pick-count {
+    margin-left: auto;
+    color: var(--color-text-dim);
+    font-weight: 400;
+    font-size: 10px;
+}
+#twitts-pick .tw-pick-q {
+    margin: 6px 8px 2px 8px;
+    padding: 4px 6px;
+    font-family: inherit;
+    font-size: 10px;
+    background: var(--color-secondary);
+    color: var(--color-text);
+    border: 1px solid var(--color-vora);
+    border-radius: 4px;
+}
+#twitts-pick .tw-pick-q:focus {
+    outline: none;
+    border-color: var(--color-accent);
+}
+#twitts-pick .tw-pick-sub {
+    padding: 6px 10px;
+    color: var(--color-text-dim);
+    font-size: 10px;
+    line-height: 1.35;
+    border-bottom: 1px solid var(--color-vora);
+    word-break: break-word;
+}
+#twitts-pick .tw-pick-sub:empty {
+    display: none;
+}
+#twitts-pick .tw-pick-list {
+    overflow-y: auto;
+    flex-grow: 1;
+    padding: 4px;
+    min-height: 60px;
+}
+#twitts-pick .tw-pick-item {
+    display: block;
+    width: 100%;
+    text-align: left;
+    background: var(--color-secondary);
+    border: 1px solid transparent;
+    border-radius: 4px;
+    color: var(--color-text);
+    font-family: inherit;
+    font-size: 10px;
+    line-height: 1.3;
+    padding: 5px 6px;
+    margin-bottom: 4px;
+    cursor: pointer;
+}
+#twitts-pick .tw-pick-item:hover,
+#twitts-pick .tw-pick-item:focus {
+    border-color: var(--color-accent);
+    outline: none;
+}
+#twitts-pick .tw-pick-item .tw-pick-who {
+    font-weight: 600;
+}
+#twitts-pick .tw-pick-item .tw-pick-meta {
+    color: var(--color-text-dim);
+}
+#twitts-pick .tw-pick-item .tw-pick-tag {
+    color: var(--color-accent);
+}
+#twitts-pick .tw-pick-empty {
+    color: var(--color-text-dim);
+    font-size: 10px;
+    padding: 8px 6px;
+    line-height: 1.4;
+}
+#twitts-pick .tw-pick-foot {
+    display: flex;
+    gap: 6px;
+    justify-content: flex-end;
+    padding: 6px 8px;
+    border-top: 1px solid var(--color-vora);
+}
+#twitts-pick .tw-pick-foot button {
+    font-family: inherit;
+    font-size: 10px;
+    padding: 4px 9px;
+    border-radius: 4px;
+    border: 1px solid var(--color-vora);
+    background: var(--color-secondary);
+    color: var(--color-text);
+    cursor: pointer;
+}
+#twitts-pick .tw-pick-foot button:hover {
+    border-color: var(--color-accent);
+}
+#twitts-pick #tw-pick-cancel {
+    color: var(--color-text-dim);
 }
 
 /* BOTÓ OCUPAT (2026-10-16 · BUG #172): mentre la portada s'exporta (còpia a la zona neta +

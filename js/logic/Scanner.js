@@ -185,6 +185,138 @@
             return null;
         },
 
+        /**
+         * _listNamesNative: noms d'una carpeta per la via NATIVA de CEP
+         * (`cep.fs.readdir`), SENSE demanar cap atribut de cap fitxer.
+         *
+         * (2026-10-29 · BUG #204) PER QUÈ CAL: en UNC, `Utils.readFolder` va per
+         * JSX (`IO.scanDirectory`), que demana `length`, `modified` i `created`
+         * de CADA fitxer —i si `length` ve 0 (habitual en .mov per UNC) el
+         * FITXER S'OBRI (`f.open('r')` + `eof`) per traure'n la mida. Amb 1281
+         * fitxers això són milers d'operacions sobre SMB dins del motor
+         * d'ExtendScript: 103 s el 29/10 en fred, amb el fil del panell
+         * BLOQUEJAT. Mesurat eixe dia des de .NET (la mateixa via nativa que
+         * usa CEP): 1281 noms en 2 ms i 1281 FileInfo amb `created` en 3 ms.
+         * El NAS no és lent: ho era la manera de preguntar-li-ho.
+         * @param {string} folder - Ruta de la carpeta (UNC o local)
+         * @returns {Array<string>|null} noms, o null si la via nativa no llistat
+         */
+        _listNamesNative: function (folder) {
+            try {
+                if (!window.cep || !window.cep.fs || !window.cep.fs.readdir) return null;
+                var rd = window.cep.fs.readdir(folder);
+                if (!rd || rd.err !== 0 || !rd.data) return null;
+                var out = [];
+                for (var i = 0; i < rd.data.length; i++) {
+                    var n = rd.data[i];
+                    n = (typeof n === 'string') ? n : (n && n.name);
+                    if (!n) continue;
+                    // Mateixa reparació de mojibake CP1252 que `readFolder`.
+                    out.push((utils && utils._decodeName) ? utils._decodeName(n) : n);
+                }
+                return out;
+            } catch (eLN) { return null; }
+        },
+
+        /** _d8ToMs: 'YYYYMMDD' (local) → ms. 0 si la data no és vàlida. */
+        _d8ToMs: function (d8) {
+            var v = this._validDate8(d8);
+            if (!v) return 0;
+            return new Date(+v.slice(0, 4), +v.slice(4, 6) - 1, +v.slice(6, 8)).getTime();
+        },
+
+        /**
+         * _dateCandidates: ompli `created`/`mtime` NOMÉS dels fitxers indicats.
+         *
+         * (2026-10-29 · BUG #204) El filtre per data necessita la data de cada
+         * candidat, no la dels 1281 fitxers de la carpeta. Ací es daten només
+         * els candidats del bloc (decenes) i en tres passades de cost creixent:
+         *   1. caché persistent `fp_wott_dates_v1` (cost 0; sobreviu a reinicis),
+         *   2. `cep.fs.stat` natiu (≈0,1-1,5 ms per fitxer; mai bloqueja el
+         *      motor de Premiere perquè no és ExtendScript),
+         *   3. `IO.fileInfo` via JSX (File.created) només per als pocs noms que
+         *      ni la caché ni el stat han pogut datar.
+         * @param {string} folder - Carpeta que conté els fitxers
+         * @param {Array<Object>} files - Objectes { name, created?, mtime? } (es modifiquen)
+         * @returns {Promise<number>} quants n'han quedat amb data
+         */
+        _dateCandidates: async function (folder, files) {
+            if (!files || files.length === 0) return 0;
+            this._loadDateCache();
+            if (!this._wottDateCache) this._wottDateCache = {};
+            var dates = this._wottDateCache;
+            var base = String(folder || '').replace(/[\\/]+$/, '') + '\\';
+            var pend = [];
+            var ok = 0;
+
+            for (var i = 0; i < files.length; i++) {
+                var f = files[i];
+                var k = String(f.name || '').toUpperCase();
+                // 0) Si l'origen ja va posar la data (llista vinguda de `readFolder`
+                //    JSX, o passada anterior en caché de 30 s), no es toca res: així
+                //    el camí de sempre queda idèntic i no es paga cap stat de més.
+                if (f.created || f.mtime) {
+                    var d0 = this._fileDateYYYYMMDD(f);
+                    if (d0) {
+                        dates[k] = d0;
+                        this._dateCacheDirty = true;
+                        ok++;
+                        continue;
+                    }
+                }
+                // 1) Ja datat en una sessió anterior: la caché val per al filtre.
+                var d8 = this._validDate8(dates[k]);
+                if (d8) {
+                    if (!f.created) f.created = this._d8ToMs(d8);
+                    ok++;
+                    continue;
+                }
+                // 2) `cep.fs.stat` natiu (només d'eixe fitxer).
+                var st = null;
+                try { st = window.cep && window.cep.fs ? window.cep.fs.stat(base + f.name) : null; } catch (eSt) { st = null; }
+                if (st && st.err === 0 && st.data) {
+                    f.created = st.data.creationTime || 0;
+                    f.mtime = st.data.mtime || 0;
+                    var d2 = this._fileDateYYYYMMDD(f);
+                    if (d2) {
+                        dates[k] = d2;
+                        this._dateCacheDirty = true;
+                        ok++;
+                        continue;
+                    }
+                }
+                pend.push(f);
+            }
+
+            // 3) Últim recurs: File.created via JSX, un fitxer a la vegada (pocs).
+            var nJsx = 0;
+            for (var j = 0; j < pend.length; j++) {
+                var pj = pend[j];
+                try {
+                    var raw = await utils.callJSX("IO.fileInfo('" + utils.escape(base + pj.name) + "')");
+                    if (raw && String(raw).indexOf('ERR') !== 0) {
+                        var info = JSON.parse(raw);
+                        if (!info || !info.exists) continue;
+                        pj.created = info.created || 0;
+                        pj.mtime = info.modified || 0;
+                        var d3 = this._fileDateYYYYMMDD(pj);
+                        if (d3) {
+                            dates[String(pj.name).toUpperCase()] = d3;
+                            this._dateCacheDirty = true;
+                            nJsx++;
+                        }
+                    }
+                } catch (eJP) { }
+            }
+            ok += nJsx;
+            if (pend.length > nJsx) {
+                utils.log('⚠️ [SCAN:wotts] ' + (pend.length - nJsx) + ' candidat(s) sense data fiable ' +
+                    '(ni caché, ni stat, ni File.created): ' + pend.slice(0, 3).map(function (x) { return x.name; }).join(', '), 'WARN');
+            }
+            this._saveDateCache();
+            return ok;
+        },
+
         wotts: async function (ctx) {
             try {
                 const pathNAS = ctx.config.rutas.chyrons;
@@ -206,7 +338,24 @@
                 if (_c && (_now - _c.at) < 30000 && _c.list && _c.list.length > 0) {
                     allFiles = _c.list;
                 } else {
-                    allFiles = await utils.readFolder(pathNAS);
+                    // (2026-10-29 · #204) LLISTAT PER LA VIA NATIVA (`cep.fs.readdir`).
+                    // En UNC, `Utils.readFolder` anava per JSX (`File.created` de CADA
+                    // fitxer, i obertura dels .mov amb `length`=0): 103 s en fred amb el
+                    // fil del panell bloquejat. Ací només es demanen els NOMS (2 ms
+                    // mesurats amb 1281 fitxers) i els atributs es pidolen després,
+                    // només als candidats del bloc (`_dateCandidates`).
+                    var _tRF = Date.now();
+                    var _names = this._listNamesNative(pathNAS);
+                    if (_names) {
+                        allFiles = [];
+                        for (var _iN = 0; _iN < _names.length; _iN++) allFiles.push({ name: _names[_iN] });
+                        _bm('wotts · llistat natiu (' + _ms(_tRF) + ', ' + allFiles.length + ' noms)');
+                    } else {
+                        // Via nativa no disponible: es manté el camí de sempre (JSX).
+                        allFiles = await utils.readFolder(pathNAS);
+                        _bm('wotts · carpeta de rètols via JSX (' + _ms(_tRF) + ', ' +
+                            (allFiles ? allFiles.length : 'null') + ' fitxer(s))');
+                    }
                     if (allFiles && allFiles.length > 0) {
                         this._readCache[_key] = { at: _now, list: allFiles };
                     } else {
@@ -260,7 +409,34 @@
                     // (2026-10-26) Es data la UNIÓ (bloc + flotants) d'una sola passada i
                     // després es torna a separar: el TEMA del projecte només pot eixir
                     // dels wotts DEL BLOC (un XARXES-TEXT flotant no pot batejar el projecte).
-                    var resF = this.filterByWorkDate(filtered.concat(flotants), ctx.dateDir);
+                    // ── DATACIÓ DELS CANDIDATS (2026-10-29 · #204) ─────────────
+                    // El filtre per data només necessita la data dels candidats del
+                    // bloc (decenes), no la dels 1281 fitxers de la carpeta.
+                    // `_dateCandidates` passa per caché persistent → stat natiu →
+                    // File.created (JSX) i deixa `created`/`mtime` posats en els
+                    // MATEIXOS objectes de `filtered`/`flotants` (són referències).
+                    var _tDt = Date.now();
+                    var _cands = filtered.concat(flotants);
+                    var _nDated = await this._dateCandidates(pathNAS, _cands);
+                    _bm('wotts · datació de candidats (' + _ms(_tDt) + ', ' + _nDated + '/' + _cands.length + ')');
+                    // SALVAGUARDA: si cap candidat no es pot datar, es torna al camí de
+                    // sempre (JSX amb `File.created`). Sense això es repetiria el desastre
+                    // del 2026-09-22 («69 → 0, NO datables») i no s'importaria cap retol.
+                    if (_cands.length > 0 && _nDated === 0) {
+                        utils.log('⚠️ [SCAN:wotts] Cap candidat datable per caché/stat → es relig la carpeta via JSX (File.created)', 'WARN');
+                        var _full = await utils.readFolder(pathNAS);
+                        if (_full && _full.length) {
+                            var _byName = {};
+                            for (var _kF = 0; _kF < _full.length; _kF++) _byName[String(_full[_kF].name).toUpperCase()] = _full[_kF];
+                            for (var _kC = 0; _kC < _cands.length; _kC++) {
+                                var _hit = _byName[String(_cands[_kC].name).toUpperCase()];
+                                if (_hit) { _cands[_kC].created = _hit.created || 0; _cands[_kC].mtime = _hit.mtime || 0; }
+                            }
+                        }
+                    }
+                    var _tFD = Date.now();
+                    var resF = this.filterByWorkDate(_cands, ctx.dateDir);
+                    _bm('wotts · filtre per data (' + _ms(_tFD) + ', ' + resF.keep.length + ' conservat(s))');
                     utils.log('[SCAN:wotts] Filtre per data projecte ' + dateTarget + ': ' + filtered.length +
                         ' del bloc + ' + flotants.length + ' flotant(s) -> ' + resF.keep.length +
                         (resF.dropped.length ? ' (descartats ' + resF.dropped.length + " d'altres dies: " + resF.dropped.slice(0, 3).map(function(x){ return x.name; }).join(', ') + '...)' : '') +
@@ -346,8 +522,8 @@
         //     UTC, modificat 17/10 00:32 UTC) → dataria el bloc al dia següent.
         //   · cep.fs.stat no dóna creationTime en UNC en aquesta màquina (vegeu
         //     Utils.readFolder) i IO.scanDirectory triga ~4 s amb 963 fitxers.
-        //   · Node sí: fs.stat().birthtime (≈1,5 ms/fitxer; 32 ms el readdir de
-        //     963 noms, mesurat el 2026-10-21).
+        //   · Node no hi és (el manifest no declara `--enable-nodejs`), així que
+        //     `birthtime` no es pot consultar: creació via `cep.fs.stat`.
         // Cost per poll (15 s): readdir + stats NOMÉS dels noms no datats encara
         // (caché `_wottDateCache` per nom) → ~35 ms en règim estable.
         // ────────────────────────────────────────────────────────────────────
@@ -433,7 +609,8 @@
          * _mtimeDateYYYYMMDD (2026-10-22 · #182): data DEDUÏDA del `mtime` quan el
          * fitxer no té ni `birthtime` (Node) ni `created` (CEP/JSX).
          *
-         * PER QUÈ CAL: en este equip el panell NO té Node (`_nodeFs()` → null) i, en
+         * PER QUÈ CAL: el panell NO té Node (el manifest no declara
+         * `--enable-nodejs`) i, en
          * UNC, ni `cep.fs.stat().creationTime` ni `File.created` tornen res → la
          * sonda de wotts deia 0/43 tenint els 43 wotts del dia al NAS, i el botó es
          * quedava a MASSA D'HORA amb l'escaleta ja baixada per FOTO.
@@ -501,28 +678,12 @@
             const hit = this._wottProbeCache[cacheKey];
             if (hit && (Date.now() - hit.at) < (this.WOTT_PROBE_TTL_MS || 5000)) return hit.res;
 
-            // ── 1. NOMS (sense stats): Node → CEP → readFolder (JSX, últim recurs)
-            let names = null;
-            try {
-                const fs = window.FASTPASS_UI.Utils._nodeFs();
-                if (fs && fs.promises && fs.promises.readdir) {
-                    names = await fs.promises.readdir(folder);
-                    out.via = 'node';
-                } else if (fs && fs.readdirSync) {
-                    names = fs.readdirSync(folder);
-                    out.via = 'node';
-                }
-            } catch (eN) { names = null; }
-
-            if (!names && window.cep && window.cep.fs && window.cep.fs.readdir) {
-                try {
-                    const rd = window.cep.fs.readdir(folder);
-                    if (rd && rd.err === 0 && rd.data) {
-                        names = rd.data.map(function (n) { return (typeof n === 'string') ? n : (n && n.name); });
-                        out.via = 'cep';
-                    }
-                } catch (eC) { names = null; }
-            }
+            // ── 1. NOMS (sense stats): CEP natiu → readFolder (JSX, últim recurs)
+            // (2026-10-29) Fora la via Node (`fs.promises.readdir`): el manifest
+            // no declara `--enable-nodejs`, i `cep.fs.readdir` és la MATEIXA
+            // consulta nativa (noms sols, en mil·lisegons).
+            let names = this._listNamesNative(folder);
+            if (names) out.via = 'cep';
 
             if (!names) {
                 // Últim recurs: scan amb JSX (car, ~4 s amb 963 fitxers). Si
@@ -562,7 +723,7 @@
                 return out;
             }
 
-            // ── 2. DATACIÓ per birthtime (caché per NOM: cada fitxer, una vegada)
+            // ── 2. DATACIÓ per creationTime/mtime (caché per NOM: cada fitxer, una vegada)
             if (!this._wottDateCache) this._wottDateCache = {};
             const dates = this._wottDateCache;
             // (2026-10-22 · #182) una data invàlida ('19700101') NO compta com a datada.
@@ -597,7 +758,9 @@
 
         /**
          * _dateWotts: omple `_wottDateCache` (NOM → YYYYMMDD) pels noms indicats.
-         * Ordre: birthtime (Node) → creationTime (CEP) → File.created (JSX).
+         * Ordre: creationTime/mtime (CEP) → File.created (JSX).
+         * (2026-10-29) Fora el pas per `birthtime` de Node: el manifest no
+         * declara `--enable-nodejs` i, en UNC, eixa branca sempre tornava null.
          * @param {string} folder
          * @param {Array<string>} names
          */
@@ -620,27 +783,7 @@
                 self._dateCacheDirty = true;
             };
 
-            // ── 1. NODE · birthtime (l'única data fiable: el mtime el mou el procés nocturn)
-            let fs = null;
-            try { fs = window.FASTPASS_UI.Utils._nodeFs(); } catch (eF) { fs = null; }
-            if (fs && fs.promises && fs.promises.stat) {
-                const CHUNK = 16;   // no esclafar l'SMB amb 150 stats alhora
-                for (let i = 0; i < names.length; i += CHUNK) {
-                    const slice = names.slice(i, i + CHUNK);
-                    const res = await Promise.all(slice.map(function (n) {
-                        return fs.promises.stat(base + n).then(function (st) {
-                            return { n: n, t: (st && st.birthtime) ? st.birthtime.getTime() : 0 };
-                        }, function () { return { n: n, t: 0 }; });
-                    }));
-                    for (let j = 0; j < res.length; j++) {
-                        put(res[j].n, self._localDate(res[j].t));
-                    }
-                }
-                names = left(names);
-                if (names.length === 0) { this._saveDateCache(); return; }
-            }
-
-            // ── 2. CEP · creationTime (en UNC sol venir buit, però és gratis provar-ho)
+            // ── 1. CEP · creationTime (en UNC sol venir buit, però és gratis provar-ho)
             if (window.cep && window.cep.fs && window.cep.fs.stat) {
                 let undated = 0, sample = null;
                 for (let k = 0; k < names.length; k++) {
@@ -670,7 +813,7 @@
                 if (names.length === 0) { this._saveDateCache(); return; }
             }
 
-            // ── 3. JSX · File.created (una lectura cara, però queda cachejada per sempre)
+            // ── 2. JSX · File.created (una lectura cara, però queda cachejada per sempre)
             try {
                 const U = window.FASTPASS_UI.Utils;
                 if (U && typeof U._scanDirectoryMap === 'function') {

@@ -2629,6 +2629,123 @@
         },
 
         /**
+         * _esRetolAcotat: el FINAL d'este rètol s'ha d'ACOTAR al seu clip de referència?
+         *
+         * 🐞 BUG #201 (2026-10-28). El fix de #197 va fer que CAP rètol mirara el final del
+         * clip de V1 (manava la durada sencera del wott). Això és el que cal per als
+         * GRAFISMES, però NO per als rètols de text: la regla del 16/09 diu que un rètol
+         * «entra a +10 frames del seu clip de referència i ACABA quan acaba eixe clip».
+         * Sense això, un nom-càrrec que s'allarga ocupa la pista quan ha d'entrar el
+         * següent i `_chooseSlot` → `_firstFreeStart` el desplaça al final de l'anterior
+         * (cas real TNC V2 27/10: Josep Forés entrava on acabava Miguel Domingo i
+         * arrossegava Lourdes Massip).
+         *
+         * ABAST DECIDIT PER L'USUARI (28/10) — vegeu `docs/specs/CHYRON_OUT_POLICY.md`:
+         *   · SÍ s'acoten: NOM-CÀRREC i les CONNEXIONS (Enviat / Directe / Presencial).
+         *   · NO s'acoten: LLOC/DATA i FIRMA (mantenen la durada pròpia de #197), ni cap
+         *     grafisme cremat (eixos van per `_placeTitoletChain`).
+         *
+         * Funció PURA (sense estat ni JSX) per poder provar-la al smoke.
+         * @param {Object} chy - {name, rol}
+         * @returns {boolean}
+         */
+        _esRetolAcotat: function (chy) {
+            if (!chy) return false;
+            // Una TRADUCCIÓ mai: el seu TEXT pot contindre «Nom», «Carrec», «Directe»…
+            try { if (this._isTraduccioWott(chy)) return false; } catch (eT) { }
+            // Un GRAFISME CREMAT té regla pròpia (`_placeTitoletChain`), no s'acota. La
+            // consulta depén de Config → guarda perquè la funció seguisca sent pura.
+            try { if (this._isBurnedGrafWott(chy)) return false; } catch (eB) { }
+            const rol = String(chy.rol || '').toUpperCase().trim();
+            const name = String(chy.name || '');
+            const nameU = name.toUpperCase();
+            // 1) NOM-CÀRREC (mateix criteri que `placeChyronNom`).
+            // ⚠️ El token `NC` s'ha de buscar EXACTE: un `indexOf('NC_')` sobre el nom
+            // fa fals positiu amb «WOTT_**NC_**V2» (el codi de programa) i capturaria
+            // LLOC/DATA i FIRMA, que l'usuari ha deixat FORA de l'acotament.
+            const toks = nameU.split('_');
+            if (rol === 'NOMCARREC' || rol === 'NOMCAREC' ||
+                name.indexOf('Nom') !== -1 || name.indexOf('Carrec') !== -1 ||
+                nameU.indexOf('NOMCARREC') !== -1 || toks.indexOf('NC') !== -1) {
+                return true;
+            }
+            // 2) CONNEXIONS: `_isConexioWott` ja cobreix DIRECTE, ENVIAT, PRESENCIAL,
+            //    CONNEXIO i CONEXIO (al nom o al rol), `Directe_PROGRAMES` inclòs.
+            if (this._isConexioWott(chy)) return true;
+            return false;
+        },
+
+        /**
+         * _esPrimerClipTimeline: el clip de referència ARRENCA el timeline (00:00)?
+         *
+         * 🐞 BUG #201 (2026-10-28). El decalatge de 10 frames (0,40 s) amb què entren els
+         * rètols només té sentit al PRIMER clip del timeline; en la resta l'usuari el veu
+         * innecessari (el rètol ha d'entrar al seu instant exacte). Funció PURA.
+         *
+         * @param {Array} clips - clips de V1 (getTrackClips)
+         * @param {Object} ci - clip de referència
+         * @returns {boolean}
+         */
+        _esPrimerClipTimeline: function (clips, ci) {
+            if (!ci || !isFinite(Number(ci.start))) return false;
+            if (Math.abs(Number(ci.start)) > 0.05) return false;
+            const list = clips || [];
+            for (let i = 0; i < list.length; i++) {
+                const c = list[i];
+                if (!c || c === ci || !isFinite(Number(c.start))) continue;
+                if (Number(c.start) < Number(ci.start) - 1e-6) return false;
+            }
+            return true;
+        },
+
+        /**
+         * _limiteOutChyron: LÍMIT del FINAL d'un rètol/grafisme col·locat al timeline.
+         *
+         * 🐞 BUG #197 (2026-10-27). Fins ara el final d'un rètol s'agafava del FINAL
+         * DEL CLIP DE V1 (`ci.end`) quan no hi havia marcador següent, i a més es
+         * tornava a aplicar `Math.min(end, ci2.end)` cada volta que el rètol s'havia
+         * de desplaçar. Resultat: un TALL de V1 DINS del mateix ítem (V1 trocejada
+         * amb TROSSEJA) encongia l'Out del gràfic i el rètol no ocupava mai la
+         * durada sencera del mèdia.
+         *
+         * REGLA (usuari, 27/10): el grafisme s'inserix amb la SEUA DURADA SENCERA.
+         * El tall de V1 no és frontera; l'únic límit dur és el MARCADOR SEGÜENT
+         * (frontera de l'ítem, regla del marcador sagrat del 21/09).
+         *
+         * Funció PURA (sense estat ni JSX) per poder provar-la al smoke.
+         *
+         * @param {Object} p - {durOwn, placeStart, mkTime, marcadorSeg, clipEnd, acotat}
+         * @returns {{lim:number|null, why:string}}
+         */
+        _limiteOutChyron: function (p) {
+            const o = p || {};
+            const num = (v) => (v !== null && v !== undefined && isFinite(v)) ? Number(v) : null;
+            const dur = num(o.durOwn);
+            const st = num(o.placeStart);
+            const mkT = num(o.mkTime);
+            const nm = num(o.marcadorSeg);
+            const ce = num(o.clipEnd);
+            const acotat = (o.acotat === true);
+            // 1) El MARCADOR SEGÜENT mana sempre (frontera de l'ítem).
+            if (nm !== null && (mkT === null || nm > mkT + 0.1)) {
+                return { lim: nm, why: 'marcador ' + nm.toFixed(2) + 's' };
+            }
+            // 2) RÈTOL ACOTAT (NomCàrrec / connexió · BUG #201): mana el FINAL DEL CLIP de
+            //    referència — regla del 16/09 («el rètol acaba quan acaba el seu clip»).
+            //    Només si el clip encara té recorregut des del punt d'entrada.
+            if (acotat && ce !== null && (st === null || ce > st + 0.05)) {
+                return { lim: ce, why: 'final del clip de referència (rètol acotat)' };
+            }
+            // 3) Sense marcador següent: mana la DURADA PRÒPIA del wott (mai el tall de V1).
+            if (dur !== null && dur > 0 && st !== null) {
+                return { lim: st + dur, why: 'durada pròpia del wott (sense marcador següent)' };
+            }
+            // 4) Sense durada resolta: queda el final del clip (comportament antic).
+            if (ce !== null) return { lim: ce, why: 'final del clip (sense marcador següent)' };
+            return { lim: null, why: 'sense límit' };
+        },
+
+        /**
          * _clipAtInstant: Clip de V1 que CONTÉ l'instant donat (o el següent si cau
          * just sobre el tall). És el "clip de referència" d'un rètol.
          * ⚠️ Retorna el CLIP SENCER (name/start/end/inPoint/outPoint…) perquè
@@ -2746,11 +2863,15 @@
 
                 const wottIdx = await FASTPASS_UI.Logic.Project.getWottIndex();
                 const ctx = { busy: {}, placed: {} };
-                // ── REGLA DELS RÈTOLS (2026-09-16) ──────────────────────────────
-                // Un rètol (NomCarrec, Lloc, Resto…) va a 10 FRAMES (0,40s) de l'inici
-                // del SEU CLIP de referència — el clip de V1 que conté l'instant ideal —
-                // i ACABA quan acaba aquest clip. No depèn de la durada del clip ni de
-                // la durada del wott. (TITOLET i Traducció tenen regles pròpies.)
+                // ── REGLA DELS RÈTOLS (2026-09-16 · matisada 2026-10-28 #201) ────
+                // Un rètol (NomCarrec, Lloc, Resto…) va a l'inici del SEU CLIP de
+                // referència — el clip de V1 que conté l'instant ideal. El decalatge de
+                // 10 FRAMES (0,40 s) només s'aplica si eixe clip ARRENCA el timeline
+                // (00:00); en la resta, l'entrada és exacta (#201).
+                // El FINAL depén de la família: els rètols de text ACOTATS (NomCàrrec i
+                // connexions Enviat/Directe/Presencial) acaben amb el clip; la resta
+                // (Lloc/Data, Firma, grafismes) conserven la durada pròpia del wott
+                // (#197). (TITOLET i Traducció tenen regles pròpies.)
                 // (2026-09-18) A MÉS del final del clip de V1, un wott no pot passar-se del
                 // SEGÜENT marcador: hi ha efectes entre clips que no es detecten com a tall
                 // però que sí tenen marcador → així cap wott es cola al 1r clip del següent ítem.
@@ -2926,21 +3047,33 @@
 
                         // Clip de referència = el clip de V1 que conté l'instant ideal. El rètol
                         // hi entra 10 frames després de l'inici del clip O del marcador de l'ítem
-                        // (el que sigui més tard) i S'ACURTA si l'ítem s'acaba abans que el wott.
-                        // MAI s'allarga: si el wott és més curt que el clip, conserva la seva
-                        // durada pròpia (regla de l'usuari, 16/09 · marcador sagrat, 21/09).
+                        // (el que sigui més tard) i S'ACURTA només si arriba el MARCADOR SEGÜENT
+                        // o, en els rètols ACOTATS (#201), quan s'acaba el clip de referència.
+                        // 🐞 BUG #197 (2026-10-27): el TALL de V1 ja NO és límit de l'Out — el
+                        // gràfic ocupa la seua durada sencera (abans s'encongia al punt d'edició
+                        // de V1 i no s'inseria mai complet).
+                        // MAI s'allarga més enllà de la seua durada: si el wott és més curt que el
+                        // clip, conserva la seua durada pròpia (regla de l'usuari, 16/09 ·
+                        // marcador sagrat, 21/09 · durada sencera, 27/10).
                         let placeStart = snapped, placeEnd = null;
                         // (2026-09-21) EL MARCADOR DELIMITA L'ÍTEM: un rètol no pot entrar mai
                         // ABANS del seu marcador ni sortir-se'n (ni passar del SEGÜENT marcador).
                         // Els talls de Premiere NO són frontera fiable — entre dos INSERTS hi ha
                         // efectes que no es detecten com a tall — així que l'entrada és
-                        // max(inici del clip de V1, marcador de l'ítem) + 10 frames.
+                        // max(inici del clip de V1, marcador de l'ítem) + el decalatge d'entrada
+                        // (10 frames NOMÉS si el clip obri el timeline · BUG #201).
                         let limSlot = null;
                         if (allClipsV1.length > 0) {
                             const ci = this._clipAtInstant(allClipsV1, snapped);
                             if (ci) {
                                 const durOwn = (durInfo.dur > 0) ? durInfo.dur : null;   // si no es resol, mana el media
-                                placeStart = Math.max(ci.start, mk.time) + CHYRON_OFFSET_SEC;
+                                // 🐞 BUG #201 (2026-10-28): el decalatge de 10 frames només té
+                                // sentit al PRIMER clip del timeline (protecció de l'arrencada a
+                                // 00:00). En la resta de clips el rètol hi entra al seu instant
+                                // exacte; l'usuari el veia innecessari.
+                                const esPrimer = this._esPrimerClipTimeline(allClipsV1, ci);
+                                const offEntrada = esPrimer ? CHYRON_OFFSET_SEC : 0;
+                                placeStart = Math.max(ci.start, mk.time) + offEntrada;
                                 // Límit DUR: el SEGÜENT marcador (frontera de l'ítem). Si no n'hi ha
                                 // cap, el final del clip de V1 de referència.
                                 // (2026-09-21) ÍTEM EFECTIU = el que CONTÉ l'instant d'entrada: per als
@@ -2952,25 +3085,30 @@
                                     if (m.time <= placeStart + 0.01 && m.time >= mkEff.time) mkEff = m;
                                 }
                                 const nm = nextMarkerAfter(mkEff.time);
-                                let lim, limWhy;
-                                if (nm !== null && nm > mkEff.time + 0.1) {
-                                    lim = nm;
-                                    limWhy = 'marcador ' + nm.toFixed(2) + 's';
-                                } else {
-                                    lim = ci.end;
-                                    limWhy = 'final del clip (sense marcador següent)';
-                                }
+                                // 🐞 BUG #197: el TALL de V1 ja NO retalla l'Out del gràfic.
+                                // El límit viu a `_limiteOutChyron` (funció pura, provada al
+                                // smoke): 1) marcador següent → 2) SÍ el rètol és de text
+                                // (NomCàrrec/connexió, BUG #201) el FINAL DEL CLIP de
+                                // referència → 3) durada pròpia del wott → 4) (només si no hi
+                                // ha durada) final del clip.
+                                const limPlan = this._limiteOutChyron({
+                                    durOwn: durOwn, placeStart: placeStart, mkTime: mkEff.time,
+                                    marcadorSeg: nm, clipEnd: ci.end,
+                                    acotat: this._esRetolAcotat(chy)
+                                });
+                                const lim = limPlan.lim;
+                                const limWhy = limPlan.why;
                                 limSlot = lim;
                                 placeEnd = (durOwn === null) ? lim : Math.min(lim, placeStart + durOwn);
-                                // Protecció: si el clip de referència és tan curt que no hi
-                                // cap ni l'offset de 10 frames, no s'hi posa rètol (abans
-                                // sortien durades negatives, p.ex. @135.92→135.76).
+                                // Protecció: si el clip de referència no té espai ni per al
+                                // mínim, no s'hi posa rètol (abans sortien durades negatives,
+                                // p.ex. @135.92→135.76).
                                 if (placeEnd <= placeStart + 0.05) {
-                                    log(`   ⏭️ [${label}] ${String(chy.name).substring(0, 34)}… saltat: l'ítem no té espai ni per a l'offset de 10 frames (${(lim - placeStart).toFixed(2)}s disponibles)`, "WARN");
+                                    log(`   ⏭️ [${label}] ${String(chy.name).substring(0, 34)}… saltat: l'ítem no té espai per al rètol (${(lim - placeStart).toFixed(2)}s disponibles)`, "WARN");
                                     continue;
                                 }
                                 const trimmed = (durOwn !== null && placeStart + durOwn > lim + 0.001);
-                                log(`   📐 [${label}] ${String(chy.name).substring(0, 34)}… → clip [${ci.start.toFixed(2)}-${ci.end.toFixed(2)}] → entra a ${placeStart.toFixed(2)}s (+${CHYRON_OFFSET_FRAMES}f), surt a ${(placeEnd === null ? placeStart + Math.max(durInfo.dur, 0.5) : placeEnd).toFixed(2)}s` +
+                                log(`   📐 [${label}] ${String(chy.name).substring(0, 34)}… → clip [${ci.start.toFixed(2)}-${ci.end.toFixed(2)}] → entra a ${placeStart.toFixed(2)}s (+${esPrimer ? CHYRON_OFFSET_FRAMES : 0}f), surt a ${(placeEnd === null ? placeStart + Math.max(durInfo.dur, 0.5) : placeEnd).toFixed(2)}s` +
                                     (mkEff.fullId !== mk.fullId ? ` [ítem ${mkEff.fullId}]` : '') +
                                     (trimmed ? ' (acurtat per ' + limWhy + ')' : ' (durada pròpia del wott)'));
                             }
@@ -3011,9 +3149,13 @@
                         if (placeEnd !== null && slot.moved) {
                             // El final mai pot passar del límit de l'ÍTEM (marcador següent) ni
                             // del forat disponible si el rètol s'ha hagut d'escurçar.
+                            // 🐞 BUG #197 (2026-10-27): el final del clip de V1 on ha caigut el
+                            // rètol NO retalla l'Out. Abans hi havia un `Math.min(end2, ci2.end)`
+                            // que, cada volta que el rètol s'havia de desplaçar, l'encongia al
+                            // tall de V1 (el gràfic no ocupava mai la seua durada sencera).
+                            // `ci2` queda només com a últim recurs si la durada no es resol.
                             const ci2 = this._clipAtInstant(allClipsV1, slot.start);
                             let end2 = (durInfo.dur > 0) ? (slot.start + durInfo.dur) : (ci2 ? ci2.end : null);
-                            if (ci2 && end2 !== null) end2 = Math.min(end2, ci2.end);
                             if (limSlot !== null && end2 !== null) end2 = Math.min(end2, limSlot);
                             if (slot.shrunk && slot.maxDur) {
                                 const maxE = slot.start + slot.maxDur;

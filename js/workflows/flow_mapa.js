@@ -16,6 +16,16 @@
  * El material s'importa al BIN "GRAF" i es col·loca a la pista de grafismes, en ordre
  * d'escaleta, des del CABEZAL. Si no hi cap tot, es retallen els clips.
  * Ítem de referència (només per al match del fitxer): el marcador anterior al cabezal.
+ *
+ * (2026-10-28 · ZONA GRISA · 2a volta) LA MÀSCARA VA SEMPRE PER DAMUNT:
+ *   · es PUJA el troç de màscara de l'ÍTEM d'escaleta (Intro / Donapàs / Off) de la pista
+ *     de la MÀSCARA (V2) a la de grafismes (V3) i el grafisme es col·loca a V2, per davall;
+ *   · primer es corta i es mou la màscara i DESPRÉS es col·loca el grafisme;
+ *   · si no es pot moure (sense rang d'ítem, sense màscara a V2, V3 ocupada) es col·loca
+ *     com sempre a V3: mai no bloqueja la col·locació.
+ *   (1a volta: només es feia amb zona grisa al peu #D9D9D9; provat en viu amb un grafisme
+ *   a SANG sense gris que tapava la màscara → ara és SEMPRE. La mesura del gris queda com
+ *   a INFO al log: `js/logic/21_GrafZonaGris_Logic.js`. Spec: `docs/specs/GRAF_ZONA_GRIS.md`.)
  * ========================================================================== */
 (function () {
     'use strict';
@@ -33,6 +43,10 @@
     // (aquí només són el fallback si la configuració no respon).
     var TRACK_GRAF = 3;
     var TRACK_FREEZE = 6;
+    // (2026-10-28 · ZONA GRISA) Pista de la MÀSCARA (config `v_mascara`, V2). Els
+    // grafismes AMB zona grisa al peu es col·loquen ACÍ i el troç de màscara de
+    // l'ítem puja a la pista de dalt perquè quede per damunt del grafisme.
+    var TRACK_MASCARA = 2;
     var VIDEO_EXT = ['mov', 'mp4', 'mxf', 'm4v', 'avi', 'mts', 'm2t', 'wmv', 'r3d'];
     var MESOS = ['GENER', 'FEBRER', 'MARÇ', 'ABRIL', 'MAIG', 'JUNY',
         'JULIOL', 'AGOST', 'SETEMBRE', 'OCTUBRE', 'NOVEMBRE', 'DESEMBRE'];
@@ -93,6 +107,23 @@
          */
         GRAF_KEYWORDS: ['MAPA'],
 
+        /**
+         * MATCH_MIN: llindar (0-1) de la coincidència RELATIVA de nom per a ancorar el
+         * grafisme al marcador del seu ítem (`_anchorMarker`). 0,60 vol dir «60 % del
+         * nom del marcador es reconeix al nom del fitxer»; per davall, la paleta es
+         * queda amb el cabezal de sempre.
+         * (2026-10-28 · 3a volta) Cas viu: `app google tots sant gervasi esvoranc.mov`
+         * contra «01p22 - P2 PAS 1 GOOGLE tots SANT GERVASI ESVORANC» → 0,91.
+         */
+        MATCH_MIN: 0.60,
+
+        /**
+         * ANCHOR_LINE: si true, l'àncora del grafisme és l'INICI DE LA LÍNIA del
+         * marcador coincident (l'ítem sencer: «01i»), no el sub-ítem («01p22»). Així
+         * el grafisme, la màscara i el rang de l'ítem parlen sempre del mateix tram.
+         */
+        ANCHOR_LINE: true,
+
         runFromMarkers: async function () {
             try {
                 if (U() && U().validateActiveSequence && !(await U().validateActiveSequence())) return;
@@ -107,7 +138,7 @@
             L('🎨 [MAPA·MARKS] ' + cand.length + ' marcador(s) amb grafisme associat: ' +
                 cand.map(function (c) { return c.num + '@' + c.time.toFixed(2) + 's'; }).join(', '));
 
-            var folder = this._folderForDate(this._resolveDateDir());
+            var folder = this._folderForDate(await this._resolveDateDir());
             if (!folder) {
                 L('⚠️ [MAPA·MARKS] No puc resoldre la carpeta del dia', 'WARN');
                 U().status('MAPA: carpeta del dia no resolta', 'error');
@@ -148,7 +179,7 @@
 
                     var ref = await this._refClipAt(c.time);
                     var freeze = await this._freezeUnderCti(c.time);
-                    await this._placeClips(items, c.time, freeze, ref);
+                    await this._placeClips(items, c.time, freeze, ref, { picked: picked });
                     ok++;
                 } catch (eC) {
                     L('   ⚠️ [MAPA·MARKS] ' + c.num + ' ha llançat: ' + eC.message, 'ERROR');
@@ -229,7 +260,9 @@
                 if (cv && cv.graficos) TRACK_GRAF = cv.graficos;
                 else if (cv && cv.graf) TRACK_GRAF = cv.graf;
                 if (cv && cv.tematitol) TRACK_FREEZE = cv.tematitol;
-                L('🗺️ [MAPA] Pistes de la config → GRAF=V' + TRACK_GRAF + ' · congelat=V' + TRACK_FREEZE);
+                if (cv && cv.mascara != null) TRACK_MASCARA = cv.mascara;
+                L('🗺️ [MAPA] Pistes de la config → GRAF=V' + TRACK_GRAF + ' · congelat=V' + TRACK_FREEZE +
+                    ' · màscara=V' + TRACK_MASCARA);
             } catch (eCfg) {
                 L('⚠️ [MAPA] no s\'ha pogut llegir la config de pistes: ' + eCfg.message, 'WARN');
             }
@@ -286,7 +319,7 @@
                     '" (' + ref.start.toFixed(2) + 's→' + ref.end.toFixed(2) + 's) · entrada a ' +
                     refSec.toFixed(2) + 's · espai hàbil fins ' + ref.end.toFixed(2) + 's');
 
-                var dateDir = this._resolveDateDir();
+                var dateDir = await this._resolveDateDir();
                 var folder = this._folderForDate(dateDir);
                 if (!folder) {
                     L('⚠️ [MAPA] No puc resoldre la carpeta del dia (data projecte: "' + dateDir + '")', 'WARN');
@@ -326,6 +359,34 @@
                     return;
                 }
 
+                // (2026-10-28 · 3a volta) EL GRAFISME VA AL MARCADOR DEL SEU ÍTEM, NO AL
+                // CABEZAL NI AL MARCADOR SELECCIONAT. Cas viu: amb un altre marcador
+                // seleccionat al panell, l'insert eixia a la seua posició. Ara, un cop
+                // triats els fitxers, es busca el marcador amb coincidència RELATIVA de
+                // nom (`_anchorMarker`) i s'ancora ahí; si no n'hi ha cap, es manté el
+                // cabezal de sempre (res canvia respecte d'abans).
+                try {
+                    var anc = await this._anchorMarker(picked, cti);
+                    if (anc && Math.abs(anc.time - refSec) > 0.05) {
+                        var refA = await this._refClipAt(anc.time);
+                        if (refA) {
+                            L('🗺️ [MAPA] Entrada MOVIDA al marcador ' + anc.num + ' (' + anc.time.toFixed(2) +
+                                's): abans el cabezal/selecció la posava a ' + refSec.toFixed(2) + 's');
+                            ref = refA;
+                            refSec = anc.time;
+                            item = await this._itemAtCti(refSec);
+                            L('🗺️ [MAPA] Referència = V' + ref.track + '[' + ref.index + '] "' + ref.name +
+                                '" (' + ref.start.toFixed(2) + 's→' + ref.end.toFixed(2) + 's) · espai hàbil fins ' +
+                                ref.end.toFixed(2) + 's');
+                        } else {
+                            L('⚠️ [MAPA·àncora] El marcador ' + anc.num + ' (' + anc.time.toFixed(2) +
+                                's) no té cap clip de V1 → es manté el cabezal', 'WARN');
+                        }
+                    }
+                } catch (eA) {
+                    L('⚠️ [MAPA·àncora] ' + eA.message + ' → es manté el cabezal', 'WARN');
+                }
+
                 var items = await this._import(picked);
                 if (!items.length) { U().status('MAPA: importació fallida', 'error'); return; }
 
@@ -334,7 +395,7 @@
                 // pista de congelat fins al final d'aquest clip.
                 var freeze = await this._freezeUnderCti(refSec);
 
-                await this._placeClips(items, refSec, freeze, ref);
+                await this._placeClips(items, refSec, freeze, ref, { picked: picked });
                 U().status('MAPA: ' + items.length + ' clip(s) a V' + TRACK_GRAF, 'exito');
 
                 // (2026-09-21) Tornar la auto-selecció a V1: targeting només V1/A1 + clip de V1.
@@ -350,30 +411,73 @@
 
         /**
          * _resolveDateDir: Data de treball (YYYY_MM_DD) amb fallbacks.
-         * State.projectDateDir pot estar BUIT just després d'obrir el projecte (el poll
-         * d'estat l'omple uns segons més tard) → si només s'hi confia, cal clicar 2 cops.
-         *   1) State.projectDateDir (projecte obert)
-         *   2) path del manifest carregat (…/<AAAA_MM_DD>/<fitxer>.fastpass.json)
-         *   3) State.workTarget === 'yesterday' → dia natural anterior
-         *   4) avui
+         *
+         * (2026-10-28 · BUG #196, causa raíz corregida) LA DATA HA DE SER LA DEL
+         * PROJECTE OBERT, NO LA DEL RELLOTGE. Evidència real (FASTPASS.log del
+         * 27/10 14:53:35): amb `Pruebas_TNC_V1_….prproj` obert («✅ Projecte obert»),
+         * el poll d'estat va desancorar `State.projectDateDir` a null al segon cicle
+         * sense `Registry.activeProjectName` («🔓 [dateDir] Desancorant…»). En eixe
+         * moment este mètode queia al RELLOTGE: en sessió nocturna (després de
+         * mitjanit) el navegador de GRÀFICS obria la carpeta del DIA SEGÜENT al del
+         * projecte. Mateix criteri que `flow_srt.js::_srtCtx` (BUG #187):
+         *   1) path REAL del .prproj obert (`Context._resolveProjectDateDir`) ← veritat
+         *   2) State.projectDateDir (projecte obert / fixada en crear-lo)
+         *   3) manifest carregat (NOMÉS si totes les claus són del mateix dia)
+         *   4) State.workTarget === 'yesterday' → dia natural anterior
+         *   5) rellotge (últim recurs, amb avís)
+         * @returns {Promise<string>}
          */
-        _resolveDateDir: function () {
+        _resolveDateDir: async function () {
             var St = (window.FASTPASS_UI && window.FASTPASS_UI.State) ? window.FASTPASS_UI.State : null;
-            if (St && St.projectDateDir) return St.projectDateDir;
+            // 1) Data REAL de la carpeta del projecte obert (font de veritat)
+            try {
+                var Ctx = window.FASTPASS_UI.Core && window.FASTPASS_UI.Core.Context;
+                if (Ctx && typeof Ctx._resolveProjectDateDir === 'function') {
+                    var dReal = await Ctx._resolveProjectDateDir();
+                    if (dReal) {
+                        L('🗺️ [MAPA] Data del projecte obert: ' + dReal);
+                        return dReal;
+                    }
+                }
+            } catch (eR) {
+                L('⚠️ [MAPA] No puc resoldre la data del .prproj obert: ' + eR.message, 'WARN');
+            }
+            // 2) Data ancorada a l'estat (s'ancora en crear/obrir el projecte)
+            if (St && St.projectDateDir) {
+                L('🗺️ [MAPA] Data del projecte (via State.projectDateDir): ' + St.projectDateDir);
+                return St.projectDateDir;
+            }
+            // 3) Manifest carregat: només si NO és ambigu (un sol dia al cache).
+            // Abans s'agafava la PRIMERA clau amb data → podia ser el dia d'un altre
+            // manifest carregat a la sessió.
             try {
                 var cache = (window.FASTPASS_UI.SessionManifest && window.FASTPASS_UI.SessionManifest._cache) || {};
                 var keys = Object.keys(cache);
+                var dies = {}, nDies = 0;
                 for (var i = 0; i < keys.length; i++) {
                     var m = String(keys[i]).match(/(\d{4})[_-](\d{2})[_-](\d{2})/);
-                    if (m) { L('🗺️ [MAPA] Data del projecte (via manifest): ' + m[0]); return m[0]; }
+                    if (m && !dies[m[0]]) { dies[m[0]] = 1; nDies++; }
                 }
-            } catch (e) { }
+                if (nDies === 1) {
+                    var unic = Object.keys(dies)[0];
+                    L('🗺️ [MAPA] Data del projecte (via manifest): ' + unic);
+                    return unic;
+                }
+                if (nDies > 1) {
+                    L('⚠️ [MAPA] Manifest ambigu (' + nDies + ' dies al cache: ' +
+                        Object.keys(dies).join(', ') + ') → no l\'use per a la data', 'WARN');
+                }
+            } catch (eM) {
+                L('⚠️ [MAPA] No puc traure la data del manifest: ' + eM.message, 'WARN');
+            }
+            // 4/5) Rellotge: últim recurs (pot ser el DIA SEGÜENT al del projecte!)
             var d = new Date();
             if (St && St.workTarget === 'yesterday') d.setDate(d.getDate() - 1);
             var dd = ('0' + d.getDate()).slice(-2);
             var mm = ('0' + (d.getMonth() + 1)).slice(-2);
             var fb = d.getFullYear() + '_' + mm + '_' + dd;
-            L('🗺️ [MAPA] Data del projecte (fallback): ' + fb, 'WARN');
+            L('⚠️ [MAPA] Data del projecte DESCONEGUDA → fallback rellotge: ' + fb +
+                (St && St.workTarget === 'yesterday' ? ' (mode correcció)' : ''), 'WARN');
             return fb;
         },
 
@@ -392,6 +496,49 @@
                 return null;
             }
             return root + '\\' + day + ' ' + MESOS[month - 1];
+        },
+
+        /**
+         * _folderExists: la carpeta existix de debò? (àtom JSX `IO.exists`).
+         * Serveix per a no passar mai a `cep.fs.showOpenDialog` una ruta inicial
+         * inexistent (en eixe cas el diàleg obri a l'últim directori recordat).
+         * @param {string} folder
+         * @returns {Promise<boolean>}
+         */
+        _folderExists: async function (folder) {
+            if (!folder) return false;
+            try {
+                var r = await callJSX("IO.exists('" + U().escape(String(folder)) + "')");
+                return String(r).trim() === 'true';
+            } catch (e) {
+                L('⚠️ [MAPA] No puc comprovar la carpeta "' + folder + '": ' + e.message, 'WARN');
+                return false;
+            }
+        },
+
+        /**
+         * _dialogFolder: directori on HA D'ARRANCAR el navegador de fitxers.
+         * (2026-10-28 · BUG #196) Regla d'usuari: el navegador de GRÀFICS arranca
+         * SEMPRE a la carpeta del dia del bloc (la de l'escaleta), no a l'últim
+         * directori recordat de Windows. Ordre:
+         *   1) la carpeta del dia (si existix)
+         *   2) l'arrel de grafismes de la config (si existix)
+         *   3) null → CEP decidix (últim recurs, amb avís al log)
+         * @param {string} folder - carpeta del dia ja calculada (`_folderForDate`).
+         * @returns {Promise<string|null>}
+         */
+        _dialogFolder: async function (folder) {
+            if (folder && await this._folderExists(folder)) return folder;
+            L('⚠️ [MAPA] La carpeta del dia NO existix: ' + (folder || '(no resolta)'), 'WARN');
+            var root = _grafRoot();
+            if (root && await this._folderExists(root)) {
+                L('🗺️ [MAPA] Navegador → arrel de grafismes (la carpeta del dia no hi és): ' + root);
+                return root;
+            }
+            L('⚠️ [MAPA] Tampoc no existix l\'arrel de grafismes (' +
+                (root || 'sense config a rutas.grafismos') +
+                '): el navegador arrancarà on recorde Windows', 'WARN');
+            return null;
         },
 
         // ═══════════════════════════════════════════════════════════════
@@ -572,6 +719,153 @@
             return hits;
         },
 
+        // ═══════════════════════════════════════════════════════════════
+        // ANCRATGE AL MARCADOR PER NOM RELATIU (2026-10-28 · 3a volta)
+        // ═══════════════════════════════════════════════════════════════
+        /**
+         * _normFon: normalització FONÈTICA suau, damunt de `_norm`, per a comparar noms
+         * catalans escrits de maneres distintes (B/V, S/SS, Y/I, plural en -S).
+         * Exemples reals: «ESBORANC»/«ESVORANC», «VEÏNS»/«VEINS», «GERVASY»/«GERVASI».
+         * @param {string} s
+         * @returns {string}
+         */
+        _normFon: function (s) {
+            var n = this._norm(s);
+            n = n.replace(/B/g, 'V')            // ESBORANC / ESVORANC
+                .replace(/Y/g, 'I')             // GERVASY / GERVASI
+                .replace(/QU/g, 'K')
+                .replace(/C([EI])/g, 'S$1')     // CERVASI / SERVASI
+                .replace(/SS/g, 'S');
+            // Plural català: fora la S final de les paraules llargues (VEINS → VEIN).
+            n = n.split(' ').map(function (t) {
+                return (t.length > 4 && /S$/.test(t)) ? t.substring(0, t.length - 1) : t;
+            }).join(' ');
+            return n;
+        },
+
+        /**
+         * _dice: coeficient de Dice per BIGRAMES (0-1) entre dos tokens. 1 = iguals.
+         * És la mesura de «s'assemblen» que fa servir `_scoreNombre`, sense cap
+         * llibreria externa.
+         * @param {string} a
+         * @param {string} b
+         * @returns {number}
+         */
+        _dice: function (a, b) {
+            if (a === b) return 1;
+            if (!a || !b) return 0;
+            if (a.length < 2 || b.length < 2) return (a.charAt(0) === b.charAt(0)) ? 0.5 : 0;
+            var m = {}, i, n = 0;
+            for (i = 0; i < a.length - 1; i++) {
+                var g = a.substr(i, 2);
+                m[g] = (m[g] || 0) + 1;
+            }
+            for (i = 0; i < b.length - 1; i++) {
+                var h = b.substr(i, 2);
+                if (m[h]) { m[h]--; n++; }
+            }
+            return (2 * n) / (a.length - 1 + b.length - 1);
+        },
+
+        /**
+         * _scoreNombre: coincidència RELATIVA (0-1) entre el nom d'un FITXER i el nom
+         * d'un MARCADOR d'escaleta. Mesura quina part del nom del marcador es reconeix
+         * al nom del fitxer (el fitxer pot dur paraules de més: client, data,
+         * «app», «google»…). Cada token del marcador es compara amb el MILLOR token del
+         * fitxer (`_dice`), ponderat per la seua llargada.
+         *
+         *   · contenció completa en qualsevol sentit → 1
+         *   · «ESBORANC SANT GERVASI» vs «app google tots sant gervasi esvoranc» → 0,91
+         *   · «DONAPAS» vs «app google tots sant gervasi esvoranc» → 0
+         *
+         * @param {string} nomFitxer - nom del fitxer (amb o sense extensió)
+         * @param {string} nomMarcador - nom de l'ítem del marcador
+         * @returns {number} 0-1
+         */
+        _scoreNombre: function (nomFitxer, nomMarcador) {
+            var f = this._normFon(nomFitxer);
+            var m = this._normFon(nomMarcador);
+            if (!f || !m) return 0;
+            if (f.indexOf(m) !== -1 || m.indexOf(f) !== -1) return 1;
+            var mt = m.split(' ').filter(function (t) { return t.length > 2; });
+            var ft = f.split(' ').filter(function (t) { return t.length > 2; });
+            if (!mt.length || !ft.length) return 0;
+            var num = 0, den = 0;
+            for (var i = 0; i < mt.length; i++) {
+                var best = 0;
+                for (var j = 0; j < ft.length; j++) {
+                    var d = this._dice(mt[i], ft[j]);
+                    if (d > best) best = d;
+                }
+                num += best * mt[i].length;
+                den += mt[i].length;
+            }
+            return den ? num / den : 0;
+        },
+
+        /**
+         * _anchorMarker: TC del MARCADOR on va el grafisme, triat per coincidència
+         * RELATIVA de nom amb els fitxers triats (MAI pel cabezal ni per la selecció:
+         * amb un marcador seleccionat al panell, l'insert eixia al lloc equivocat).
+         *
+         * Regla: es puntua el nom de cada fitxer contra els marcadors NUMERATS
+         * («NN… - Nom», sub-ítems inclosos) i es pren el millor; si guanya un sub-ítem
+         * («01p22»), l'àncora és l'INICI DE LA SEUA LÍNIA («01i») perquè el grafisme i
+         * el rang de la màscara parlen del mateix ítem. Sense cap coincidència per
+         * damunt de `MATCH_MIN` retorna null i la paleta fa el de sempre (cabezal).
+         *
+         * @param {Array} picked - [{ name, full }] fitxers triats
+         * @param {number} cti - cabezal (desempat: guanya el marcador més pròxim)
+         * @returns {Promise<Object|null>} { time, num, nombre, score, file, mk, line }
+         */
+        _anchorMarker: async function (picked, cti) {
+            var markers = [];
+            try {
+                var raw = await callJSX('Markers.get()');
+                markers = raw ? JSON.parse(raw) : [];
+            } catch (eM) {
+                L('⚠️ [MAPA·àncora] No puc llegir els marcadors: ' + eM.message, 'WARN');
+                return null;
+            }
+            var tot = this._lineMarkers(markers, false);      // ítems + sub-ítems
+            if (!tot.length) return null;
+            var linies = this._lineMarkers(markers, true);    // només fronteres de línia
+            var best = null;
+            for (var i = 0; i < (picked || []).length; i++) {
+                if (!picked[i] || !picked[i].name) continue;
+                for (var j = 0; j < tot.length; j++) {
+                    var sc = this._scoreNombre(picked[i].name, tot[j].nombre);
+                    var millor = !best || sc > best.score + 1e-9;
+                    // Empat: guanya el marcador més pròxim al cabezal.
+                    if (!millor && best && Math.abs(sc - best.score) < 1e-9 && isFinite(cti)) {
+                        if (Math.abs(tot[j].time - cti) < Math.abs(best.mk.time - cti)) millor = true;
+                    }
+                    if (millor) best = { score: sc, mk: tot[j], file: picked[i].name };
+                }
+            }
+            if (!best || best.score < this.MATCH_MIN) {
+                L('🗺️ [MAPA·àncora] Cap marcador coincident per nom (millor: ' +
+                    (best ? '"' + best.mk.num + ' - ' + best.mk.nombre + '" ' + best.score.toFixed(2) : 'cap') +
+                    ' < ' + this.MATCH_MIN + ') → el grafisme va al cabezal de sempre');
+                return null;
+            }
+            var ancla = best.mk;
+            if (this.ANCHOR_LINE) {
+                for (var k = 0; k < linies.length; k++) {
+                    if (linies[k].time <= best.mk.time + 0.001) ancla = linies[k];
+                }
+            }
+            var esLinia = (ancla.time === best.mk.time);
+            L('🗺️ [MAPA·àncora] "' + best.file + '" ≈ "' + best.mk.num + ' - ' + best.mk.nombre +
+                '" (' + best.score.toFixed(2) + ') → àncora a ' + ancla.time.toFixed(2) + 's (' +
+                (esLinia ? 'mateix marcador' :
+                    'inici de l\'ítem "' + ancla.num + (ancla.nombre ? ' - ' + ancla.nombre : '') + '"') + ')');
+            return {
+                time: ancla.time, num: ancla.num, nombre: ancla.nombre,
+                score: best.score, file: best.file, mk: best.mk, line: esLinia
+            };
+        },
+
         /**
          * _askFiles: navegador de fitxers (CEP) apuntant a la carpeta del dia.
          */
@@ -582,8 +876,17 @@
                     L('⚠️ [MAPA] showOpenDialog no disponible', 'WARN');
                     return picked;
                 }
+                // (2026-10-28 · BUG #196) El navegador ha d'arrancar SEMPRE a la carpeta
+                // del dia del projecte. Abans se li passava la ruta calculada sense
+                // comprovar-la: si eixa carpeta no existia (dia sense material, mes amb
+                // un altre nom…), el diàleg de CEP ignorava la ruta inicial i obria a
+                // l'ÚLTIM DIRECTORI RECORDAT. Ara es valida abans i, si no hi és, arranca
+                // a l'arrel de grafismes (mai a una ruta inexistent).
+                var startDir = await this._dialogFolder(folder);
+                L('🗺️ [MAPA] Navegador de fitxers → "' + (startDir || '(últim recordat)') + '"' +
+                    (startDir && startDir !== folder ? ' · (la carpeta del dia no existix: ' + folder + ')' : ''));
                 var r = window.cep.fs.showOpenDialog(true, false, 'MAPA — tria fitxers per importar',
-                    folder, VIDEO_EXT);
+                    startDir, VIDEO_EXT);
                 if (!r || r.err !== 0 || !r.data || !r.data.length) {
                     L('🗺️ [MAPA] Selecció cancel·lada');
                     return picked;
@@ -671,9 +974,12 @@
          * @param {string} gName - Nom del media del grafisme (al projecte)
          * @param {number} grafEnd - Final real del grafisme col·locat (s)
          * @param {number|null} endLimit - Final de l'espai hàbil (final del clip de V1) o null
+         * @param {number} [trackIdx] - Pista on va el congelat (per defecte TRACK_GRAF).
+         *   (2026-10-28 · ZONA GRISA) Amb grafisme de zona grisa la pista és V2.
          * @returns {Promise<Object>} { success, duration }
          */
-        _freezeGrafEnd: async function (gName, grafEnd, endLimit) {
+        _freezeGrafEnd: async function (gName, grafEnd, endLimit, trackIdx) {
+            var tG = (trackIdx != null) ? trackIdx : TRACK_GRAF;
             var TEMP_TC = 600;        // 10:00:00 (mateixa tècnica que _freezeTemaTitol)
             var MAX_DUR = 3.0;        // (2026-09-23) congelat de 3 s per defecte
             var FRAME = 1 / 25;
@@ -695,11 +1001,11 @@
                 }
 
                 // 1. Grafisme temporal a TC 10:00 (zona buida) per fer el snapshot net
-                await callJSX("Clips.insert('" + utils.escape(gName) + "', " + TRACK_GRAF + ", " + TEMP_TC + ", null, 'video')");
+                await callJSX("Clips.insert('" + utils.escape(gName) + "', " + tG + ", " + TEMP_TC + ", null, 'video')");
                 await utils.delay(300);
 
                 // 2. Últim frame del grafisme (final real del clip temporal − 1 frame)
-                var tmpEnd = await this._clipEndAt(TRACK_GRAF, TEMP_TC);
+                var tmpEnd = await this._clipEndAt(tG, TEMP_TC);
                 if (tmpEnd === null) {
                     L('⚠️ [MAPA·freeze] No puc mesurar el grafisme temporal → sense congelat', 'WARN');
                     return { success: false, duration: 0 };
@@ -722,10 +1028,10 @@
 
                 // 3. Treure el clip temporal de la pista de grafismes
                 try {
-                    var clipsT = await getClipsLogic().getTrackClips(TRACK_GRAF, 'video');
+                    var clipsT = await getClipsLogic().getTrackClips(tG, 'video');
                     for (var i = 0; i < clipsT.length; i++) {
                         if (Math.abs(clipsT[i].start - TEMP_TC) < 0.5) {
-                            await callJSX("Clips.removeAt(" + TRACK_GRAF + ", " + clipsT[i].start.toFixed(4) + ", 'video')");
+                            await callJSX("Clips.removeAt(" + tG + ", " + clipsT[i].start.toFixed(4) + ", 'video')");
                             L('   🗑️ [MAPA·freeze] Grafisme temporal eliminat (start=' + clipsT[i].start.toFixed(2) + 's)');
                             break;
                         }
@@ -755,12 +1061,12 @@
                 } catch (eG2) { }
                 L('   📥 [MAPA·freeze] PNG al bin ' + GRAF_BIN + ': "' + pngName + '"');
                 var fzEsc = utils.escape(pngName);
-                await callJSX("Clips.insert('" + fzEsc + "', " + TRACK_GRAF + ", " + grafEnd.toFixed(4) + ", null, 'video')");
+                await callJSX("Clips.insert('" + fzEsc + "', " + tG + ", " + grafEnd.toFixed(4) + ", null, 'video')");
                 // (2026-10-08) Retall COHERENT (inPoint 0 → outPoint dur): `Clips.endAt` deixava
                 // l'outPoint del source al final del mèdia i el congelat tampoc es podia estirar.
                 await callJSX("Clips.trimBounds(" + grafEnd.toFixed(4) + ", 0, " + dur.toFixed(4) +
-                    ", " + TRACK_GRAF + ", 'video')");
-                L('   🧊 [MAPA·freeze] Congelat "' + pngName + '" a V' + TRACK_GRAF + ' @ ' + grafEnd.toFixed(2) +
+                    ", " + tG + ", 'video')");
+                L('   🧊 [MAPA·freeze] Congelat "' + pngName + '" a V' + tG + ' @ ' + grafEnd.toFixed(2) +
                     's → ' + (grafEnd + dur).toFixed(2) + 's (dur ' + dur.toFixed(2) + 's' +
                     (dur < MAX_DUR ? ' · limitat pel clip de V1' : '') + ')');
                 return { success: true, duration: dur };
@@ -888,6 +1194,405 @@
             }
         },
 
+        // ═══════════════════════════════════════════════════════════════
+        // ZONA GRISA (2026-10-28) · detecció + pujada del troç de MÀSCARA
+        // ═══════════════════════════════════════════════════════════════
+        /**
+         * _lineMarkers: marcadors de la seqüència amb NÚMERO, en segons i ordenats.
+         *
+         * El número és el PRIMER TESTIMONI del comentari (tall per espai, «·» o «-»),
+         * la mateixa convenció que `numParts` de `analysis_center`:
+         *   · "01i - intro"                 → "01i"
+         *   · "01 - ELS VEÏNS DE..."        → "01"
+         *   · "01 TE-1 - TE ALDARULLS"      → "01"
+         *   · "01p22 - P2 PAS 1 GOOGLE..."  → "01p22"
+         *
+         * (2026-10-28 · 3a volta, cas viu) Amb `solsLinies` només passen els números
+         * de LÍNIA d'escaleta (dígits + lletres opcionals: "01", "01i", "01dir",
+         * "02dp", "19C"). Els SUB-ÍTEMS que porten dígits DESPRÉS de lletres
+         * ("01p21", "01p22"…) són comentaris interns de la línia i NO fan de
+         * frontera: era el que fallava en viu (grafisme sobre "01p22" → el tall es
+         * feia 01p22→01p23, 5,88s→11,08s, en lloc de «intro (01i) → 01», el rang
+         * sencer de l'ítem).
+         *
+         * @param {Array}   markers    - el que retorna `Markers.get()` [{ time, comments }]
+         * @param {boolean} solsLinies - true → només marcadors de línia d'escaleta
+         * @returns {Array} [{ num, nombre, time, linia }]
+         */
+        _lineMarkers: function (markers, solsLinies) {
+            var est = [];
+            for (var i = 0; i < (markers || []).length; i++) {
+                var m = markers[i] || {};
+                var cmt = String(m.comments || m.comment || '').replace(/^\s+|\s+$/g, '');
+                if (!cmt) continue;
+                var tok = cmt.split(/[\s·\-]+/)[0] || '';
+                if (!/^\d/.test(tok)) continue;
+                var linia = /^\d+[A-Za-zÀ-ÿ]*$/.test(tok);
+                if (solsLinies && !linia) continue;
+                var t = (typeof m.time === 'number') ? m.time : parseFloat(m.time);
+                if (!isFinite(t)) continue;
+                var nombre = cmt;
+                var dash = cmt.indexOf(' -');
+                if (dash > 0) nombre = cmt.substring(dash + 2).replace(/^\s+|\s+$/g, '');
+                est.push({ num: tok, nombre: stripExt(nombre), time: t, linia: linia });
+            }
+            est.sort(function (x, y) { return x.time - y.time; });
+            return est;
+        },
+
+        /**
+         * _itemRangeAt: RANG de l'ÍTEM d'escaleta on cau `refSec`: del MARCADOR de la
+         * seua LÍNIA (el darrer número de línia a o abans de refSec) fins al SEGÜENT
+         * número de línia (o, si no n'hi ha, el corxet OUT / el final del programa).
+         * SENSE marges: el marcador següent ÉS l'inici de l'ítem de després, i és
+         * exactament ahí on la màscara ha de tornar a la seua pista.
+         *
+         * (2026-10-28 · petició d'usuari) El tall és de MARCADOR a MARCADOR: la INTRO
+         * ("01i") → el següent marcador estructural ("01 - ELS VEÏNS…"), o siga el
+         * rang SENCER de l'ítem, no el tros entre dos sub-ítems seus ("01p22" →
+         * "01p23"). Així el troç de màscara que puja a V3 ocupa tot l'ítem.
+         *
+         * L'ítem pot ser la INTRO del bloc ("01i"), un DONAPÀS ("02dp") o un OFF
+         * ("03off"): el que mana és el marcador, no el nom. El grafisme es pot eixir
+         * d'aquest rang (la col·locació automàtica és un punt de partida i l'usuari
+         * l'ajustarà), però la MÀSCARA només puja el troç que coincidix amb l'ítem.
+         *
+         * @param {number} refSec - posició d'entrada del grafisme (el cabezal)
+         * @returns {Promise<Object|null>} { a, b, num, nombre, label, next, linia } o null
+         */
+        _itemRangeAt: async function (refSec) {
+            var out = { a: null, b: null, num: '', nombre: '', label: '', next: null, linia: true };
+            var markers = [];
+            try {
+                var raw = await callJSX('Markers.get()');
+                markers = raw ? JSON.parse(raw) : [];
+            } catch (e) {
+                L('⚠️ [MAPA·gris] No puc llegir els marcadors: ' + e.message, 'WARN');
+                return null;
+            }
+            // 1a passada: fronteres de LÍNIA. 2a: qualsevol número (una seqüència sense
+            // cap línia reconeixible no s'ha de quedar sense rang).
+            var est = this._lineMarkers(markers, true);
+            if (!est.length) {
+                est = this._lineMarkers(markers, false);
+                out.linia = false;
+                if (est.length) {
+                    L('⚠️ [MAPA·gris] Cap marcador de LÍNIA ("NN - Nom") → el rang es fa amb qualsevol número', 'WARN');
+                }
+            }
+            if (!est.length) {
+                L('⚠️ [MAPA·gris] Cap marcador amb número a la seqüència → sense rang d\'ítem', 'WARN');
+                return null;
+            }
+            var prev = null;
+            for (var k = 0; k < est.length; k++) {
+                if (est[k].time <= refSec + 0.001) prev = est[k];
+            }
+            if (!prev) {
+                L('⚠️ [MAPA·gris] El cabezal (' + refSec.toFixed(2) + 's) va ABANS del primer marcador → sense rang d\'ítem', 'WARN');
+                return null;
+            }
+            out.a = prev.time;
+            out.num = prev.num;
+            out.nombre = prev.nombre;
+            for (var n = 0; n < est.length; n++) {
+                if (est[n].time > prev.time + 0.001) { out.next = est[n]; break; }
+            }
+            if (out.next) {
+                out.b = out.next.time;
+                out.label = 'fins al marcador ' + out.next.num + ' (' + out.b.toFixed(2) + 's)';
+            } else {
+                try {
+                    var eo = parseFloat(await callJSX('Timeline.getOut()') || '0');
+                    if (eo > out.a + 0.5) { out.b = eo; out.label = 'corxet OUT (' + eo.toFixed(2) + 's)'; }
+                } catch (eO) { }
+                if (out.b === null) {
+                    try {
+                        var du = parseFloat(await callJSX('Timeline.duration()') || '0');
+                        if (du > out.a + 0.5) { out.b = du; out.label = 'final del programa (' + du.toFixed(2) + 's)'; }
+                    } catch (eD) { }
+                }
+            }
+            if (out.b === null || out.b <= out.a + 0.05) {
+                L('⚠️ [MAPA·gris] Rang d\'ítem sense espai (' + out.a.toFixed(2) + 's→' + String(out.b) + ')', 'WARN');
+                return null;
+            }
+            L('🗺️ [MAPA·gris] Ítem d\'escaleta: "' + out.num + (out.nombre ? ' - ' + out.nombre : '') +
+                '" → rang ' + out.a.toFixed(2) + 's→' + out.b.toFixed(2) + 's (' + out.label + ')');
+            return out;
+        },
+
+        /** _idxAt: índex del clip de la pista que CONTÉ el segon indicat (o null). */
+        _idxAt: async function (trackIdx, tSec) {
+            try {
+                var raw = await callJSX('Clips.at(' + trackIdx + ', ' + Number(tSec).toFixed(4) + ', \'video\')');
+                if (!raw || raw === 'null' || String(raw).indexOf('ERR') === 0) return null;
+                var c = JSON.parse(raw);
+                return (c && typeof c.index === 'number') ? c.index : null;
+            } catch (e) { return null; }
+        },
+
+        /**
+         * _pathFor: ruta ORIGINAL (NAS) del fitxer que hi ha darrere un media ja
+         * importat. La detecció de la zona grisa es fa sobre el FITXER, no sobre el
+         * clip: `picked` porta { name, full } del navegador/`_filesIn`.
+         * @param {string} mediaName - nom del media al projecte (pot dur extensió)
+         * @param {Array}  picked    - [{ name, full }]
+         * @returns {string|null}
+         */
+        _pathFor: function (mediaName, picked) {
+            var want = this._norm(mediaName);
+            var list = picked || [];
+            for (var i = 0; i < list.length; i++) {
+                if (!list[i] || !list[i].full) continue;
+                if (this._norm(list[i].name) === want) return list[i].full;
+            }
+            for (var j = 0; j < list.length; j++) {
+                if (!list[j] || !list[j].full) continue;
+                var n = this._norm(list[j].name);
+                if (n && want && (n.indexOf(want) === 0 || want.indexOf(n) === 0)) return list[j].full;
+            }
+            return null;
+        },
+
+        /**
+         * _zonaGris: pregunta al mòdul LOGIC (`21_GrafZonaGris_Logic.js`) si el
+         * grafisme té la ZONA GRISA al peu. Es mira TOTS els items de la tongada:
+         * si un en té, tots es col·loquen igual (petició d'usuari: «tot el
+         * grafisme va al mateix track»).
+         *
+         * (2026-10-28 · 2a volta) És **NOMÉS INFORMATIU** (una línia al log): la
+         * màscara puja a V3 i el grafisme va a V2 SEMPRE, tinga zona grisa o no
+         * (petició d'usuari en provar un grafisme a SANG que tapava la màscara).
+         *
+         * @param {Array} items - [{ name, dur }] media importats
+         * @param {Object} ctx  - { picked:[{name,full}], detectOpts }
+         * @returns {Promise<Object|null>} { hasGrey, cov, name, path } o null (sense mesura)
+         */
+        _zonaGris: async function (items, ctx) {
+            var LG = window.FASTPASS_UI && window.FASTPASS_UI.Logic;
+            var G = LG && LG.GrafZonaGris;
+            if (!G || typeof G.detect !== 'function') {
+                L('⚠️ [MAPA·gris] Mòdul 21_GrafZonaGris_Logic.js no carregat → col·locació de sempre', 'WARN');
+                return null;
+            }
+            var picked = (ctx && ctx.picked) || [];
+            var mesurats = 0;
+            for (var i = 0; i < (items || []).length; i++) {
+                var path = this._pathFor(items[i].name, picked);
+                if (!path) {
+                    L('⚠️ [MAPA·gris] No sé la ruta original de "' + items[i].name + '" → no el puc mesurar', 'WARN');
+                    continue;
+                }
+                var r = await G.detect(path, (ctx && ctx.detectOpts) || null);
+                if (!r || !r.ok) {
+                    L('⚠️ [MAPA·gris] "' + items[i].name + '": ' + ((r && r.err) || 'mesura fallida') +
+                        ' → es tracta com a SENSE zona grisa', 'WARN');
+                    return null;
+                }
+                mesurats++;
+                if (r.hasGrey) {
+                    return { hasGrey: true, cov: r.cov, name: items[i].name, path: path, cached: r.cached };
+                }
+            }
+            if (!mesurats) return null;
+            return { hasGrey: false, cov: null, name: null, path: null, cached: false };
+        },
+
+        /**
+         * _ajustarFiAlMarcador: assegura que el troç pujat a la pista de dalt acaba
+         * EXACTAMENT al marcador `b`, no un pèl abans.
+         *
+         * (2026-10-28 · 3a volta) En viu el tall «quasi» arribava al marcador següent:
+         * `retrim` fixa in/out/end però Premiere arredoniX al frame i, si el mèdia de la
+         * màscara s'acaba just ahí, el clip es queda 1-2 frames curt. Ací es reintenta
+         * ALLARGANT el troç fins a `b` i es verifica el `end` REAL amb `Clips.get`; si el
+         * mèdia no en dóna més (WARN_INVALID) es RESTAURA el clip com estava i es diu
+         * quants segons falten — mai no es deixa un clip trencat.
+         *
+         * @param {number} trackIdx - pista del troç (1-based)
+         * @param {number} idx - índex del clip del troç
+         * @param {number} eActual - final actual del troç (s)
+         * @param {number} b - TC del marcador on HA d'acabar (s)
+         * @returns {Promise<number>} final REAL del clip després de l'ajust (s)
+         */
+        _ajustarFiAlMarcador: async function (trackIdx, idx, eActual, b) {
+            var EPS = 0.012;                       // mig frame a 25 fps
+            var cur = await this._clipBoundsAt(trackIdx, idx);
+            if (!cur) return eActual;
+            // MANA el `end` REAL del clip: `e` és el final TEÒRIC que s'ha demanat a
+            // retrim, i Premiere pot haver-lo deixat 1-2 frames curt.
+            var real = (typeof cur.end === 'number') ? cur.end : eActual;
+            if (!(b > real + EPS)) return real;    // ja hi arriba
+            if (b - real > 30) {                   // ni ho intenta: no és un redondeig
+                L('⚠️ [MAPA·gris] La màscara s\'acaba a ' + real.toFixed(2) +
+                    's i el marcador és a ' + b.toFixed(2) + 's (falten ' +
+                    (b - real).toFixed(2) + 's): el tall no hi pot arribar', 'WARN');
+                return real;
+            }
+            var target = b, res = '';
+            for (var i = 0; i < 3; i++) {
+                var wantOut = cur.inPoint + (target - cur.start);
+                res = String(await callJSX('Clips.retrim(' + trackIdx + ', ' + idx + ', ' +
+                    cur.inPoint.toFixed(4) + ', ' + wantOut.toFixed(4) + ', ' + target.toFixed(4) +
+                    ", 'video')") || '');
+                var now = await this._clipBoundsAt(trackIdx, idx);
+                if (now && now.end >= target - EPS) {
+                    L('🗺️ [MAPA·gris] Tall AJUSTAT al marcador: V' + trackIdx + '[' + idx + '] ' +
+                        real.toFixed(2) + 's→' + now.end.toFixed(2) + 's (marcador ' +
+                        b.toFixed(2) + 's)');
+                    return now.end;
+                }
+                if (res.indexOf('WARN_INVALID') === 0 || res.indexOf('ERR') === 0) break;
+                target += 0.06;                    // el frame que cobrix el TC
+            }
+            // No s'ha pogut: RESTAURAR el clip tal com estava.
+            var back = String(await callJSX('Clips.retrim(' + trackIdx + ', ' + idx + ', ' +
+                cur.inPoint.toFixed(4) + ', ' + cur.outPoint.toFixed(4) + ', ' + cur.end.toFixed(4) +
+                ", 'video')") || '');
+            L('⚠️ [MAPA·gris] No puc allargar el troç fins al marcador ' + b.toFixed(2) +
+                's: es queda a ' + real.toFixed(2) + 's · ' + res + ' · restauració: ' + back, 'WARN');
+            return real;
+        },
+
+        /**
+         * _mascaraAParking: PUJA el troç de MÀSCARA de l'ítem de `tMasc` a `tPark`.
+         *
+         * (2026-10-28 · petició d'usuari) Quan el grafisme té zona grisa, va a la
+         * pista de la màscara i la MÀSCARA ha d'anar PER DAMUNT → es mou a la pista
+         * de dalt NOMÉS el troç que coincidix amb l'ítem d'escaleta [rng.a, rng.b];
+         * la resta de la màscara es queda a la seua pista. L'ordre MANA: primer es
+         * talla i es mou la màscara i DESPRÉS es col·loca el grafisme (si es fera al
+         * revés, l'insert del grafisme passaria per damunt del troç de màscara).
+         *
+         * ÀTOMS: reutilitza la maquinària d'IPD+ de `flow_graphics.js`
+         * (`_ipdPlusPoner` = insertClipFrom + retrim amb devolució de la cua,
+         * `_ipdPlusLlegirMotion`/`_ipdPlusHeredarMotion` = el Motion viu a la
+         * instància de pista i NO viatja amb l'insert) i `Clips.retrim` /
+         * `Clips.removeAt`. Cap fitxer `.jsx` tocat.
+         *
+         * @param {Object} rng   - { a, b } rang de l'ítem (segons)
+         * @param {number} tMasc - pista de la màscara (V2)
+         * @param {number} tPark - pista de dalt (V3)
+         * @returns {Promise<Object>} { ok, n, err, detall:[], clash:[] }
+         */
+        _mascaraAParking: async function (rng, tMasc, tPark) {
+            var out = { ok: false, n: 0, err: null, detall: [], clash: [], cov: null };
+            var G = W.Graphics;
+            if (!G || typeof G._ipdPlusPoner !== 'function' || typeof G._ipdPlusHeredarMotion !== 'function') {
+                out.err = 'flow_graphics (IPD+) no carregat';
+                return out;
+            }
+            try {
+                var clips = await getClipsLogic().getTrackClips(tMasc, 'video');
+                var hits = [];
+                for (var i = 0; i < clips.length; i++) {
+                    var c = clips[i];
+                    if (c.end > rng.a + 0.02 && c.start < rng.b - 0.02) hits.push(c);
+                }
+                if (!hits.length) { out.err = 'CAP_MASCARA'; return out; }
+                // Cobertura EFECTIVA del troç que puja: serveix per avisar si la màscara
+                // de V2 no arriba a cobrir tot el rang de l'ítem (marcador→marcador).
+                var covA = null, covB = null;
+
+                // La pista de dalt ha d'estar LLIURE a tot el rang: si hi ha
+                // grafismes d'altres ítems, no es toca res (no es pisa ningú).
+                var occ = await getClipsLogic().getTrackClips(tPark, 'video');
+                for (var j = 0; j < occ.length; j++) {
+                    var o = occ[j];
+                    if (o.end > rng.a + 0.02 && o.start < rng.b - 0.02) {
+                        out.clash.push('V' + tPark + ' "' + (o.name || '?') + '" @ ' + o.start.toFixed(2) + 's');
+                    }
+                }
+                if (out.clash.length) { out.err = 'DESTI_OCUPAT'; return out; }
+
+                // De DRETA a ESQUERRA: els índexs dels clips de l'esquerra no canvien.
+                hits.sort(function (x, y) { return y.start - x.start; });
+                for (var k = 0; k < hits.length; k++) {
+                    var hit = hits[k];
+                    var s = Math.max(hit.start, rng.a);
+                    var e = Math.min(hit.end, rng.b);
+                    if (e - s < 0.10) { out.detall.push('tros massa curt (' + s.toFixed(2) + 's)'); continue; }
+
+                    var idx = await this._idxAt(tMasc, s + 0.02);
+                    if (idx === null) { out.detall.push('no trobe el clip a ' + s.toFixed(2) + 's'); continue; }
+                    var live = await this._clipBoundsAt(tMasc, idx);
+                    if (!live) { out.detall.push('no puc llegir V' + tMasc + '[' + idx + ']'); continue; }
+
+                    var ip0 = (typeof live.inPoint === 'number') ? live.inPoint : 0;
+                    var nom = hit.name || hit.mediaName || '?';
+                    var mv = await G._ipdPlusLlegirMotion(tMasc, idx, 'MASCARA');
+
+                    // 1) El troç [s,e] puja a la pista de dalt (amb el SEU Motion).
+                    var put = await G._ipdPlusPoner(tMasc, idx, tPark, s,
+                        ip0 + (s - live.start), ip0 + (e - live.start), e);
+                    if (!put || !put.ok) {
+                        out.err = 'PUGAR: ' + ((put && put.res) || 'desconegut');
+                        return out;
+                    }
+                    // (2026-10-28 · 3a volta) El tall ha d'arribar EXACTE al marcador
+                    // següent, no un pèl abans: `retrim` hi arredoniX al frame i en viu
+                    // el troç es quedava 1-2 frames curt. Es verifica el `end` REAL.
+                    e = await this._ajustarFiAlMarcador(tPark, put.idx, e, rng.b);
+                    await G._ipdPlusHeredarMotion(tPark, put.idx, mv, 'MASCARA');
+                    out.detall.push('V' + tMasc + ' "' + nom + '" ' + s.toFixed(2) + 's→' +
+                        e.toFixed(2) + 's → V' + tPark + '[' + put.idx + ']');
+                    if (covA === null || s < covA) covA = s;
+                    if (covB === null || e > covB) covB = e;
+
+                    // 2) El troç POSTERIOR es queda a la pista de la màscara.
+                    if (live.end > e + 0.02) {
+                        var putB = await G._ipdPlusPoner(tMasc, idx, tMasc, e,
+                            ip0 + (e - live.start), ip0 + (live.end - live.start), live.end);
+                        if (putB && putB.ok) {
+                            await G._ipdPlusHeredarMotion(tMasc, putB.idx, mv, 'MASCARA-COA');
+                            out.detall.push('V' + tMasc + ' coa ' + e.toFixed(2) + 's→' +
+                                live.end.toFixed(2) + 's → V' + tMasc + '[' + putB.idx + ']');
+                        } else {
+                            L('⚠️ [MAPA·gris] No he pogut reposar la coa de la màscara (' +
+                                ((putB && putB.res) || '?') + ')', 'WARN');
+                        }
+                    }
+
+                    // 3) L'original es queda NOMÉS amb el tros ANTERIOR (o s'esborra).
+                    var idx2 = await this._idxAt(tMasc, Math.max(0.02, Math.min(s + 0.02, e - 0.01)));
+                    if (idx2 !== null) {
+                        if (live.start < s - 0.02) {
+                            var rT = await callJSX('Clips.retrim(' + tMasc + ', ' + idx2 + ', ' +
+                                ip0.toFixed(4) + ', ' + (ip0 + (s - live.start)).toFixed(4) + ', ' +
+                                s.toFixed(4) + ', \'video\')');
+                            out.detall.push('V' + tMasc + '[' + idx2 + '] retallat a ' +
+                                live.start.toFixed(2) + 's→' + s.toFixed(2) + 's · ' + rT);
+                        } else {
+                            var rR = await callJSX('Clips.removeAt(' + tMasc + ', ' +
+                                live.start.toFixed(4) + ', \'video\', false)');
+                            out.detall.push('V' + tMasc + ' original eliminat (' +
+                                live.start.toFixed(2) + 's→' + live.end.toFixed(2) + 's) · ' + rR);
+                        }
+                    }
+                    out.n++;
+                    await U().delay(150);
+                }
+                out.ok = (out.n > 0);
+                if (covA !== null) out.cov = { a: covA, b: covB };
+                // El troç de V3 ha d'OCUPAR TOT l'ítem (marcador→marcador). Si la
+                // màscara de V2 no hi arriba (clip més curt), es diu al log: no
+                // s'inventa mitja que no existisca.
+                if (out.cov && (out.cov.a > rng.a + 0.05 || out.cov.b < rng.b - 0.05)) {
+                    L('⚠️ [MAPA·gris] La màscara de V' + tMasc + ' només cobrix ' +
+                        out.cov.a.toFixed(2) + 's→' + out.cov.b.toFixed(2) + 's de l\'ítem (' +
+                        rng.a.toFixed(2) + 's→' + rng.b.toFixed(2) + 's): a V' + tPark +
+                        ' puja el que hi ha', 'WARN');
+                }
+                if (!out.ok && !out.err) out.err = 'cap troç mogut';
+                return out;
+            } catch (e) {
+                out.err = e.message;
+                L('❌ [MAPA·gris] _mascaraAParking: ' + e.message, 'ERROR');
+                return out;
+            }
+        },
+
         /**
          * _placeClips: Insereix els grafismes a la pista GRAF des de la posició d'entrada.
          * (2026-10-08) `refSec` és el CABEZAL i l'espai hàbil el marca el CLIP DE REFERÈNCIA
@@ -898,8 +1603,64 @@
          * @param {number} refSec - Posició d'entrada (el CABEZAL) en segons
          * @param {Object} freeze - congelat { name, start, end } o null
          * @param {Object} ref    - clip de referència { track, index, name, start, end } o null
+         * @param {Object} [ctx]  - { picked:[{name,full}], detectOpts } (ZONA GRISA 2026-10-28)
          */
-        _placeClips: async function (items, refSec, freeze, ref) {
+        _placeClips: async function (items, refSec, freeze, ref, ctx) {
+            // 0. (2026-10-28 · ZONA GRISA · 2a volta) La MÀSCARA va SEMPRE per damunt del
+            //    grafisme: es PUJA el troç de màscara de l'ÍTEM de la pista de la màscara
+            //    (V2) a la de grafismes (V3) i el grafisme es col·loca a V2, per davall.
+            //    (1a volta: només es feia si el grafisme tenia zona grisa al peu; provat en
+            //    viu amb `app google tots sant gervasi esvoranc.mov` — foto a SANG, 3,1 % de
+            //    gris a tot el clip —, eixia a V3 i tapava la màscara → petició d'usuari:
+            //    SEMPRE així, tinga zona grisa o no. La mesura del gris queda com a INFO
+            //    al log, amb la caché per ruta+mida+data de creació.)
+            //    ORDRE: primer la màscara, després el grafisme (al revés, l'insert del
+            //    grafisme passaria per damunt del troç de màscara). Si no es pot moure la
+            //    màscara (sense rang d'ítem, sense màscara a V2, V3 ocupada o error) es
+            //    col·loca com sempre a V3: mai no bloqueja la col·locació.
+            //    Tot el grafisme va al MATEIX track encara que tinga diversos trams.
+            var tGraf = TRACK_GRAF;
+            var rngGris = null;
+            var gNums0 = [];
+            for (var g0 = 0; g0 < items.length; g0++) gNums0.push(items[g0].name);
+            // Restes d'execucions anteriors d'AQUEST bloc a les dos pistes: si no es netegen
+            // abans, o tapen V3 (la màscara no pot pujar) o es confonen amb la màscara a V2
+            // (es pujaria el grafisme en lloc de la màscara). `_cleanupTrack` només esborra
+            // clips el media dels quals és d'aquest bloc.
+            var netM = await this._cleanupTrack(TRACK_MASCARA, gNums0);
+            var netG = await this._cleanupTrack(TRACK_GRAF, gNums0);
+            if (netM || netG) {
+                L('🎨 [MAPA·gris] Netejades restes del bloc (V' + TRACK_MASCARA + ': ' + netM +
+                    ' · V' + TRACK_GRAF + ': ' + netG + ') abans de moure la màscara');
+            }
+            var zona = await this._zonaGris(items, ctx);   // només INFO al log
+            if (zona && zona.hasGrey) {
+                L('🎨 [MAPA·gris] El grafisme TÉ zona grisa al peu (' + (zona.cov !== null ?
+                    zona.cov.toFixed(1) + ' %' : '?') + ' · "' + zona.name + '")');
+            } else if (zona && zona.hasGrey === false) {
+                L('🎨 [MAPA·gris] El grafisme NO té zona grisa al peu → igualment màscara a V' +
+                    TRACK_GRAF + ' i grafisme a V' + TRACK_MASCARA);
+            }
+            var rng = await this._itemRangeAt(refSec);
+            if (!rng) {
+                L('⚠️ [MAPA·gris] Sense rang d\'ítem → col·locació de sempre a V' +
+                    TRACK_GRAF, 'WARN');
+            } else {
+                var mov = await this._mascaraAParking(rng, TRACK_MASCARA, TRACK_GRAF);
+                if (mov && mov.ok) {
+                    tGraf = TRACK_MASCARA;
+                    rngGris = rng;
+                    L('🎨 [MAPA·gris] Màscara de l\'ítem pujada a V' + TRACK_GRAF + ' (' + mov.n +
+                        ' troç/os) → el grafisme va a V' + tGraf + ' (per davall de la màscara)');
+                    for (var d = 0; d < mov.detall.length; d++) L('   · ' + mov.detall[d]);
+                } else {
+                    L('⚠️ [MAPA·gris] No s\'ha pogut moure la màscara (' + ((mov && mov.err) || '?') +
+                        ((mov && mov.clash && mov.clash.length) ? ': ' + mov.clash.join(' · ') : '') +
+                        ') → col·locació de sempre a V' + TRACK_GRAF, 'WARN');
+                    U().status('MAPA: no s\'ha pogut moure la màscara', 'warn');
+                }
+            }
+
             // 1. Espai hàbil: del punt d'entrada (el cabezal) fins al final del CLIP DE
             //    REFERÈNCIA (el seleccionat, o el de la pista MP4 sota el cabezal).
             var endLimit = null;
@@ -918,11 +1679,25 @@
             var space = (endLimit !== null) ? Math.max(0, endLimit - refSec) : null;
             L('🗺️ [MAPA] Espai hàbil: ' + (space === null ? 'desconegut' : space.toFixed(2) + 's'));
 
+            // 1b. (2026-10-28 · ZONA GRISA) Si el grafisme va a la pista de la MÀSCARA, el
+            //     seu final NO pot passar del final de l'ÍTEM: la màscara torna a V2 al
+            //     marcador següent i l'insert del grafisme (que és una SOBREESCRIPTURA)
+            //     la pisaria. El retall deixa el clip ESTIRABLE, així que l'usuari el pot
+            //     allargar després (petició d'usuari: la col·locació és un punt de partida).
+            if (tGraf === TRACK_MASCARA && rngGris && rngGris.b != null) {
+                if (endLimit === null || endLimit > rngGris.b + 0.01) {
+                    L('🎨 [MAPA·gris] Final acotat al de l\'ítem (' + rngGris.b.toFixed(2) +
+                        's) per no pisar la màscara que torna a V' + TRACK_MASCARA);
+                    endLimit = rngGris.b;
+                    space = Math.max(0, endLimit - refSec);
+                }
+            }
+
             // 2. Netejar restes d'execucions anteriors: cada clic hi deixava un joc nou de
             //    clips i al timeline es veien "2 estats" alhora (gràfic i PNG duplicats).
             var gNums = [];
             for (var g = 0; g < items.length; g++) gNums.push(items[g].name);
-            await this._cleanupTrack(TRACK_GRAF, gNums);
+            await this._cleanupTrack(tGraf, gNums);
             if (freeze && freeze.name) await this._cleanupTrack(TRACK_FREEZE, [freeze.name]);
 
             // 3. Inserir en ordre des del PUNT D'ENTRADA (el cabezal) A DURADA NATURAL del
@@ -935,11 +1710,11 @@
             for (var p = 0; p < items.length; p++) {
                 // (2026-09-22) insert NO-AUDIO: els grafismes (.mov/.mp4) porten pista
                 // d'àudio i Premiere la col·locava enllaçada → sonava damunt del programa.
-                var ins = await getClipsLogic().insertNoAudio(items[p].name, TRACK_GRAF, t, null);
+                var ins = await getClipsLogic().insertNoAudio(items[p].name, tGraf, t, null);
                 var res = ins.res;
-                var realEnd = await this._clipEndAt(TRACK_GRAF, t);
+                var realEnd = await this._clipEndAt(tGraf, t);
                 if (realEnd === null) {
-                    L('⚠️ [MAPA] No puc mesurar el clip inserit a V' + TRACK_GRAF + ' → aturo', 'WARN');
+                    L('⚠️ [MAPA] No puc mesurar el clip inserit a V' + tGraf + ' → aturo', 'WARN');
                     break;
                 }
                 var clamped = false;
@@ -951,18 +1726,18 @@
                     // esgotat i NO deixava allargar el clip («no es pot estirar més enllà de la
                     // inserció»). `Clips.trimBounds` (àtom existent) fixa inPoint/outPoint i el
                     // final de manera coherent, i deixa material per estirar a la timeline.
-                    var cb = await this._clipBoundsAt(TRACK_GRAF, ins.idx);
+                    var cb = await this._clipBoundsAt(tGraf, ins.idx);
                     var inPt = (cb && typeof cb.inPoint === 'number') ? cb.inPoint : 0;
                     var outPt = inPt + (endLimit - t);
                     var rE = await callJSX("Clips.trimBounds(" + t.toFixed(4) + ", " + inPt.toFixed(4) +
-                        ", " + outPt.toFixed(4) + ", " + TRACK_GRAF + ", 'video')");
-                    L('🗺️ [MAPA] V' + TRACK_GRAF + ' retallat a l\'espai hàbil (' + realEnd.toFixed(2) +
+                        ", " + outPt.toFixed(4) + ", " + tGraf + ", 'video')");
+                    L('🗺️ [MAPA] V' + tGraf + ' retallat a l\'espai hàbil (' + realEnd.toFixed(2) +
                         ' → ' + endLimit.toFixed(2) + 's · source ' + inPt.toFixed(2) + '→' + outPt.toFixed(2) +
                         's, estirable) [' + rE + ']');
                     realEnd = endLimit;
                     clamped = true;
                 }
-                L('🗺️ [MAPA] V' + TRACK_GRAF + ': "' + items[p].name + '" @ ' + t.toFixed(2) + 's → ' +
+                L('🗺️ [MAPA] V' + tGraf + ': "' + items[p].name + '" @ ' + t.toFixed(2) + 's → ' +
                     realEnd.toFixed(2) + 's (dur ' + (realEnd - t).toFixed(2) + 's)' +
                     (clamped ? ' [retallat]' : '') + ' [' + res + ']');
                 t = realEnd;
@@ -991,7 +1766,7 @@
                     Math.max(0, fzEnd - refSec).toFixed(4) + ", " + TRACK_FREEZE + ", 'video')");
                 L('🗺️ [MAPA] V' + TRACK_FREEZE + ' (congelat): "' + freeze.name + '" @ ' +
                     refSec.toFixed(2) + 's → ' + fzEnd.toFixed(2) + 's (final del gràfic de V' +
-                    TRACK_GRAF + ') [insert=' + resF + ' · endAt=' + resFE + ']');
+                    tGraf + ') [insert=' + resF + ' · endAt=' + resFE + ']');
             } else if (freeze && freeze.name) {
                 // (2026-10-16 · BUG #169) Xarxa de seguretat: un «congelat» que NO siga una
                 // imatge fixa (p. ex. un grafisme) no s'ha de replicar MAI a V6: duplicaria
@@ -1009,7 +1784,7 @@
             try {
                 var lastItem = items[items.length - 1];
                 if (lastItem && lastItem.name) {
-                    await this._freezeGrafEnd(lastItem.name, grafEnd, endLimit);
+                    await this._freezeGrafEnd(lastItem.name, grafEnd, endLimit, tGraf);
                 }
             } catch (eFz) {
                 L('⚠️ [MAPA] Congelat final del grafisme: ' + eFz.message, 'WARN');

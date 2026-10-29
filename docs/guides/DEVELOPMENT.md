@@ -79,6 +79,15 @@ $git="$env:LOCALAPPDATA\PortableGit\cmd\git.exe"; $env:GIT_PAGER='cat'; $env:GIT
 ### 3. Gestió de Rutes UNC (NAS)
 - **Capa JS**: Responsable de la sanitització de noms i creació recursiva de carpetes (`ensureFolders`).
 - **Capa JSX**: Responsable de l'execució atòmica (`saveAs`, `import`) utilitzant objectes `File` natis de Premiere.
+- **Rastreig (2026-10-29 · BUG #204)**: **mai** llistar una carpeta UNC amb `Utils.readFolder` si
+  només calen els noms o la data d'uns pocs fitxers. `IO.scanDirectory` demana `length`, `modified`
+  i `created` de **cada** fitxer (cada getter és una consulta SMB des del motor d'ExtendScript) i
+  **obri el fitxer** quan `length` ve 0 (habitual en `.mov` per UNC): 103 s amb 1281 fitxers en fred.
+  Mesurat des de .NET el mateix dia: 1281 noms en **2 ms** i 1281 `FileInfo` amb `created` en **3 ms**.
+  Patró: `cep.fs.readdir` (noms) → filtre per nom → `cep.fs.stat` **només dels candidats** → caché
+  persistent (`fp_wott_dates_v1`). Implementació de referència: `Scanner._listNamesNative` +
+  `Scanner._dateCandidates` (`js/logic/Scanner.js`). **Node no està disponible en este equip i no
+  s'ha d'usar mai com a requisit**: `cep.fs` + fallback a JSX cobreix tot el que cal.
 
 ---
 
@@ -146,6 +155,32 @@ tot sol en acabar (una sola vegada per sessió). Es canvia amb:
 FASTPASS_UI.Boot.setAutoOpen(0)      // desactivat
 FASTPASS_UI.Boot.setAutoOpen(30000)  // només si passa de 30 s (es guarda a localStorage)
 ```
+
+**Esperes DESPRÉS de l'arrencada** (2026-10-29 · BUG #204): el log es tancava a
+`ARRENCADA COMPLETA` (~330 ms) i tot el que passava després —l'escaneig del NAS, que en
+fred bloqueja el panell 1-2 min— no quedava enlloc. Ara hi ha una **finestra
+post-arrencada** (3 min) en què només es desen les marques **lentes** (Δ ≥ 400 ms), amb
+el prefix `[post]`; la primera deixa rastre a `_boot_timing_hist.log`
+(«1a espera post-arrencada»), així el rècord no pot dir 330 ms si el panell no és lliure
+fins a dos minuts després:
+
+```js
+FASTPASS_UI.Boot.postWindow()                 // { ms, slowMs, until }
+FASTPASS_UI.Boot.setPostWindow(180000, 400)   // 3 min · només marques > 400 ms
+FASTPASS_UI.Boot.setPostWindow(0)             // desactivat
+```
+
+Mentre dura una d'eixes operacions el semàfor corresponent es pot pintar en **blau**
+(«treballant», `.light.busy` a `style.css`) i restaurar en acabar:
+
+```js
+FASTPASS_UI.Core.Context.setSemaforOcupat('sem-wot', 'Analitzant els rètols del NAS…');
+// … operació llarga (readFolder UNC via JSX) …
+FASTPASS_UI.Core.Context.setSemaforLliure('sem-wot');
+```
+
+⚠️ El fil del WebView queda **bloquejat** dins d'eixa crida: només l'animació CSS seguix
+viva. Per això el semàfor ha de canviar **abans** de tocar el NAS.
 
 **Fites ja instrumentades** (`4_Context.js`): `init · selectors`, `readFolder NAS`,
 `escaleta getStatus`, `escaleta local/FOTO`, `scan media+wotts`, `projecte obert+lock (JSX)`,

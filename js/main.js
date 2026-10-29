@@ -79,9 +79,10 @@ function _perfReport() {
     var io = (U && U._ioStats) ? U._ioStats : { n: 0, ms: 0, maxMs: 0, bytes: 0, logN: 0, auditN: 0 };
     var js = (U && U._jsxStats) ? U._jsxStats : { n: 0, byPrefix: {}, other: 0 };
     var rtAvg = _perf.rtN ? (_perf.rtSum / _perf.rtN) : 0;
-    // Vía d'escriptura detectada (cep_node / require / cep.fs síncron) — diagnòstic Fase 2.
-    var fsKind = 'n/a';
-    try { if (U && U._nodeFs) { U._nodeFs(); fsKind = U._fsKind || 'n/a'; } } catch(eFsk) {}
+    // Vía d'escriptura: SEMPRE `cep.fs` (síncron) — diagnòstic Fase 2.
+    // (2026-10-29) Fora la detecció de Node: el manifest no declara
+    // `--enable-nodejs`, així que `_nodeFs()` sempre tornava null.
+    var fsKind = 'cep.fs';
     var tEnd = _perf.tRelease || _perf.tLastInput || _perf.tFirst;
     var barrido = (_perf.tFirst && tEnd) ? ((tEnd - _perf.tFirst) / 1000) : 0;
     var top = [];
@@ -249,6 +250,29 @@ function applySliderLimits() {
         var _bootPref = window.localStorage ? parseInt(window.localStorage.getItem('fp_bootAutoOpenMs'), 10) : NaN;
         if (!isNaN(_bootPref)) _bootAutoOpenMs = _bootPref;
     } catch (eBPref) { }
+    // ── FINESTRA POST-ARRENCADA (2026-10-29 · BUG #204) ──────────────────────
+    // PROBLEMA: `_bootClosed` es tancava a l'ARRENCADA COMPLETA (~330 ms) i, a
+    // partir d'ací, TOTES les marques de fons es descartaven. Però l'espera real
+    // que veu l'usuari en fred NO és l'arrencada: és l'escaneig del NAS que ve
+    // després (log 29/10: `[SCAN] Analitzant context` 09:02:50 → `[SCAN:wotts]
+    // Filtre` 09:04:33 = 103 s sense cap rastre al log). El semàfor WOT es
+    // quedava en verd intermitent tot eixe temps perquè el fil del panell està
+    // BLOQUEJAT dins d'una crida JSX (readFolder UNC datant 1281 fitxers) i
+    // només l'animació CSS seguia viva.
+    // SOLUCIÓ: després d'ARRENCADA COMPLETA seguim acceptant marques, però NOMÉS
+    // les LENTES (Δ >= _bootPostSlowMs) i dins d'una finestra (_bootPostMs).
+    // Així el log ensenya sempre les esperes que l'usuari patix, sense que el
+    // poll de 15 s l'inunde de línies.
+    var _bootPostMs = 180000;   // finestra (3 min); 0 = desactivat
+    var _bootPostSlowMs = 400;  // només marques que costen més que això
+    var _bootPostUntil = 0;     // fi de la finestra (es fixa en tancar l'arrencada)
+    var _bootPostLogged = false; // la 1a espera post ja s'ha anotat a l'històric
+    try {
+        var _bootPostPref = window.localStorage ? parseInt(window.localStorage.getItem('fp_bootPostMs'), 10) : NaN;
+        if (!isNaN(_bootPostPref) && _bootPostPref >= 0) _bootPostMs = _bootPostPref;
+        var _bootPostSlowPref = window.localStorage ? parseInt(window.localStorage.getItem('fp_bootPostSlowMs'), 10) : NaN;
+        if (!isNaN(_bootPostSlowPref) && _bootPostSlowPref >= 0) _bootPostSlowMs = _bootPostSlowPref;
+    } catch (eBPost) { }
     var _bootPad = function (n, w) { return ('        ' + n).slice(-(w || 7)); };
     var _bootHead = function () {
         var d = new Date(_tBoot);
@@ -268,16 +292,111 @@ function applySliderLimits() {
         // 2) Còpia a C:\temp (per si la ruta nativa fallés o no es trobés el fitxer).
         try { window.cep.fs.writeFile('C:\\temp\\_boot_timing.log', txt); } catch (eF2) { }
     };
+    // ── HISTÒRIC D'ARRENCADES (2026-10-28 · BUG #113) ────────────────────────
+    // `_boot_timing.log` es REESCRIU a cada arrencada: si el panell es reobri (o
+    // Premiere recarrega l'extensió), la mesura de l'arrencada en FRED es perd i
+    // no queda res per comparar. Ací s'afig UNA línia per arrencada (finestra de
+    // 40) amb el total i el tram de pàgina, per vigilar regressions sense haver
+    // de repetir la prova en fred.
+    var _bootHistFile = '_boot_timing_hist.log';
+    var _bootHistDone = false;
+    var _bootHistPath = function () { return _bootRoot ? (_bootRoot + '\\' + _bootHistFile) : null; };
+    // Lectura/escriptura del històric, separades perquè també les fa servir la
+    // línia de «1a espera post-arrencada» (BUG #204): el rècord de l'arrencada no
+    // pot dir 330 ms si el panell no està LLIURE fins 1-2 min després.
+    var _bootHistRead = function () {
+        var prev = '';
+        try {
+            var p1 = _bootHistPath();
+            var cand = [];
+            if (p1) { cand.push(p1); }
+            cand.push('C:\\temp\\' + _bootHistFile);
+            for (var j = 0; j < cand.length; j++) {
+                try {
+                    var r = window.cep.fs.readFile(cand[j]);
+                    if (r && (r.err === 0 || r.err === undefined) && typeof r.data === 'string' && r.data) { prev = r.data; break; }
+                } catch (eRC) { }
+            }
+        } catch (eRD) { }
+        return prev;
+    };
+    var _bootHistWrite = function (line, prevTxt) {
+        var rows = (typeof prevTxt === 'string') ? prevTxt : _bootHistRead();
+        rows = rows ? rows.replace(/\s+$/, '').split('\n') : [];
+        rows.push(line);
+        if (rows.length > 40) { rows = rows.slice(rows.length - 40); }
+        var txt = rows.join('\n') + '\n';
+        var p1 = _bootHistPath();
+        if (p1) { try { window.cep.fs.writeFile(p1, txt); } catch (eWH) { } }
+        try { window.cep.fs.writeFile('C:\\temp\\' + _bootHistFile, txt); } catch (eWH2) { }
+        try { console.log('⏱️ [BOOT·hist] ' + line); } catch (eHC) { }
+    };
+    var _bootHist = function () {
+        if (_bootHistDone) return;
+        _bootHistDone = true;
+        try {
+            var d = new Date(_tBoot);
+            var p2 = function (n) { return (n < 10 ? '0' : '') + n; };
+            var day = d.getFullYear() + '-' + p2(d.getMonth() + 1) + '-' + p2(d.getDate());
+            var stamp = day + ' ' + p2(d.getHours()) + ':' + p2(d.getMinutes()) + ':' + p2(d.getSeconds());
+            // Tram de pàgina: navegació → main.js (marca del <head>) i DCL.
+            var navMs = null, dclMs = null;
+            try {
+                var P = window.__FP_PAGE || {};
+                if (P.navStart && _tBoot >= P.navStart) navMs = Math.round(_tBoot - P.navStart);
+                if (P.dcl && P.navStart && P.dcl >= P.navStart) dclMs = Math.round(P.dcl - P.navStart);
+            } catch (eHP) { }
+            // «Arrencada» = ms d'ARRENCADA COMPLETA; «total» = última marca (primer
+            // pintat). Si encara no hi ha pintat, els dos valors coincidixen.
+            var totMs = 0, arrMs = 0;
+            for (var i = 0; i < _bootLines.length; i++) {
+                var m = /^\+ *(-?\d+) ms/.exec(_bootLines[i]);
+                if (!m) { continue; }
+                totMs = parseInt(m[1], 10);
+                if (_bootLines[i].indexOf('ARRENCADA COMPLETA') > 0) { arrMs = totMs; }
+            }
+            if (!arrMs) { arrMs = totMs; }
+            var line = stamp +
+                ' | arrencada ' + _bootPad(arrMs, 6) + ' ms' +
+                ' | total ' + _bootPad(totMs, 6) + ' ms' +
+                ' | nav→main ' + (navMs === null ? '     ? ms' : _bootPad(navMs, 6) + ' ms') +
+                ' | DCL ' + (dclMs === null ? '     ? ms' : _bootPad(dclMs, 6) + ' ms') +
+                ' | ' + _bootLines.length + ' marques';
+            var prev = _bootHistRead();
+            // «1r del dia» = cap arrencada anterior amb la data de hui → candidat a FRED.
+            if (prev.indexOf(day) < 0) { line += ' | 1R DEL DIA'; }
+            _bootHistWrite(line, prev);
+        } catch (eHist) { }
+    };
+    var _bootHistSafe = function () { try { _bootHist(); } catch (eHS) { } };
     var _bootMark = function (label, lvl) {
         var now = Date.now();
         var ms = now - _tBoot;
         var dt = now - _bootLast;
         _bootLast = now;
-        // Un cop acabada l'arrencada, els cicles de fons (auto-refresc de 60 s) no
-        // s'escriuen al fitxer: només a consola. Amb lvl = 'force' sí que s'hi afegeixen.
+        // Un cop acabada l'arrencada, els cicles de fons (auto-refresc de 15 s) no
+        // s'escriuen al fitxer: només a consola. Dues excepcions (BUG #204):
+        //   · lvl = 'force'  → sempre (l'usa qui sap que eixe tram importa)
+        //   · marca LENTA dins la finestra post → sempre: són les esperes que
+        //     l'usuari patix, i són just les que abans no quedaven enlloc.
         if (_bootClosed && lvl !== 'force') {
-            try { console.log('⏱️ [BOOT·post] ' + label + ' (+' + ms + ' ms · Δ' + dt + ')'); } catch (eC2) { }
-            return;
+            if (_bootPostMs <= 0 || now > _bootPostUntil || dt < _bootPostSlowMs || _bootLines.length >= 120) {
+                try { console.log('⏱️ [BOOT·post] ' + label + ' (+' + ms + ' ms · Δ' + dt + ')'); } catch (eC2) { }
+                return;
+            }
+            label = '[post] ' + label;
+            // La PRIMERA espera post es deixa també a l'històric: una arrencada de
+            // 330 ms que acaba amb el panell bloquejat 103 s no pot quedar com a rècord.
+            if (!_bootPostLogged) {
+                _bootPostLogged = true;
+                try {
+                    var dP = new Date(_tBoot);
+                    var p2P = function (n) { return (n < 10 ? '0' : '') + n; };
+                    _bootHistWrite(dP.getFullYear() + '-' + p2P(dP.getMonth() + 1) + '-' + p2P(dP.getDate()) +
+                        ' ' + p2P(dP.getHours()) + ':' + p2P(dP.getMinutes()) + ':' + p2P(dP.getSeconds()) +
+                        ' | +' + _bootPad(ms, 7) + ' ms | 1a espera post-arrencada: ' + label);
+                } catch (eHPp) { }
+            }
         }
         _bootLines.push('+' + _bootPad(ms) + ' ms  (Δ' + _bootPad(dt) + ' ms)  ' + label);
         _bootFlush();
@@ -293,6 +412,8 @@ function applySliderLimits() {
         window.FASTPASS_UI = window.FASTPASS_UI || {};
         window.FASTPASS_UI.Boot = {
             logPath: function () { return _bootRoot ? (_bootRoot + '\\_boot_timing.log') : 'C:\\temp\\_boot_timing.log'; },
+            /** Històric d'arrencades (una línia per sessió · 2026-10-28 · #113). */
+            histPath: function () { return _bootHistPath() || ('C:\\temp\\' + _bootHistFile); },
             mark: function (label, lvl) { _bootMarkSafe(label, lvl); },
             text: function () { return _bootText(); },
             /**
@@ -347,6 +468,17 @@ function applySliderLimits() {
                     return 'load ' + msLoad + ' ms · DCL ' + dcl + ' ms';
                 } catch (ePL) { return ''; }
             },
+            /** Finestra de marques post-arrencada (BUG #204). 0 = no desar-ne cap. */
+            postWindow: function () { return { ms: _bootPostMs, slowMs: _bootPostSlowMs, until: _bootPostUntil }; },
+            setPostWindow: function (ms, slowMs) {
+                _bootPostMs = (typeof ms === 'number' && ms >= 0) ? ms : (parseInt(ms, 10) || 0);
+                if (typeof slowMs === 'number' && slowMs >= 0) { _bootPostSlowMs = slowMs; }
+                try { window.localStorage.setItem('fp_bootPostMs', String(_bootPostMs)); } catch (eSPW) { }
+                try { window.localStorage.setItem('fp_bootPostSlowMs', String(_bootPostSlowMs)); } catch (eSPW2) { }
+                _bootPostUntil = Date.now() + _bootPostMs;
+                _bootMarkSafe('Boot.setPostWindow(' + _bootPostMs + ' ms · lent >= ' + _bootPostSlowMs + ' ms)', 'force');
+                return _bootPostMs;
+            },
             autoOpenMs: function () { return _bootAutoOpenMs; },
             setAutoOpen: function (ms) {
                 _bootAutoOpenMs = (typeof ms === 'number' && ms >= 0) ? ms : (parseInt(ms, 10) || 0);
@@ -398,13 +530,11 @@ function applySliderLimits() {
     // ningú no arribe a clicar 📁: el 22/10 es va perdre una vesprada perquè el
     // manifest NO declara `--enable-nodejs` i el transport `child_process` no
     // arrancava mai, sense cap rastre. `cep.process` és el que sí que hi és.
+    // (2026-10-29) Fora el sondatge de Node/child_process: no pot existir ací.
     try {
         var _U = window.FASTPASS_UI.Utils;
-        var _capNode = !!(window.cep_node && window.cep_node.require);
-        var _capCp = !!_U._nodeReq('child_process');
         var _capProc = !!(window.cep && window.cep.process && typeof window.cep.process.createProcess === 'function');
-        _U.forceLog('🧰 [CAP] Node=' + _capNode + ' · child_process=' + _capCp +
-            ' · cep.process=' + _capProc + ' · escriptura=' + (_U._fsKind || '?'));
+        _U.forceLog('🧰 [CAP] Node=no · cep.process=' + _capProc + ' · escriptura=cep.fs');
     } catch (eCap) { }
     // ── ESTAT D'ESPERA DEL BOTÓ MAIN ─────────────────────────────────────────
     // Mentre el motor JSX i el primer checkContext no acabin, el botó MAIN no ha de
@@ -514,6 +644,26 @@ function applySliderLimits() {
             var _totBoot = Date.now() - _tBoot;
             _bootMarkSafe('ARRENCADA COMPLETA');
             _bootClosed = true; // a partir d'aquí el log no creix amb els cicles de fons
+            // …però SÍ que creix amb les esperes llargues (BUG #204): la finestra
+            // post-arrencada és la que recull l'escaneig del NAS / la FOTO.
+            _bootPostUntil = Date.now() + _bootPostMs;
+            // ── PRIMER PINTAT (2026-10-28 · BUG #113) ───────────────────────────
+            // L'últim tram que el panell POT mesurar. En fred (28/10) el total del
+            // panell va ser de 335 ms i el tram host CEP → WebView (~12 s) queda
+            // fora: el JS encara no existix quan el host carrega l'extensió.
+            // rAF×2 = el frame ja s'ha pintat; `setTimeout` fa de xarxa si el panell
+            // està amagat i el navegador no servix rAF.
+            try {
+                if (window.requestAnimationFrame) {
+                    window.requestAnimationFrame(function () {
+                        window.requestAnimationFrame(function () {
+                            _bootMarkSafe('primer pintat', 'force');
+                            _bootHistSafe();
+                        });
+                    });
+                }
+            } catch (eRaf) { }
+            setTimeout(_bootHistSafe, 1500);
             try { clearInterval(_hb); } catch (eHb) { } // HB de diagnòstic: mor amb l'arrencada
             utils.status("⏱️ Panell a punt (" + (Math.round(_totBoot / 100) / 10) + " s)", "info");
             // ── ARRENCADA LENTA → S'OBRE EL LOG TOT SOL (2026-09-29) ────────────
@@ -872,7 +1022,20 @@ if (btnMarksC1) btnMarksC1.addEventListener('click', () => callWorkflow('Markers
         });
         syncChyronCasButton();
         const btnChyronColocar = document.getElementById('btnChyronColocar');
-        if (btnChyronColocar) btnChyronColocar.addEventListener('click', () => runPlaceAllChyrons());
+        // (2026-10-29 · TWITTS) Ctrl+clic a la DIANA = EMERGÈNCIA
+        // (docs/specs/TWITTS_OCR.md D9): primer intenta resoldre el tuit del
+        // cabezal amb OCR contra els movies pendents; si no casa, ensenya una
+        // llista curta amb els .mov de tuit del DIA DEL PROJECTE (+ «Buscar al
+        // disc…» per al navegador natiu) i el triat es col·loca cobrint el clip
+        // de V1. Un clic normal continua fent el de sempre: col·locar TOTS els
+        // chyrons (i, al final, la passada AUTOMÀTICA dels tuits: `runAuto`).
+        if (btnChyronColocar) btnChyronColocar.addEventListener('click', (e) => {
+            if (e && (e.ctrlKey || e.metaKey)) {
+                callWorkflow('Twitts', 'runEmergency');
+                return;
+            }
+            runPlaceAllChyrons();
+        });
 
         // --- BOTONS GRÀFICS (IPD, IPD+, Doble Pantalla, MAPA, TOTEM, GRÀFICA/MAPA-GRAF) ---
         const btnGrafIpd = document.getElementById('btnGrafIpd');
@@ -1392,6 +1555,20 @@ if (btnMarksC1) btnMarksC1.addEventListener('click', () => callWorkflow('Markers
             utils.log('⚠️ [CHY] La revisió de grafismes (MAPA) ha llançat: ' + eG.message, 'ERROR');
         }
 
+        // ── TWITTS (2026-10-29 · AUTOMÀTIC, sense botó): els movies de tuit
+        //    (XARXES / «LUCYS VERTICALITZACIÓ», bloc a seques `_V_00_`) que la
+        //    IMPORTACIÓ ha portat al projecte i que NO han entrat al timeline
+        //    (BUG #191: el generador no els lliga a cap ítem d'escaleta) es
+        //    casen amb els clips de V1 on el tuit està CREMAT: un frame per
+        //    clip (el 35 des de l'in) → OCR → comparació amb els movies que
+        //    falten → col·locació cobrint el clip. Si no en falta cap, no fa res.
+        //    L'únic mecanisme manual és Ctrl+clic a la DIANA 🎯 (emergència).
+        try {
+            await callWorkflow('Twitts', 'runAuto');
+        } catch (eT) {
+            utils.log('⚠️ [CHY] La passada de tuits (TWITTS) ha llançat: ' + eT.message, 'WARN');
+        }
+
         // ── FOCUS FINAL (2026-09-21): deixar el targeting NOMÉS a V1/A1 i el clip de V1
         //    seleccionat (el "clip objectiu" del panell). Sense això, després de COL·LOCAR
         //    quedaven totes les pistes enfocades i el slider/KEYFRAME no apuntaven a V1.
@@ -1776,8 +1953,8 @@ window.addEventListener('resize', function () { sizeVideoToFit(true); });
 // visor SRT reprodueix i quan l'estat ja no és MASSA (o hi ha un projecte obert).
 //
 // (2026-10-21) Aquest poll pot anar a 15 s perquè checkContext ja NO escaneja el
-// NAS: mira el directori del projecte (Node, ~20 ms) i data els wotts amb
-// `birthtime` + caché per nom (~35 ms en règim estable). Abans costava 5,4 s i
+// NAS: mira el directori del projecte (`cep.fs.readdir`, ~20 ms) i data els wotts
+// amb `cep.fs.stat` + caché per nom (~35 ms en règim estable). Abans costava 5,4 s
 // per això s'espaciava a 60 s.
 var _ctxRefreshBusy = false;
 // (2026-10-14 · BUG #156) Comptador de cicles seguits sense projecte actiu llegit pel

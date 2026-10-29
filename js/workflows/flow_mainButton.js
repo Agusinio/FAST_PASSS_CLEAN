@@ -1569,56 +1569,89 @@
          */
         _fullScan: async function (ctx) {
             log("🔍 [SCAN] Analitzant context i materials...");
-            
-            // 1. Materials del NAS: rètols (CHY) i portades (PNG del dia)
-            //    (2026-10-23) El vídeo ja no s'escaneja: ix del cleanFeed.
-            const wotts = await window.Scan.wotts(ctx);
-            const portada = await window.Scan.portadas(ctx);
-            
-            // 2. Actualitzem State global
-            // ── F3 (2026-10-01) · una lectura FALLIDA no ha de mentir sobre l'estat ──
-            // F1 fa que una lectura fallida sigui `failed`/`null` (i no una llista
-            // buida silenciosa). Aquí NO s'ha de publicar aquest buit com si fos real:
-            // es conserva l'estat anterior i s'avisa amb ERROR (nivell sempre visible).
-            if (wotts.failed) {
-                log('❌ [SCAN] Lectura dels RÈTOLS del NAS FALLIDA → es conserva detectedTheme/' +
-                    'structure (' + (window.FASTPASS_UI.State.structure ? window.FASTPASS_UI.State.structure.length : 0) +
-                    ' blocs). Torna a prémer el botó.', 'ERROR');
-            } else {
-                window.FASTPASS_UI.State.detectedTheme = wotts.tema;
+            // ── TIMING I SEMÀFOR «OCUPAT» (2026-10-29 · BUG #204) ───────────────
+            // En fred, `Scan.wotts` llig la carpeta de rètols per UNC via JSX (1281
+            // fitxers datats un a un): el 29/10 van ser 103 s amb el fil del panell
+            // BLOQUEJAT i el semàfor WOT en verd intermitent —que significa «ja
+            // importable»—, de manera que l'usuari només veia parpadejar un llum.
+            // Ara: (1) el WOT es pinta en BLAU mentres dura i (2) cada tram deixa
+            // marca FORÇADA al `_boot_timing.log` (abans no en quedava cap, perquè
+            // el log es tanca a l'ARRENCADA COMPLETA i estes marques no hi arribaven).
+            const _tFS = Date.now();
+            const _bFS = (lbl) => {
+                try {
+                    const B = window.FASTPASS_UI && window.FASTPASS_UI.Boot;
+                    if (B && typeof B.mark === 'function') { B.mark('[SCAN] ' + lbl, 'force'); }
+                } catch (eB) { }
+            };
+            const _secFS = (t0) => ((Date.now() - t0) / 1000).toFixed(1) + ' s';
+            const _ctxUI = window.FASTPASS_UI && window.FASTPASS_UI.Core && window.FASTPASS_UI.Core.Context;
+            if (_ctxUI && typeof _ctxUI.setSemaforOcupat === 'function') {
+                _ctxUI.setSemaforOcupat('sem-wot', 'Analitzant els rètols del NAS…' +
+                    ' (amb el NAS fred pot trigar un minut o més)');
             }
-            // Generar estructura de blocs a partir dels Wotts
-            // ⚠️ (2026-10-15 · F6c) NO CONFONDRE: aquest `State.structure` és la
-            // LLISTA DE BLOCS WOTT (rètols del NAS, via `Parse.files`) — una
-            // variable d'àmbit UI. La secció `structure` del manifest v2.0
-            // (`.fastpass.json` → `manifest.structure.items[]`) és una ALTRA
-            // cosa: la vista MESTRA per ítem d'escaleta, que es llegeix amb
-            // `SessionManifest.getItems()` / `AnalysisCenter.getStructure(m)` i
-            // la reconstrueix `AnalysisCenter.composeStructure()`. No barrejar-les.
-            if (wotts.list && wotts.list.length > 0) {
-                window.FASTPASS_UI.State.structure = window.Parse.files(wotts.list, ctx.progData.wott, ctx.bloque);
-                window.FASTPASS_UI.State.pieceIndex = 0;
-                log(`🏗️ Estructura generada: ${window.FASTPASS_UI.State.structure.length} blocs`);
-            } else if (!wotts.failed) {
-                // Cas real (2026-10-01): amb la lectura fallida NO es buida
-                // `structure`, perquè tots els botons de chyrons quedaven morts
-                // amb "No hi ha estructura carregada" i el símptoma deia
-                // "no s'han importat els wotts" sense cap pista de la causa.
-                window.FASTPASS_UI.State.structure = [];
-                window.FASTPASS_UI.State.pieceIndex = 0;
-                log("⚠️ No hi ha Wotts per generar estructura");
-            }
-            
-            // 3. Verificació de projecte existent al destí
-            const folderDest = getUtils().workFolder(ctx);
-            const projectFiles = await getUtils().readFolder(folderDest);
-            const existingProj = window.Scan.selectedProject(projectFiles, ctx.progData.wott, ctx.bloque);
-            
-            window.FASTPASS_UI.State.activeProjectName = existingProj;
-            window.FASTPASS_UI.State.buttonState = existingProj ? "OPEN" : "NEW";
+            try {
+                // 1. Materials del NAS: rètols (CHY) i portades (PNG del dia)
+                //    (2026-10-23) El vídeo ja no s'escaneja: ix del cleanFeed.
+                const _tW = Date.now();
+                const wotts = await window.Scan.wotts(ctx);
+                _bFS('_fullScan · wotts del NAS (' + _secFS(_tW) + ')');
+                const _tP = Date.now();
+                const portada = await window.Scan.portadas(ctx);
+                _bFS('_fullScan · portades (' + _secFS(_tP) + ')');
 
-            // Retornem el paquet d'assets per a ús immediat
-            return { wotts, portada };
+                // 2. Actualitzem State global
+                // ── F3 (2026-10-01) · una lectura FALLIDA no ha de mentir sobre l'estat ──
+                // F1 fa que una lectura fallida sigui `failed`/`null` (i no una llista
+                // buida silenciosa). Aquí NO s'ha de publicar aquest buit com si fos real:
+                // es conserva l'estat anterior i s'avisa amb ERROR (nivell sempre visible).
+                if (wotts.failed) {
+                    log('❌ [SCAN] Lectura dels RÈTOLS del NAS FALLIDA → es conserva detectedTheme/' +
+                        'structure (' + (window.FASTPASS_UI.State.structure ? window.FASTPASS_UI.State.structure.length : 0) +
+                        ' blocs). Torna a prémer el botó.', 'ERROR');
+                } else {
+                    window.FASTPASS_UI.State.detectedTheme = wotts.tema;
+                }
+                // Generar estructura de blocs a partir dels Wotts
+                // ⚠️ (2026-10-15 · F6c) NO CONFONDRE: aquest `State.structure` és la
+                // LLISTA DE BLOCS WOTT (rètols del NAS, via `Parse.files`) — una
+                // variable d'àmbit UI. La secció `structure` del manifest v2.0
+                // (`.fastpass.json` → `manifest.structure.items[]`) és una ALTRA
+                // cosa: la vista MESTRA per ítem d'escaleta, que es llig amb
+                // `SessionManifest.getItems()` / `AnalysisCenter.getStructure(m)` i
+                // la reconstrueix `AnalysisCenter.composeStructure()`. No barrejar-les.
+                if (wotts.list && wotts.list.length > 0) {
+                    window.FASTPASS_UI.State.structure = window.Parse.files(wotts.list, ctx.progData.wott, ctx.bloque);
+                    window.FASTPASS_UI.State.pieceIndex = 0;
+                    log(`🏗️ Estructura generada: ${window.FASTPASS_UI.State.structure.length} blocs`);
+                } else if (!wotts.failed) {
+                    // Cas real (2026-10-01): amb la lectura fallida NO es buida
+                    // `structure`, perquè tots els botons de chyrons quedaven morts
+                    // amb "No hi ha estructura carregada" i el símptoma deia
+                    // "no s'han importat els wotts" sense cap pista de la causa.
+                    window.FASTPASS_UI.State.structure = [];
+                    window.FASTPASS_UI.State.pieceIndex = 0;
+                    log("⚠️ No hi ha Wotts per generar estructura");
+                }
+
+                // 3. Verificació de projecte existent al destí
+                const _tD = Date.now();
+                const folderDest = getUtils().workFolder(ctx);
+                const projectFiles = await getUtils().readFolder(folderDest);
+                const existingProj = window.Scan.selectedProject(projectFiles, ctx.progData.wott, ctx.bloque);
+                _bFS('_fullScan · carpeta del projecte (' + _secFS(_tD) + ')');
+
+                window.FASTPASS_UI.State.activeProjectName = existingProj;
+                window.FASTPASS_UI.State.buttonState = existingProj ? "OPEN" : "NEW";
+
+                // Retornem el paquet d'assets per a ús immediat
+                return { wotts, portada };
+            } finally {
+                _bFS('_fullScan TOTAL (' + _secFS(_tFS) + ')');
+                if (_ctxUI && typeof _ctxUI.setSemaforLliure === 'function') {
+                    _ctxUI.setSemaforLliure('sem-wot');
+                }
+            }
         },
 
         /**

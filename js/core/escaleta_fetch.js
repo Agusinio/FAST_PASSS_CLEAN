@@ -68,75 +68,26 @@
     // ----------------------------------------------------------------
     // TRANSPORT DE LA PETICIO (2026-10-02)
     // ----------------------------------------------------------------
-    // PER QUE: fins ara la resposta viatjava SEMPRE pel pont ExtendScript
-    // (FASTPASS.IO.curl), que llegeix la sortida de curl com a ANSI (CP1252).
-    // Com que l'API retorna UTF-8, cada accent esdevenia DOS caracters
-    // ("O" accentuada -> "A"+cometes, "C" trencada -> "A"+doble daguer) i, en
-    // desar-ho, el JSON quedava DOBLEMENT codificat (TNC V1 02/10/2026:
-    // "titol":"CRONICA VICTOR..." -> tema "CRANICA VACTOR" al nom del projecte).
-    // SOLUCIO: demanar l'escaleta amb child_process de Node + curl.exe i
-    // decodificar la sortida com a BYTES -> UTF-8 de debo. El pont ExtendScript
-    // queda nomes com a respatller (amb reparacio de mojibake).
-    // No s'usa .bat: sense cmd.exe pel mig, els '%' de l'URL no s'expansionen.
-
-    /** _curlExe: ruta de curl.exe (System32) o "curl" del PATH si no hi es. */
-    ER._curlExe = function () {
-        var abs = 'C:\\Windows\\System32\\curl.exe';
-        try {
-            var fs = window.FASTPASS_UI.Utils._nodeFs();
-            if (fs && fs.existsSync && !fs.existsSync(abs)) return 'curl';
-        } catch (e) { }
-        return abs;
-    };
+    // PER QUE: la resposta viatja pel pont ExtendScript (FASTPASS.IO.curl), que
+    // llegeix la sortida de curl com a ANSI (CP1252). Com que l'API retorna
+    // UTF-8, cada accent esdevenia DOS caracters ("O" accentuada -> "A"+cometes,
+    // "C" trencada -> "A"+doble daguer) i, en desar-ho, el JSON quedava
+    // DOBLEMENT codificat (TNC V1 02/10/2026: "titol":"CRONICA VICTOR..." ->
+    // tema "CRANICA VACTOR" al nom del projecte).
+    // SOLUCIO: la resposta es REPARA amb `Utils._fromMojibake` abans de tornar-la.
+    // (2026-10-29) Fora la via Node+curl (`_curlExe`/`_execFileBuffer`): el
+    // manifest no declara `--enable-nodejs`, aixi que la branca no s'executava mai
+    // i la reparacio del mojibake es l'UNICA via real.
 
     /**
-     * _execFileBuffer: executa curl amb child_process de Node i retorna la SEVA
-     * SORTIDA COM A BYTES (Buffer) des dels quals es deriva el text UTF-8.
-     * @param {string} exe
-     * @param {Array<string>} args
-     * @param {number} timeoutMs
-     * @returns {Promise<{ok:boolean, raw?:string, err?:string, ms?:number}>}
-     */
-    ER._execFileBuffer = function (exe, args, timeoutMs) {
-        return new Promise(function (resolve) {
-            var cp = window.FASTPASS_UI.Utils._nodeReq('child_process');
-            if (!cp || !cp.execFile) { resolve({ ok: false, err: 'Node/child_process no disponible' }); return; }
-            var t0 = Date.now(), done = false;
-            var finish = function (r) { if (done) return; done = true; r.ms = Date.now() - t0; resolve(r); };
-            var timer = setTimeout(function () {
-                finish({ ok: false, err: 'temps d\'espera exhaurit (' + Math.round(timeoutMs / 1000) + ' s)' });
-            }, timeoutMs + 2000);
-            try {
-                cp.execFile(exe, args, { encoding: 'buffer', maxBuffer: 64 * 1024 * 1024, windowsHide: true, timeout: timeoutMs },
-                    function (err, stdout, stderr) {
-                        clearTimeout(timer);
-                        var txt = stdout ? stdout.toString('utf8') : '';   // bytes reals -> UTF-8
-                        if (txt && txt.length > 2) { finish({ ok: true, raw: txt }); return; }
-                        var why = stderr ? stderr.toString('utf8').substring(0, 200) : (err ? String(err.message) : 'resposta buida');
-                        finish({ ok: false, err: why });
-                    });
-            } catch (e) { clearTimeout(timer); finish({ ok: false, err: e.message }); }
-        });
-    };
-
-    /**
-     * _fetchRaw: demana l'escaleta a l'API. 1a via Node+curl (UTF-8 exacte),
-     * 2a via FASTPASS.IO.curl (ExtendScript) amb reparacio de mojibake.
+     * _fetchRaw: demana l'escaleta a l'API per curl d'ExtendScript i repara el
+     * mojibake CP1252 → UTF-8.
      * @param {string} url
      * @param {string} [tag] - escaletaId per al log
      * @returns {Promise<string|null>} text del JSON o null si no hi ha resposta
      */
     ER._fetchRaw = async function (url, tag) {
         var U = window.FASTPASS_UI.Utils;
-        var args = ['-s', '--connect-timeout', '15', '--max-time', '60',
-            '-X', 'POST', url, '-H', 'accept: application/json', '-H', API_AUTH];
-        var res = await this._execFileBuffer(this._curlExe(), args, 65000);
-        if (res.ok) {
-            log('🛰️ [ER:Fetch] API via Node/curl' + (tag ? ' (' + tag + ')' : '') +
-                ': ' + res.ms + ' ms · ' + res.raw.length + ' chars en UTF-8 exacte');
-            return res.raw;
-        }
-        log('⚠️ [ER:Fetch] Via Node/curl no disponible (' + res.err + ') → respatller ExtendScript');
         var rawJsx = null;
         try {
             rawJsx = await U.callJSX(
@@ -146,7 +97,7 @@
         } catch (eC) { rawJsx = null; }
         var txt = String(rawJsx == null ? '' : rawJsx);
         if (!txt || txt.indexOf('ERR') === 0) {
-            log('❌ [ER:Fetch] Respatller ExtendScript sense resposta: ' + (txt || 'buit'), 'ERROR');
+            log('❌ [ER:Fetch] curl d\'ExtendScript sense resposta: ' + (txt || 'buit'), 'ERROR');
             return null;
         }
         return U._fromMojibake(txt, 'API' + (tag ? ' ' + tag : ''));
@@ -180,11 +131,6 @@
             if (w && w.err === 0) return path;
             log('⚠️ [ER:Fetch] cep.fs.writeFile err=' + (w && w.err));
         } catch (e1) { log('⚠️ [ER:Fetch] cep.fs.writeFile ha fallat: ' + e1.message); }
-        var fs = window.FASTPASS_UI.Utils._nodeFs();
-        if (fs && fs.writeFileSync) {
-            try { fs.writeFileSync(path.replace(/\//g, '\\'), raw, 'utf8'); return path; }
-            catch (e2) { log('⚠️ [ER:Fetch] Node fs.writeFileSync ha fallat: ' + e2.message); }
-        }
         log('❌ [ER:Fetch] No s\'ha pogut desar ' + filename + ' al projecte', 'ERROR');
         return null;
     };

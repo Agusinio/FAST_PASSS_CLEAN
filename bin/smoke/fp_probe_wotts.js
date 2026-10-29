@@ -39,29 +39,31 @@
         var failMode = false;
 
         UI.Utils = UI.Utils || {};
-        var realNodeFs = UI.Utils._nodeFs;
         var realReadFolder = UI.Utils.readFolder;
         var realCep = window.cep;
 
-        UI.Utils._nodeFs = function () {
-            return {
-                promises: {
+        // (2026-10-29) El motor real és `cep.fs`: el manifest no declara
+        // `--enable-nodejs`, així que el que cal simular és el CEP natiu
+        // (`readdir` de noms + `stat` de creationTime/mtime), no `cep_node`.
+        function installCepFs() {
+            window.cep = {
+                fs: {
                     readdir: function () {
                         readdirCalls++;
-                        if (failMode) return Promise.reject(new Error('SMB KO'));
-                        return Promise.resolve(Object.keys(files));
+                        if (failMode) return { err: 9, data: null };
+                        return { err: 0, data: Object.keys(files) };
                     },
                     stat: function (p) {
                         statCalls++;
                         var name = String(p).split(BS).pop();
-                        if (!(name in files)) return Promise.reject(new Error('ENOENT'));
-                        return Promise.resolve({ birthtime: new Date(files[name]), mtimeMs: files[name], size: 1 });
+                        if (!(name in files)) return { err: 2, data: null };
+                        return { err: 0, data: { creationTime: files[name], mtime: files[name], size: 1 } };
                     }
                 }
             };
-        };
+        }
+        installCepFs();
         UI.Utils.readFolder = function () { return Promise.resolve(null); };
-        try { window.cep = undefined; } catch (eCep) { }
 
         function localMs(y, m, d, h) { return new Date(y, m - 1, d, h || 12, 0, 0).getTime(); }
         function reset(dates) {
@@ -95,7 +97,7 @@
                 reset(true);
                 var r1 = await Scan.wottsToday(ctxBase);
                 ok('#WOTT/2 2 wotts del bloc+día (descarta altre día, altre bloc i altre programa)',
-                    r1.ok && r1.found && r1.count === 2 && r1.via === 'node',
+                    r1.ok && r1.found && r1.count === 2 && r1.via === 'cep',
                     'ok=' + r1.ok + ' found=' + r1.found + ' count=' + r1.count + ' via=' + r1.via);
                 ok('#WOTT/3 només data els candidats del bloc (3 TNV_V1, no els 5)',
                     statCalls === 3 && readdirCalls === 1, 'stats=' + statCalls + ' readdir=' + readdirCalls);
@@ -245,8 +247,8 @@
                 /placeEnd = gridDown\(placeEnd - REV_FRAME\);/.test(chySrc));
             var idxW = await readRepo('index.html');
             ok('#WOTT/24 cache-bust al dia (4_Context, flow_chyrons, Scanner)',
-                /4_Context\.js\?v=31/.test(idxW) && /flow_chyrons\.js\?v=85/.test(idxW) &&
-                /Scanner\.js\?v=23/.test(idxW),
+                /4_Context\.js\?v=32/.test(idxW) && /flow_chyrons\.js\?v=86/.test(idxW) &&
+                /Scanner\.js\?v=25/.test(idxW),
                 (idxW.match(/4_Context\.js\?v=\d+/) || '') + ' ' +
                 (idxW.match(/flow_chyrons\.js\?v=\d+/) || '') + ' ' +
                 (idxW.match(/Scanner\.js\?v=\d+/) || ''));
@@ -260,26 +262,10 @@
             files[F_TODAY1] = localMs(2026, 10, 21, 12);
             files[F_TODAY2] = localMs(2026, 10, 21, 13);
             reset(true);
-            var fastFs = UI.Utils._nodeFs;
-            UI.Utils._nodeFs = function () {
-                return {
-                    promises: {
-                        readdir: function () {
-                            readdirCalls++;
-                            return new Promise(function (res) {
-                                setTimeout(function () { res(Object.keys(files)); }, 25);
-                            });
-                        },
-                        stat: function (p) {
-                            statCalls++;
-                            var n = String(p).split(BS).pop();
-                            return Promise.resolve({ birthtime: new Date(files[n] || 0) });
-                        }
-                    }
-                };
-            };
+            // (2026-10-29) El `cep.fs` del stub és SÍNCRON (com el real): encara
+            // així, la sonda en curs es reaprofita (`_probeInflight`) i les tres
+            // crides comparteixen UN sol `readdir`.
             var tri = await Promise.all([Scan.wottsToday(ctxBase), Scan.wottsToday(ctxBase), Scan.wottsToday(ctxBase)]);
-            UI.Utils._nodeFs = fastFs;
             ok('#WOTT/25 tres sondes simultànies comparteixen UNA lectura del NAS (#113)',
                 tri[0].found === true && tri[1].found === true && tri[2].found === true && readdirCalls === 1 && statCalls === 2,
                 'readdir=' + readdirCalls + ' stats=' + statCalls +
@@ -483,7 +469,8 @@
             cepTimes[F_TODAY1] = new Date(2026, 9, 21, 13, 57, 0).getTime();
             cepTimes[F_TODAY2] = new Date(2026, 9, 21, 14, 2, 0).getTime();
             cepTimes[F_AHIR]   = new Date(2026, 9, 21, 2, 31, 0).getTime();   // mtime nocturn → 20/10
-            UI.Utils._nodeFs = function () { return null; };
+            // (2026-10-29) Sonda pel camí REAL de l'equip: `cep.fs` llista i el
+            // seu `stat` només dóna mtime (creationTime=0 en UNC).
             UI.Utils.readFolder = function () { return Promise.resolve(null); };
             try {
                 window.cep = {
@@ -499,22 +486,21 @@
             } catch (eCep2) { }
             reset(true);
             var rNoNode = await Scan.wottsToday(ctxBase);
-            ok('#WOTT/37 sense Node i creationTime=0: data pel mtime (CEP) → 2 wotts del dia',
+            ok('#WOTT/37 creationTime=0: data pel mtime (CEP) → 2 wotts del dia',
                 rNoNode.ok === true && rNoNode.found === true && rNoNode.count === 2 &&
                 rNoNode.via === 'cep' && rNoNode.dated === 3,
                 'ok=' + rNoNode.ok + ' found=' + rNoNode.found + ' count=' + rNoNode.count +
                 ' via=' + rNoNode.via + ' datats=' + rNoNode.dated + '/' + rNoNode.pendingDates);
-            UI.Utils._nodeFs = realNodeFs;
             UI.Utils.readFolder = realReadFolder;
-            try { window.cep = realCep; } catch (eRc2) { }
+            installCepFs();
 
             ok('#WOTT/38 checkContext: escaleta local COMPLETA (FOTO) desbloqueja CREA (#182)',
                 ctxSrc.indexOf('const escReady = !!(escFound && semaforoData.esc.local && semaforoData.esc.ready);') > 0 &&
                 /else if \(escReady\) \{/.test(ctxSrc) &&
                 ctxSrc.indexOf('CREA: escaleta local') > 0);
 
-            ok('#WOTT/39 cache-bust del #182 (4_Context 31 · Scanner 23)',
-                /4_Context\.js\?v=31/.test(idxW) && /Scanner\.js\?v=23/.test(idxW),
+            ok('#WOTT/39 cache-bust del #182 (4_Context 32 · Scanner 25)',
+                /4_Context\.js\?v=32/.test(idxW) && /Scanner\.js\?v=25/.test(idxW),
                 (idxW.match(/4_Context\.js\?v=\d+/) || '') + ' ' + (idxW.match(/Scanner\.js\?v=\d+/) || ''));
 
             // (2026-10-22 · #182) TESTIMONI al log: si el stat d'UNC no dóna cap data,
@@ -564,9 +550,9 @@
             ok('#WOTT/43 retall del clip sencer: 3 → 2 frames i un de 2 frames NO es toca (mai <1)',
                 rC === null && rD !== null && fN(rD) === 2,
                 '2f=' + (rC === null ? 'intacte' : fN(rC)) + ' 3f=' + (rD === null ? 'n/d' : fN(rD)));
-            ok('#WOTT/44 el retall del sencer deixa traça (✂️ CLIP SENCER) i cache-bust flow_chyrons 85',
+            ok('#WOTT/44 el retall del sencer deixa traça (✂️ CLIP SENCER) i cache-bust flow_chyrons 86',
                 chySrc.indexOf('✂️ [') > 0 && chySrc.indexOf('CLIP SENCER') > 0 &&
-                /flow_chyrons\.js\?v=85/.test(idxW),
+                /flow_chyrons\.js\?v=86/.test(idxW),
                 (idxW.match(/flow_chyrons\.js\?v=\d+/) || ''));
 
             // ── O. CONGELAT DEL TITOLET: MAI CAPTURAR SOBRE EL VÍDEO (2026-10-22 · #183) ──
@@ -656,11 +642,11 @@
                     /const LIMIT_PROGRAMA = 400 \* 1024/.test(stillSrc) &&
                     /const pngSospitos = cap\.ok && Number\(cap\.bytes\) > LIMIT_PROGRAMA/.test(stillSrc) &&
                     /if \(cap\.ok && !pngSospitos\)/.test(stillSrc) &&
-                    /flow_chyrons\.js\?v=85/.test(idxW),
+                    /flow_chyrons\.js\?v=86/.test(idxW),
                     'still=' + stillSrc.length +
                     ' zoneAvansCaptura=' + (stillSrc.indexOf('_freezeZone(needZone)') > -1 && stillSrc.indexOf('_freezeZone(needZone)') < stillSrc.indexOf('_capturePng(capBase')) +
                     ' v6=' + (stillSrc.indexOf('const TEMP_TC = await this._v6FreeTC') === -1 ? 'fora' : 'DINS') +
-                    ' v85=' + /flow_chyrons\.js\?v=85/.test(idxW));
+                    ' v86=' + /flow_chyrons\.js\?v=86/.test(idxW));
             } finally {
                 UI.Utils.callJSX = savedCJZ;
             }
@@ -670,6 +656,9 @@
         // Ara: `V` (flotant) i `V03` (zero davant) compten com a bloc, el filtre per
         // data s'aplica a tots, i el TEMA només pot eixir dels wotts DEL BLOC.
         if (Scan && typeof Scan.wotts === 'function') {
+            // (2026-10-29) Ací es prova el camí de RESPATLLER (readFolder/JSX):
+            // sense `cep.fs` disponible, com quan el llistat natiu falla.
+            try { window.cep = undefined; } catch (eCepK) { }
             var fB1 = 'Wott_TNV_V1_10_00.01_TEMA A_111_Tema-Titol_a.00000001.MOV';
             var fB03 = 'Wott_TNV_V03_10_02.00_TEMA C_333_Tema-Titol_c.00000003.MOV';
             var fF1 = 'Wott_TNV_V_00_00.00_LUCYS VERTICALITZACIÓ_660688_XARXES-TEXT_tp_SILVIA ORRIOLS_Aliança Cat_k_00660901.mov';
@@ -729,8 +718,107 @@
                 'Parse=' + !!ParseAPI + ' ids=' + st54.map(function (b) { return b.id + ':' + b.chyrons.length; }).join(',') +
                 ' flotF1=' + (ParseAPI ? ParseAPI._esFlotant(fF1) : '-'));
         }
+            // #WOTT/55 · SEMÀFOR «OCUPAT» (2026-10-29 · BUG #204) · COMPORTAMENT REAL
+            // Què passava: mentres `_fullScan` llegia la carpeta de rètols del NAS
+            // (103 s en fred), el WOT es quedava en `blink` (verd intermitent, que
+            // significa «ja importable»). L'usuari només veia parpadejar un llum
+            // sense cap senyal d'activitat. Ara hi ha un estat `busy` (blau) que es
+            // pinta abans de tocar el NAS i es restaura en acabar.
+            try {
+                var srcCtx2 = await readRepo('js/core/4_Context.js');
+                var iBusy = srcCtx2.indexOf('setSemaforOcupat(id, title) {');
+                var iUpd = srcCtx2.indexOf('updateLights(prog, bloc, theme, active, semaforoData) {');
+                var srcBusy = (iBusy > 0 && iUpd > iBusy)
+                    ? '{' + srcCtx2.substring(iBusy, iUpd) + '}'
+                    : '';
+                var elW = { className: 'light blink', parentElement: { title: 'Tots importats' } };
+                var fakeDoc = { getElementById: function (id) { return id === 'sem-wot' ? elW : null; } };
+                var apiBusy = new Function('document', 'return ' + srcBusy + ';')(fakeDoc);
+                var pintat = apiBusy.setSemaforOcupat('sem-wot', 'Analitzant els rètols del NAS…');
+                var clsBusy = elW.className;
+                var titleBusy = elW.parentElement.title;
+                apiBusy.setSemaforLliure('sem-wot');
+                var cssSrc = await readRepo('style.css');
+                var fmbSrc = await readRepo('js/workflows/flow_mainButton.js');
+                ok('#WOTT/55 semàfor «busy» (blau): es pinta mentres escaneja el NAS i es restaura en acabar',
+                    pintat === true && clsBusy === 'light busy' && /NAS/.test(titleBusy) &&
+                    elW.className === 'light blink' && elW.parentElement.title === 'Tots importats' &&
+                    /else if \(state === 'busy'\) className = "light busy";/.test(srcCtx2) &&
+                    /\.light\.busy\s*\{/.test(cssSrc) &&
+                    /setSemaforOcupat\('sem-wot'/.test(fmbSrc) &&
+                    /setSemaforLliure\('sem-wot'\)/.test(fmbSrc) &&
+                    /_fullScan TOTAL/.test(fmbSrc),
+                    'pintat=' + pintat + ' cls=' + clsBusy + ' torna=' + elW.className +
+                    ' css=' + /\.light\.busy\s*\{/.test(cssSrc));
+            } catch (eBusy) {
+                ok('#WOTT/55 semàfor «busy» (blau) mentres escaneja el NAS', false, String(eBusy && eBusy.message));
+            }
+            // #WOTT/56 · RASTREIG NATIU DEL NAS (2026-10-29 · BUG #204) · COMPORTAMENT REAL
+            // `Scan.wotts` llistava la carpeta de rètols amb `Utils.readFolder` (JSX):
+            // `length`, `modified` i `created` de CADA fitxer i, si `length` venia 0,
+            // obertura del .mov per traure'n `eof`. Amb 1281 fitxers = 103 s en fred
+            // (mesurat 29/10) i el fil del panell bloquejat. Ara es fa tot en JS:
+            // `cep.fs.readdir` (noms) → filtre per nom → `cep.fs.stat` NOMÉS dels
+            // candidats del bloc. Ací es comprova el repartiment de faena i que la
+            // llista resultant és la mateixa que abans.
+            if (Scan && typeof Scan.wotts === 'function' && typeof Scan._listNamesNative === 'function') {
+                var savedCep56 = window.cep;
+                var savedCache56 = Scan._wottDateCache;
+                var savedLoaded56 = Scan._dateCacheLoaded;
+                var savedRf56 = UI.Utils.readFolder;
+                try {
+                    var n1 = 'Wott_TNV_V3_20_00.00_TEMA Z_777_Tema-Titol_z.00000777.MOV';
+                    var n2 = 'Wott_TNV_V03_20_02.00_TEMA Y_778_Tema-Titol_y.00000778.MOV';
+                    var n3 = 'Wott_TNV_V_00_00.00_LUCYS VERTICALITZACIÓ_660688_XARXES-TEXT_tp_TEST_Y_k_00660999.mov';
+                    var n4 = 'Wott_TNV_V1_20_10.00_FORA BLOC_779_Tema-Titol_w.00000779.MOV';
+                    var n5 = 'Wott_TNC_V_00_00.00_ALTRE PROG_780_XARXES-TEXT_tp_X_Y_k_00660980.MOV';
+                    var n6 = 'Wott_TNV_V3_19_00.00_AHIR_781_Tema-Titol_v.00000781.MOV';
+                    var dia = {};
+                    dia[n1] = localMs(2026, 10, 21, 12); dia[n2] = localMs(2026, 10, 21, 12);
+                    dia[n3] = localMs(2026, 10, 21, 12); dia[n4] = localMs(2026, 10, 21, 12);
+                    dia[n5] = localMs(2026, 10, 21, 12); dia[n6] = localMs(2026, 10, 20, 12);
+                    var nReaddir = 0, statNames = [], nReadFolder = 0;
+                    window.cep = {
+                        fs: {
+                            readdir: function () { nReaddir++; return { err: 0, data: [n1, n2, n3, n4, n5, n6] }; },
+                            stat: function (p) {
+                                var nm = String(p).split('\\').pop();
+                                statNames.push(nm);
+                                return { err: 0, data: { creationTime: dia[nm] || 0, mtime: dia[nm] || 0 } };
+                            }
+                        }
+                    };
+                    Scan._wottDateCache = {};       // cap data vinguda de tests anteriors
+                    Scan._dateCacheLoaded = true;   // no rellegir localStorage
+                    Scan._readCache = {};           // ni la caché de 30 s
+                    UI.Utils.readFolder = function () { nReadFolder++; return Promise.resolve(null); };
+                    var w56 = await Scan.wotts({
+                        config: { rutas: { chyrons: FOLDER } }, progData: { archivo: 'TN_VESPRE', wott: 'TNV' },
+                        bloque: 'V3', dateDir: '2026_10_21'
+                    });
+                    ok('#WOTT/56 wotts: 1 readdir natiu + stat NOMÉS dels candidats (0 readFolder/JSX) i mateixa llista',
+                        nReaddir === 1 && nReadFolder === 0 &&
+                        statNames.length === 4 &&
+                        statNames.indexOf(n1) > -1 && statNames.indexOf(n2) > -1 &&
+                        statNames.indexOf(n3) > -1 && statNames.indexOf(n6) > -1 &&
+                        statNames.indexOf(n4) === -1 && statNames.indexOf(n5) === -1 &&
+                        w56.list.length === 3 && w56.list.some(function (x) { return x.name === n1; }) &&
+                        w56.list.some(function (x) { return x.name === n2; }) &&
+                        !w56.list.some(function (x) { return x.name === n6; }),
+                        'readdir=' + nReaddir + ' stat=' + statNames.length + ' readFolder=' + nReadFolder +
+                        ' n=' + w56.list.length);
+                } catch (eN56) {
+                    ok('#WOTT/56 wotts: rastreig natiu del NAS', false, String(eN56 && eN56.message));
+                } finally {
+                    Scan._wottDateCache = savedCache56;
+                    Scan._dateCacheLoaded = savedLoaded56;
+                    Scan._readCache = {};
+                    UI.Utils.readFolder = savedRf56;
+                    try { window.cep = savedCep56; } catch (eR56) { }
+                }
+            }
+
         } finally {
-            UI.Utils._nodeFs = realNodeFs;
             UI.Utils.readFolder = realReadFolder;
             try { window.cep = realCep; } catch (eRc) { }
         }

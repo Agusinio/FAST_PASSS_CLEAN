@@ -53,7 +53,7 @@
         } catch (e3) { }
     })();
     </script>
-    <link rel="stylesheet" href="./style.css?v=61">
+    <link rel="stylesheet" href="./style.css?v=65">
 </head>
 <body>
     <div id="main-content">
@@ -152,7 +152,7 @@
             <div class="section-label" title="Chyrons"><span class="lbl-full">CHYRONS</span><span class="lbl-short">CHY</span></div>
             <div class="section-content">
                  <div class="graphics-strip cols-3 chy-strip">
-                    <button id="btnChyronColocar" class="secondary icon-only" title="Col·loca TOTS els chyrons: Conductor, Titol, Lloc, Nom, Resto i Traducció (verifica primer els marcadors)">🎯</button>
+                    <button id="btnChyronColocar" class="secondary icon-only" title="Un clic = Col·loca TOTS els chyrons: Conductor, Titol, Lloc, Nom, Resto i Traducció (verifica primer els marcadors); en acabar, si la importació ha portat movies de tuit (XARXES / LUCYS VERTICALITZACIÓ) que no han entrat al timeline, els casa AUTOMÀTICAMENT amb els clips on el tuit està cremat (TWITTS: 1 frame per clip, el 35 des de l'in, + OCR). Ctrl+clic = EMERGÈNCIA: obri el navegador natiu a la carpeta de chyrons i col·loca el movie triat cobrint el clip de V1 davall del cabezal. Spec: docs/specs/TWITTS_OCR.md">🎯</button>
                     <button id="btnChyronRepartir" class="secondary icon-only" title="Reparteix les traduccions seleccionades">↔️</button>
                     <button id="btnChyronCas" class="secondary icon-only" title="Tema-Títol / Conductor: ESTAT de la intro del bloc — intro LLARGA (CasA: l'obri el Tema-Títol) ⇄ intro CURTA (CasB: l'obri el Conductor). Un clic alterna l'estat i TORNA A COL·LOCAR l'inici del bloc (retira el Conductor + el Tema-Títol/titulillo i els torna a posar amb l'altre cas, sense moure la resta de la pista); a partir d'allí totes les col·locacions d'eixe inici (🎯 COLOCAR, Conduct…) ixen amb eixe cas. Ctrl+clic = torna a AUTO (auto-detecció per marge).">🔀</button>
                     <button id="btnChyronConductor" class="secondary test-only" title="Col·loca el Conductor (TEST)">COND</button>
@@ -265,6 +265,25 @@
 
     </div>
 
+    <!-- OVERLAY: TWITTS — tria del tuit (Ctrl+clic a la DIANA 🎯, 2026-10-29) -->
+    <div id="twitts-pick">
+        <div class="tw-pick-box">
+            <div class="tw-pick-head">
+                🐦 TWITTS — tria el tuit
+                <span class="tw-pick-day" id="tw-pick-day"></span>
+                <span class="tw-pick-count" id="tw-pick-count"></span>
+            </div>
+            <div class="tw-pick-sub" id="tw-pick-sub"></div>
+            <input type="text" class="tw-pick-q" id="tw-pick-q" autocomplete="off"
+                   spellcheck="false" placeholder="Filtra pel nom (p. ex. «illa», «pedro»)…">
+            <div class="tw-pick-list" id="tw-pick-list"></div>
+            <div class="tw-pick-foot">
+                <button type="button" id="tw-pick-disc">Buscar al disc…</button>
+                <button type="button" id="tw-pick-cancel">Cancel·lar</button>
+            </div>
+        </div>
+    </div>
+
     <!-- OVERLAY: SETUP -->
     <div id="setup-overlay">
         <iframe id="setup-iframe" src="about:blank"></iframe>
@@ -287,10 +306,10 @@
 <script src="js/core/analysis_center.js?v=1"></script>
     <script src="js/core/state.js?v=5"></script>
     <script src="js/inspectors/1_SourceAssets.js?v=5"></script>
-    <script src="js/logic/Scanner.js?v=23"></script>
+    <script src="js/logic/Scanner.js?v=25"></script>
     <script src="js/inspectors/2_App.js?v=5"></script>
     <script src="js/inspectors/3_Session.js?v=5"></script>
-    <script src="js/core/4_Context.js?v=31"></script>
+    <script src="js/core/4_Context.js?v=32"></script>
     <script src="js/logic/3_Project_Logic.js?v=32"></script>
     <script src="js/logic/5_Tracks_Logic.js?v=5"></script>
     <script src="js/logic/6_Clips_Logic.js?v=7"></script>
@@ -305,21 +324,26 @@
     <script src="js/logic/18_Portada_Window.js?v=1"></script>
     <!-- (2026-10-21 · RESET) Esborrat ABSOLUT i verificat de la carpeta del bloc (entrada per entrada, reintents) -->
     <script src="js/logic/19_Fs_Wipe.js?v=2"></script>
+    <!-- (2026-10-28 · ZONA GRISA) Detecció del peu gris del grafisme (Paleta 🎨 → V2 + màscara a V3) -->
+    <script src="js/logic/21_GrafZonaGris_Logic.js?v=2"></script>
+<!-- (2026-10-29 · TWITTS) OCR d'1 frame per clip → movie del tuit (spec docs/specs/TWITTS_OCR.md) -->
+<script src="js/logic/22_TwittsOcr_Logic.js?v=6"></script>
     <script src="js/core/assembly_context.js?v=10"></script>
     <script src="js/workflows/flow_mp4.js?v=7"></script>
     <script src="js/workflows/flow_markers.js?v=67"></script>
-    <script src="js/workflows/flow_chyrons.js?v=85"></script>
+    <script src="js/workflows/flow_chyrons.js?v=86"></script>
     <script src="js/workflows/flow_graphics.js?v=26"></script>
-    <script src="js/workflows/flow_mainButton.js?v=38"></script>
+    <script src="js/workflows/flow_mainButton.js?v=39"></script>
     <script src="js/workflows/flow_cut.js?v=19"></script>
     <script src="js/workflows/flow_srt.js?v=19"></script>
-    <script src="js/workflows/flow_render.js?v=37"></script>
+    <script src="js/workflows/flow_render.js?v=38"></script>
     <script src="js/workflows/flow_KF.js?v=10"></script>
     <script src="js/workflows/flow_config.js?v=12"></script>
     <script src="js/workflows/flow_assembly.js?v=8"></script>
-<script src="js/workflows/flow_mapa.js?v=25"></script>
+<script src="js/workflows/flow_mapa.js?v=31"></script>
+<script src="js/workflows/flow_twitts.js?v=7"></script>
     <script src="js/core/project_registry.js?v=5"></script>
-    <script src="js/editor/srt_editor.js?v=86"></script>
-    <script src="js/main.js?v=93"></script>
+    <script src="js/editor/srt_editor.js?v=87"></script>
+    <script src="js/main.js?v=97"></script>
 </body>
 </html>

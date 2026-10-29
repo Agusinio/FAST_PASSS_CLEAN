@@ -17,7 +17,7 @@
  *
  * Mètodes:
  *   - _escapePath(p)
- *   - _listProjectFiles(dir)   llistat natiu (Node → CEP → ExtendScript)
+ *   - _listProjectFiles(dir)   llistat natiu (CEP → ExtendScript)
  *   - extractBlockIdFromFilename(name)
  *   - findInFolder(dir, prog)  JSON local més recent i vàlid
  *   - ensureLocalCopy(ctx)     escaleta del directori del projecte (només local)
@@ -72,69 +72,6 @@
         return s;
     };
 
-    /** _nodeFs: `fs` de Node (cascada cep_node → require). Cachejat al mòdul. */
-    ER._nodeFs = function () {
-        if (this.__nodeFs !== undefined) return this.__nodeFs;
-        var fs = null;
-        try {
-            if (window.cep_node && typeof window.cep_node.require === 'function') {
-                fs = window.cep_node.require('fs');
-            }
-        } catch (eN1) { fs = null; }
-        if (!fs) {
-            try {
-                if (typeof require === 'function') fs = require('fs');
-            } catch (eN2) { fs = null; }
-        }
-        this.__nodeFs = fs || null;
-        return this.__nodeFs;
-    };
-
-    /**
-     * _listViaNode: readdir + stat ASÍNCRON (Node). No bloqueja ni el motor de
-     * Premiere ni el fil de la UI. Només fitxers .json (és tot el que cal).
-     * @param {string} p - directori
-     * @returns {Promise<{raw:string, count:number}>|null} null si Node no hi és
-     */
-    ER._listViaNode = function (p) {
-        var fs = this._nodeFs();
-        if (!fs || typeof fs.readdir !== 'function') return null;
-        var dir = _stripTrail(p);
-        return new Promise(function (resolve) {
-            fs.readdir(dir, function (err, names) {
-                if (err || !names) { resolve(null); return; }
-                var entries = [];
-                for (var i = 0; i < names.length; i++) {
-                    var nm = String(names[i] || '');
-                    if (!nm) continue;
-                    if (nm.toLowerCase().indexOf('.json') !== nm.length - 5) continue;
-                    entries.push(nm);
-                }
-                if (entries.length === 0) { resolve({ raw: '[]', count: 0 }); return; }
-                var out = [];
-                var pending = entries.length;
-                entries.forEach(function (name) {
-                    var full = dir + BS + name;
-                    var push = function (isDir, modified, created, size) {
-                        out.push({
-                            name: name, path: full, isDir: !!isDir,
-                            modified: modified || 0, created: created || 0, size: size || 0
-                        });
-                        if (--pending === 0) resolve({ raw: JSON.stringify(out), count: out.length });
-                    };
-                    if (typeof fs.stat !== 'function') { push(false, 0, 0, 0); return; }
-                    fs.stat(full, function (eS, st) {
-                        if (eS || !st) { push(false, 0, 0, 0); return; }
-                        var isDir = (typeof st.isDirectory === 'function') ? st.isDirectory() : false;
-                        var mod = st.mtime ? new Date(st.mtime).getTime() : 0;
-                        var cre = st.birthtime ? new Date(st.birthtime).getTime() : 0;
-                        push(isDir, mod, cre, st.size);
-                    });
-                });
-            });
-        });
-    };
-
     /**
      * _listViaCep: readdir natiu de CEP (síncron, sense obrir el motor).
      * @param {string} p - directori
@@ -168,31 +105,20 @@
 
     /**
      * _listProjectFiles: Llistat dels .json del directori del projecte.
-     * Cascada Node (asíncron) → CEP natiu → ExtendScript (últim recurs).
+     * Cascada CEP natiu → ExtendScript (últim recurs).
+     * (2026-10-29) Fora la via Node (`_listViaNode`): el manifest no declara
+     * `--enable-nodejs` i `cep.fs.readdir` fa la mateixa consulta nativa.
      * @param {string} p - directori
      * @returns {Promise<Array<{name,path,isDir,modified,created,size}>|null>}
      */
     ER._listProjectFiles = async function (p) {
         if (!p) return null;
-        // 1) Node: asíncron, fora del motor i del fil de la UI.
-        var pNod = this._listViaNode(p);
-        if (pNod) {
-            try {
-                var nod = await pNod;
-                if (nod && nod.raw) {
-                    var arrN = JSON.parse(nod.raw);
-                    if (arrN && arrN.length) return arrN;
-                }
-            } catch (eN) {
-                log('⚠️ [ER:IO] readdir Node KO (' + p + '): ' + (eN && eN.message));
-            }
-        }
-        // 2) CEP natiu (síncron, sense stats per fitxer).
+        // 1) CEP natiu (síncron, sense stats per fitxer).
         try {
             var arrC = this._listViaCep(p);
             if (arrC && arrC.length) return arrC;
         } catch (eC) { }
-        // 3) JSX — últim recurs (bloqueja el motor: només si Node i CEP fallen).
+        // 2) JSX — últim recurs (bloqueja el motor: només si CEP falla).
         try {
             var raw = await callJSX("IO.listFolder('" + this._escapePath(p) + "')");
             if (!raw || raw === '[]' || raw.indexOf('ERR') === 0) return null;
@@ -228,7 +154,7 @@
     ER.findInFolder = async function (folderPath, programArchivo) {
         if (!folderPath) return null;
         try {
-            // (2026-10-21) Llistat NATIU (Node → CEP → JSX): abans era sempre
+            // (2026-10-21) Llistat NATIU (CEP → JSX): abans era sempre
             // IO.listFolder, una obertura del motor per cada checkContext.
             var files = await this._listProjectFiles(folderPath);
             if (!files || files.length === 0) return null;

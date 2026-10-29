@@ -66,6 +66,15 @@ $files = @(
     # (2026-10-21 - F2) Resolutor de rutes PUR (tokens, fusio del Profile.json,
     # rutes derivades). El prova la prova 21-rutas.
     (Join-Path $repo 'js\logic\20_Rutas_Logic.js'),
+    # (2026-10-28 · ZONA GRISA) Paleta 🎨: deteccio del peu gris del grafisme
+    # (frame a 3 s, franja inferior #D9D9D9 ±25, cache per ruta+mida+CREACIO).
+    # El prova la prova 25-graf-zona-gris (fp_probe_grafzona.js).
+    (Join-Path $repo 'js\logic\21_GrafZonaGris_Logic.js'),
+# (2026-10-29 - TWITTS) OCR d'1 frame per clip del timeline (el 35 des de l'in):
+# pistes @handle + nom del titular, filtre per data i cache de la tria manual.
+# El prova la prova 26-twitts (fp_probe_twitts.js). Spec: docs/specs/TWITTS_OCR.md
+(Join-Path $repo 'js\logic\22_TwittsOcr_Logic.js'),
+(Join-Path $repo 'js\workflows\flow_twitts.js'),
     # (2026-10-21 · F3) SUBTITOLS: parser PUR dels buits i de la fusio amb els
     # sintetics (findGaps / mergeSyntheticGaps / removeEntryAt). El prova la
     # prova 24-srt (fp_probe_srt.js).
@@ -105,6 +114,11 @@ $files = @(
     # (Ctrl+clic a CARREGAR → S2) i reompliment de buits (🐛 parser pur + guardes
     # de l'editor, del flux, de la UI i de la config).
     (Resolve-Harness 'fp_probe_srt.js'),
+    # (2026-10-28 · ZONA GRISA) Paleta 🎨: grafisme amb peu gris → V2 + mascara a V3.
+    (Resolve-Harness 'fp_probe_grafzona.js'),
+# (2026-10-29 - TWITTS) Tuites cremats: pistes @handle/titular, filtre per data,
+# cache de la tria manual i col·locacio cobrint el clip de V1.
+(Resolve-Harness 'fp_probe_twitts.js'),
     (Resolve-Harness 'fp_smoke_runner.js')
 )
 

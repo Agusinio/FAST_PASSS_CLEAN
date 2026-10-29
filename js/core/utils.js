@@ -27,14 +27,14 @@
         // ── 🚀 FASE 2 (2026-09-16): I/O fora del camí calent ───────────────
         // Mesura Fase 0: 206 escriptures / 2411 ms / 35 MB reescrits en un barrido
         // de 4,5 s (54% del temps) — writeFile de CEP és SÍNCRON i va a un share
-        // de xarxa. Ara s'acumulen línies i s'escriuen amb Node fs.appendFile
-        // ASÍNCRON com a molt 1 cop cada _ioFlushMs; ERROR/forceLog forcen flush.
+        // de xarxa. Ara s'acumulen línies i s'escriuen amb UNA escriptura de
+        // `cep.fs.writeFile` com a molt 1 cop cada _ioFlushMs; ERROR/forceLog
+        // forcen flush. (2026-10-29) Fora la via Node: el manifest no declara
+        // `--enable-nodejs`, així que `_nodeFs`/`_nodeReq` eren codi mort.
         _ioFlushMs: 400,
         _logPending: [],
         _auditPending: [],
         _ioTimer: 0,
-        _fsMod: undefined,
-        _fsKind: '',
         // Filtre de logs per tema: string amb keywords separades per coma o null (desactivat).
         // Quan està actiu, log() NOMÉS escriu els missatges que continguin alguna keyword.
         // ⚠️ TEMPORAL (2026-09-04): DESACTIVAT per poder veure els logs del botó Main
@@ -128,49 +128,17 @@
             return res;
         },
 
-        // ── 🚀 FASE 2: escriptura diferida i asíncrona ─────────────────────
-        /**
-         * _nodeFs: objecte `fs` de Node si està disponible.
-         * Ordre de detecció (cascada, per cobrir totes les configuracions de CEP):
-         *  1. window.cep_node.require  → API oficial CEP 10+ (NO cal --mixed-context)
-         *  2. require (global)         → context mixt / CEP 9
-         *  3. window.cep.node.require  → variants antigues
-         * Es guarda també _fsKind per poder diagnosticar-ho des del informe PERF.
-         */
-        _nodeFs: function() {
-            if (this._fsMod !== undefined) return this._fsMod;
-            var fs = null, kind = 'cep.fs(sync)';
-            try { if (window.cep_node && window.cep_node.require) { fs = window.cep_node.require('fs'); if (fs) kind = 'cep_node'; } } catch(e1) { fs = null; }
-            if (!fs) { try { if (typeof require === 'function') { fs = require('fs'); if (fs) kind = 'require'; } } catch(e2) { fs = null; } }
-            if (!fs) { try { if (window.cep && window.cep.node && window.cep.node.require) { fs = window.cep.node.require('fs'); if (fs) kind = 'cep.node'; } } catch(e3) { fs = null; } }
-            if (!fs) { fs = null; }
-            this._fsMod = fs;
-            this._fsKind = kind;
-            return fs;
-        },
-
-        /**
-         * _nodeReq: requereix un mòdul de Node (`fs`, `child_process`…) amb la
-         * mateixa cascada que _nodeFs. Retorna null si Node no està disponible.
-         * @param {string} name - nom del mòdul ("child_process")
-         * @returns {Object|null}
-         */
-        _nodeReq: function(name) {
-            if (!name) return null;
-            this._nodeMods = this._nodeMods || {};
-            if (this._nodeMods[name] !== undefined) return this._nodeMods[name];
-            var mod = null;
-            try { if (window.cep_node && window.cep_node.require) { mod = window.cep_node.require(name); } } catch (e1) { mod = null; }
-            if (!mod) { try { if (typeof require === 'function') { mod = require(name); } } catch (e2) { mod = null; } }
-            if (!mod) { try { if (window.cep && window.cep.node && window.cep.node.require) { mod = window.cep.node.require(name); } } catch (e3) { mod = null; } }
-            this._nodeMods[name] = mod || null;
-            return this._nodeMods[name];
-        },
+        // ── 🚀 FASE 2: escriptura diferida ─────────────────────────────────
+        // (2026-10-29) Ací vivien `_nodeFs()` i `_nodeReq()` (mòduls `fs` i
+        // `child_process` de Node). El manifest d'esta extensió NO declara
+        // `--enable-nodejs`: dins de CEP no hi ha ni `require` ni `cep_node`,
+        // així que les branques sempre tornaven null. Tota l'I/O va per
+        // `cep.fs` (natiu) o pel pont JSX.
 
         /**
          * _writeNow: escriu les línies acumulades a disc.
-         * - Amb Node fs  → appendFile ASÍNCRON (no bloqueja el fil de la UI).
-         * - Sense Node   → writeFile de CEP (síncron), però només 1 cop per flush.
+         * Reescriu el buffer SENCER amb `window.cep.fs.writeFile` (síncron),
+         * però només 1 cop per flush en comptes de 1 cop per missatge.
          * @param {string} path
          * @param {string[]} pending - línies noves (es buiden aquí)
          * @param {string} kind - 'log' | 'audit'
@@ -178,25 +146,8 @@
         _writeNow: function(path, pending, kind) {
             if (!path || !pending || pending.length === 0) return;
             var lines = pending.splice(0, pending.length);
-            var data = lines.join('\n') + '\n';
-            var fs = this._nodeFs();
-            if (fs && fs.appendFile) {
-                var self = this;
-                var t0 = this._perfOn ? ((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()) : 0;
-                var bytes = data.length;
-                try {
-                    fs.appendFile(path, data, function (err) {
-                        if (!self._perfOn) return;
-                        var t1 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
-                        var s = self._ioStats;
-                        s.n++; s.asyncN++; s.ms += (t1 - t0); s.bytes += bytes;
-                        if (kind === 'audit') { s.auditN++; } else { s.logN++; }
-                    });
-                    return;
-                } catch(eAp) { /* cau al fallback síncron */ }
-            }
-            // Sense Node fs: reescriure el buffer SENCER (comportament clàssic de CEP),
-            // però ara només 1 cop per flush en comptes de 1 cop per missatge.
+            // Reescriure el buffer SENCER (comportament clàssic de CEP),
+            // però només 1 cop per flush en comptes de 1 cop per missatge.
             var full = (kind === 'audit') ? this._auditBuffer : this._logBuffer;
             this._timedWrite(path, full.join('\n') + '\n', kind);
         },
@@ -255,13 +206,10 @@
         _ioSchedule: function() {
             if (this._ioTimer) return;
             var self = this;
-            // Sense Node el writeFile de CEP és SÍNCRON i reescriu el fitxer SENCER:
-            // el cost per escriptura creix amb la mida del log → s'allarga l'interval
+            // El writeFile de CEP és SÍNCRON i reescriu el fitxer SENCER: el cost
+            // per escriptura creix amb la mida del log → s'allarga l'interval
             // perquè el temps bloquejant per segon es mantingui petit i constant.
-            var ms = this._ioFlushMs;
-            if (!this._nodeFs()) {
-                ms = 400 + Math.min(3000, this._logBuffer.length * 2);
-            }
+            var ms = 400 + Math.min(3000, this._logBuffer.length * 2);
             this._ioTimer = setTimeout(function () {
                 self._ioTimer = 0;
                 self._ioFlushNow();
@@ -1214,17 +1162,16 @@
         /**
          * _wipeFs: tria el MOTOR d'esborrat disponible.
          *
-         * (2026-10-22 · #180) En aquest equip el panell NO te Node.js: el manifest
-         * no declara `--enable-nodejs`, aixi que `_nodeFs()` retorna null i
-         * `wipeFolder` responia SENSE-NODE → el RESET no esborrava RES (només ho
-         * escrivia al log) i s'aturava abans de recrear el projecte. `cep.fs` és
-         * natiu de CEP i sempre hi és, aixi que s'usa com a motor alternatiu amb
-         * la MATEIXA semantica (readdirSync/lstatSync/unlinkSync/rmdirSync).
-         * @returns {{fs:Object|null, kind:string}} kind: 'node' | 'cep.fs' | 'cap'
+         * (2026-10-22 · #180) En este equip el panell NO te Node.js: el manifest
+         * no declara `--enable-nodejs`, aixi que `wipeFolder` responia SENSE-NODE
+         * → el RESET no esborrava RES (només ho escrivia al log) i s'aturava
+         * abans de recrear el projecte. `cep.fs` és natiu de CEP i sempre hi és,
+         * aixi que s'usa com a motor amb la MATEIXA semantica
+         * (readdirSync/lstatSync/unlinkSync/rmdirSync).
+         * (2026-10-29) Fora la branca Node: només existeix el motor `cep.fs`.
+         * @returns {{fs:Object|null, kind:string}} kind: 'cep.fs' | 'cap'
          */
         _wipeFs: function() {
-            var fs = this._nodeFs();
-            if (fs) return { fs: fs, kind: 'node' };
             var mod = this._fsWipe();
             var alt = (mod && typeof mod.cepFs === 'function') ? mod.cepFs() : null;
             if (alt) return { fs: alt, kind: 'cep.fs' };
@@ -1401,7 +1348,7 @@
             });
             rep.via = pick.kind;
             if (rep.reason === 'SENSE-NODE') {
-                this.log("❌ [FS] Cap motor d'esborrat (Node fs ni cep.fs): no es pot esborrar " + rep.path, 'ERROR');
+                this.log("❌ [FS] Cap motor d'esborrat (cep.fs): no es pot esborrar " + rep.path, 'ERROR');
                 return rep;
             }
             if (rep.ok) {
@@ -1424,8 +1371,8 @@
          * (2026-10-07, revisat 2026-10-21) Usa el modul FsWipe: esborrat entrada
          * per entrada, tolerant errors. Per a operacions que NO poden deixar
          * restes cal usar `wipeFolder` (verifica i informa).
-         * (2026-10-22 · #180) Motor: Node `fs` si hi és i, si no, l'adaptador
-         * `cep.fs` — abans, sense Node, ací no s'esborrava res.
+         * (2026-10-22 · #180 · 2026-10-29) Motor ÚNIC: l'adaptador `cep.fs`
+         * (natiu de CEP) — abans, sense Node, ací no s'esborrava res.
          * No llança: retorna false si queda alguna resta (lock, xarxa...).
          * @param {string} path - Ruta completa de la carpeta a esborrar
          * @returns {boolean} true si s'ha esborrat (o ja no existia)

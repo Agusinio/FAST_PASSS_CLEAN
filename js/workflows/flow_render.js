@@ -87,7 +87,9 @@
     }
 
     /**
-     * readFileBytes: Bytes reals d'un fitxer (cep.fs i, si cal, Node `fs`).
+     * readFileBytes: Bytes reals d'un fitxer amb `cep.fs.readFile` (natiu).
+     * (2026-10-29) Fora el respatller per `fs` de Node: el manifest no declara
+     * `--enable-nodejs`, així que `_nodeFs()` sempre tornava null.
      * Retorna un array indexable de bytes, o null si no es pot llegir.
      * @param {string} path - Ruta (UNC o local) del fitxer
      * @returns {Uint8Array|Array|null}
@@ -103,10 +105,6 @@
                 if (d.buffer) return new Uint8Array(d.buffer);
             }
         } catch (eCep) { }
-        const fs = getUtils()._nodeFs();
-        if (fs && fs.readFileSync) {
-            try { return new Uint8Array(fs.readFileSync(normP)); } catch (eNode) { }
-        }
         return null;
     }
 
@@ -234,19 +232,23 @@
     }
 
     /**
-     * pngSize: Mides (px) d'un PNG llegint la capçalera IHDR amb el `fs` de Node.
+     * pngSize: Mides (px) d'un PNG llegint la capçalera IHDR amb `cep.fs`.
      * Només s'usa per al log de diagnòstic de la portada.
+     * (2026-10-29) Fora el `fs` de Node: els bytes venen de `readFileBytes`
+     * (natiu de CEP). Si eixa lectura falla, retorna null i el log ix sense
+     * les mides: mai no bloqueja el flux.
      * @returns {{w:number,h:number}|null}
      */
     function pngSize(path) {
         try {
-            const fs = getUtils()._nodeFs();
-            if (!fs || !fs.readFileSync) return null;
-            const buf = fs.readFileSync(String(path).replace(/\//g, "\\"));
-            if (!buf || buf.length < 24) return null;
-            if (buf[0] !== 0x89 || buf[1] !== 0x50 || buf[2] !== 0x4E || buf[3] !== 0x47) return null;
-            const w = buf.readUInt32BE(16);
-            const h = buf.readUInt32BE(20);
+            const b = readFileBytes(path);
+            if (!b || b.length < 24) return null;
+            if (b[0] !== 0x89 || b[1] !== 0x50 || b[2] !== 0x4E || b[3] !== 0x47) return null;
+            const be32 = function (i) {
+                return ((b[i] << 24) | (b[i + 1] << 16) | (b[i + 2] << 8) | b[i + 3]) >>> 0;
+            };
+            const w = be32(16);
+            const h = be32(20);
             return (w > 0 && h > 0) ? { w: w, h: h } : null;
         } catch (e) { return null; }
     }
@@ -460,27 +462,19 @@
         },
 
         /**
-         * _copyFile: Copia un fitxer (src → dest) amb el millor mecanisme disponible.
+         * _copyFile: Copia un fitxer (src → dest) amb l'àtom JSX `IO.copyFile`.
          *
-         * (2026-10-09) Els MP4 de sortida fan centenars de MB: Node `fs.copyFileSync`
-         * (capa Brain, mateix criteri que `utils.deleteFolder`) és l'única via que no
-         * travessa el pont ExtendScript ni carrega el fitxer a la memòria ES3. Si Node
-         * no està disponible, es recorre a l'àtom JSX existent `IO.copyFile` (File.copy).
+         * (2026-10-09 · revisat 2026-10-29) Els MP4 de sortida fan centenars de
+         * MB, així que la còpia NO passa el fitxer pel pont (que seria carregar-lo
+         * en memòria ES3): es delega en `File.copy` del motor amb una sola crida.
+         * Abans es provava `fs.copyFileSync` de Node, però el manifest no declara
+         * `--enable-nodejs` i eixa branca no s'executava mai.
          *
          * @param {string} src - Ruta completa d'origen
          * @param {string} dest - Ruta completa de destí (amb nom de fitxer)
          * @returns {Promise<string>} "OK" o "ERR:..."
          */
         _copyFile: async function (src, dest) {
-            const fs = getUtils()._nodeFs();
-            if (fs && typeof fs.copyFileSync === 'function') {
-                try {
-                    fs.copyFileSync(String(src).replace(/\//g, '\\'), String(dest).replace(/\//g, '\\'));
-                    return 'OK';
-                } catch (eN) {
-                    log(`⚠️ [Render] Node copyFileSync ha fallat (${eN.message}) → provo via JSX`, 'WARN');
-                }
-            }
             try {
                 return await callJSX(`IO.copyFile('${getUtils().escape(src)}', '${getUtils().escape(dest)}')`);
             } catch (eJ) { return 'ERR: ' + eJ.message; }
@@ -660,6 +654,103 @@
             return res;
         },
 
+        // ═══════════════════════════════════════════════════════════════════
+        // ENQUADRAMENT EXTRA: ANCHOR POINT + ROTATION — BUG #200 (28/10/2026)
+        // ═══════════════════════════════════════════════════════════════════
+        /**
+         * _framingJsx: cos del script ExtendScript (una sola còpia per a llegir i
+         * escriure) que troba el component Motion d'un clip de vídeo i les seues
+         * propietats d'ENQUADRAMENT (Anchor Point i Rotation).
+         *
+         * PER QUÈ AIXÍ I NO `Anim.get/setMotionValues`: eixos dos àtoms (`jsx/`)
+         * només exposen posició, escala, escala X i retalls. `jsx/` està congelat
+         * per orde d'usuari, però `callJSX()` accepta scripts inline (mateix patró
+         * que `srt_editor.js::_clearSubtitleTracks`) → no cal tocar el pont.
+         *
+         * Les propietats es busquen PEL NOM (matchName/displayName, anglés i
+         * castellà) i, si el motor no les reporta, es cauen als ÍNDEXS estàndard
+         * del component Motion: 0=Position, 1=Scale, 2=Scale Width, 3=Uniform
+         * Scale, 4=Rotation, 5=Anchor Point, 6=Antialias, 7..10=Crops.
+         * ⚠️ `_getMotionProps` (jsx/7_KF.jsx) documenta «2=Anchor Point»: és un
+         * error heretat, l'índex 2 és Scale Width. Ací es fa servir el 5.
+         *
+         * @param {number} trackIdx - pista (1-based)
+         * @param {number} clipIdx - índex del clip (0-based)
+         * @param {string|null} writeJson - null = només llegir; si no, JSON
+         *   `{"anchor":[x,y],"rotation":r}` amb el que s'ha d'escriure.
+         * @returns {string} JSON `{anchor, rotation}` (+ `written` si escriu) o `ERR:…`
+         */
+        _framingJsx: function (trackIdx, clipIdx, writeJson) {
+            var t = parseInt(trackIdx, 10) - 1;
+            var c = parseInt(clipIdx, 10);
+            return "(function(){try{"
+                + "var seq=($.global.FASTPASS&&FASTPASS.Context)?FASTPASS.Context.getWorkSequence():app.project.activeSequence;"
+                + "if(!seq)return 'ERR_NO_SEQ';"
+                + "var tr=seq.videoTracks[" + t + "];"
+                + "if(!tr||!tr.clips)return 'ERR_NO_TRACK';"
+                + "var cl=tr.clips[" + c + "];"
+                + "if(!cl)return 'ERR_NO_CLIP';"
+                + "var cs=cl.components,n=(cs&&(cs.numItems||cs.length))||0,mo=null;"
+                + "for(var i=0;i<n;i++){var k=cs[i];if(!k)continue;"
+                + "var mn=String(k.matchName||'').toUpperCase(),dn=String(k.displayName||'').toUpperCase();"
+                + "if(mn.indexOf('MOTION')!==-1||dn==='MOTION'||dn.indexOf('MOVIMIENTO')!==-1||dn.indexOf('MOVIMENT')!==-1){mo=k;break;}}"
+                + "if(!mo||!mo.properties)return 'ERR_NO_MOTION';"
+                + "var ps=mo.properties,pn=(ps.numItems||ps.length)||0;"
+                + "var find=function(names,fb){for(var a=0;a<pn;a++){var p=ps[a];if(!p)continue;"
+                + "var x=String(p.matchName||'').toUpperCase(),y=String(p.displayName||'').toUpperCase();"
+                + "for(var j=0;j<names.length;j++){if(x.indexOf(names[j])!==-1||y.indexOf(names[j])!==-1)return p;}}"
+                + "return (fb!=null)?(ps[fb]||null):null;};"
+                + "var rd=function(p){try{if(!p)return null;var v=p.getValue();"
+                + "if(v&&typeof v==='object'&&v.length){var o=[];for(var q=0;q<v.length;q++)o.push(Math.round(v[q]*10000)/10000);return o;}"
+                + "return (v==null)?null:Math.round(v*10000)/10000;}catch(e){return null;}};"
+                + "var pA=find(['ANCHOR','ANCLAJE','ANCORATGE'],5);"
+                + "var pR=find(['ROTAT','ROTACI'],4);"
+                + (writeJson
+                    ? "var w=" + writeJson + ",done=[];"
+                    + "if(w&&w.anchor&&w.anchor.length>=2&&pA){try{pA.setValue([w.anchor[0],w.anchor[1]]);done.push('anchor');}catch(eA){}}"
+                    + "if(w&&w.rotation!=null&&pR){try{pR.setValue(w.rotation);done.push('rotation');}catch(eR){}}"
+                    + "try{cl.setSelected(false,false);cl.setSelected(true,true);}catch(eS){}"
+                    + "return JSON.stringify({written:done,anchor:rd(pA),rotation:rd(pR)});"
+                    : "return JSON.stringify({anchor:rd(pA),rotation:rd(pR)});")
+                + "}catch(e){return 'ERR: '+e.message;}})()";
+        },
+
+        /**
+         * _framingProbe: llig Anchor Point i Rotation d'un clip.
+         * @returns {Promise<{anchor:(number[]|null), rotation:(number|null), error?:string}>}
+         */
+        _framingProbe: async function (trackIdx, clipIdx) {
+            try {
+                const raw = await callJSX(this._framingJsx(trackIdx, clipIdx, null));
+                if (!raw || String(raw).indexOf('ERR') === 0) {
+                    return { anchor: null, rotation: null, error: String(raw) };
+                }
+                const o = JSON.parse(raw);
+                return { anchor: o.anchor || null, rotation: (o.rotation == null ? null : o.rotation) };
+            } catch (e) {
+                return { anchor: null, rotation: null, error: e.message };
+            }
+        },
+
+        /**
+         * _framingApply: escriu Anchor Point i Rotation en un clip (BUG #200).
+         * Només s'envien les claus que hi ha: la resta no es toca.
+         * @returns {Promise<string>} `{written:[…],anchor:[…],rotation:r}` o `ERR:…`
+         */
+        _framingApply: async function (trackIdx, clipIdx, vals) {
+            try {
+                const w = {};
+                if (vals && vals.anchor && vals.anchor.length >= 2) {
+                    w.anchor = [Number(vals.anchor[0]), Number(vals.anchor[1])];
+                }
+                if (vals && vals.rotation != null && isFinite(Number(vals.rotation))) {
+                    w.rotation = Number(vals.rotation);
+                }
+                if (!w.anchor && w.rotation == null) return '{"written":[]}';
+                return String(await callJSX(this._framingJsx(trackIdx, clipIdx, JSON.stringify(w))));
+            } catch (e) { return 'ERR: ' + e.message; }
+        },
+
         /**
          * runPortada: Exporta el PNG de la PORTADA (PNG TEMA-TITOL) compost amb el
          * frame del clip de V1 que hi ha sota el cabezal.
@@ -766,6 +857,10 @@
             try {
                 const config = FASTPASS_UI.Config.get();
                 const state = FASTPASS_UI.State;
+                // (2026-10-28 · BUG #200) Els àtoms d'enquadrament extra viuen al
+                // mateix mòdul: es guarden en una constant per a poder-los cridar
+                // des de dins de qualsevol bloc sense dependre de `this`.
+                const RF = FASTPASS_UI.Workflows.Render || null;
 
                 // ── 1. CTI → clip de V1 que el conté ─────────────────────────────
                 cti = parseFloat((await callJSX('Timeline.get()')) || "0");
@@ -829,6 +924,27 @@
                     }
                 } catch (eMv) {
                     log(`⚠️ [Portada] Llegint el Motion de l'original: ${eMv.message}`, "WARN");
+                }
+
+                // ── 1c. ENQUADRAMENT EXTRA DE L'ORIGINAL (BUG #200) ──────────────
+                // `Anim.getMotionValues` NO exposa Anchor Point ni Rotation (jsx/
+                // congelat), però `_framingProbe` els llig amb un script inline
+                // sobre el MATEIX pont. Es llig ARA, amb el CTI encara al cabezal,
+                // i s'aplica a la còpia a 4b.
+                let srcFraming = null;
+                try {
+                    if (RF && typeof RF._framingProbe === 'function') {
+                        srcFraming = await RF._framingProbe(T_V1, src.index);
+                        if (srcFraming && !srcFraming.error) {
+                            log(`🎯 [Portada] Enquadrament de l'ORIGINAL V${T_V1}[${src.index}]: anchor=${JSON.stringify(srcFraming.anchor)} rotation=${srcFraming.rotation}`);
+                        } else {
+                            log(`⚠️ [Portada] Enquadrament extra no llegible (${srcFraming ? srcFraming.error : 'sense mòdul'}) → la còpia quedarà amb el punt d'ancoratge per defecte`, "WARN");
+                            srcFraming = null;
+                        }
+                    }
+                } catch (eFr) {
+                    log(`⚠️ [Portada] Llegint l'enquadrament extra: ${eFr.message}`, "WARN");
+                    srcFraming = null;
                 }
 
                 // ── 2. PORTADA: la PRIMERA del tema ──────────────────────────────
@@ -962,8 +1078,14 @@
                 // compon sobre un frame que no és el de la timeline. Només s'envien les
                 // claus que el JSX ha pogut llegir (les null s'ometen i no es toquen).
                 if (srcMotion) {
+                    // 🐞 BUG #200 (2026-10-27 / 28): la còpia ha de quedar amb TOTES les
+                    // propietats d'ENCUADRAMENT de l'original. Ací van les que SÍ exposa
+                    // `Anim.getMotionValues` (posició, escala, escala X i retalls);
+                    // l'Anchor Point i la Rotation s'apliquen just davall amb
+                    // `_framingApply` (script inline, BUG #200).
                     const vals = {};
-                    ['position', 'scale', 'scaleWidth', 'cropLeft', 'cropTop', 'cropRight', 'cropBottom']
+                    ['position', 'scale', 'scaleWidth',
+                        'cropLeft', 'cropTop', 'cropRight', 'cropBottom']
                         .forEach(function (k) {
                             if (srcMotion[k] !== null && srcMotion[k] !== undefined) vals[k] = srcMotion[k];
                         });
@@ -979,6 +1101,28 @@
                     }
                 } else {
                     log("⚠️ [Portada] Sense Motion de l'original → còpia amb el Motion per defecte", "WARN");
+                }
+
+                // ── 4c. ANCHOR POINT + ROTATION DE LA CÒPIA (BUG #200, 28/10/2026) ──
+                // Es VA DESPRÉS de `setMotionValues` perquè eixe àtom toca Scale
+                // Width/Uniform Scale i ha de quedar-se amb l'última paraula en
+                // eixes propietats (l'Anchor Point és una altra propietat i no es
+                // trepitgen). Si l'original i la còpia ja coincidixen (el cas
+                // normal: punt d'ancoratge per defecte), no canvia res.
+                if (srcFraming && (srcFraming.anchor || srcFraming.rotation != null)) {
+                    const wRes = await RF._framingApply(T_V1, idxCopy, srcFraming);
+                    log(`🎯 [Portada] Enquadrament extra heretat → còpia V${T_V1}[${idxCopy}]: ${wRes}`);
+                    const chk = await RF._framingProbe(T_V1, idxCopy);
+                    const dA = (srcFraming.anchor && chk.anchor)
+                        ? Math.max(Math.abs(srcFraming.anchor[0] - chk.anchor[0]), Math.abs(srcFraming.anchor[1] - chk.anchor[1])) : 0;
+                    const dR = (srcFraming.rotation != null && chk.rotation != null)
+                        ? Math.abs(srcFraming.rotation - chk.rotation) : 0;
+                    log(`   · comprovació anchor=${JSON.stringify(chk.anchor)} rotation=${chk.rotation} (Δanchor=${dA} Δrot=${dR})`);
+                    if (dA > 0.001 || dR > 0.01) {
+                        log(`⚠️ [Portada] El motor no ha acceptat l'enquadrament extra (Δanchor=${dA}, Δrot=${dR}) → el PNG pot eixir desencaixat`, "WARN");
+                    }
+                } else {
+                    log("🧪 [Portada] Enquadrament extra: l'original no té Anchor Point/Rotation llegibles → res a heretar (BUG #200)");
                 }
 
                 // ── 5. PORTADA DAMUNT de la còpia, CENTRADA ──────────────────────
@@ -1339,7 +1483,32 @@
             }
         },
 
+        /**
+         * _resetSrtForClose: BUIDA l'editor de subtítols (BUG #198).
+         * Al tancar el projecte, el panell ha de quedar NET: si hi ha un `.srt`
+         * carregat, la taula, els marcadors, el visor de vídeo i el mateix
+         * contenidor de l'editor han de desaparèixer (sense projecte obert no té
+         * sentit poder seguir editant subtítols). És idempotent: es pot cridar
+         * abans i després de tancar.
+         * @param {string} when - etiqueta per al log ('abans' / 'després')
+         * @returns {boolean} cert si l'editor s'ha pogut buidar
+         */
+        _resetSrtForClose: function (when) {
+            try {
+                if (window.SrtEditor && typeof window.SrtEditor.reset === 'function') {
+                    window.SrtEditor.reset();
+                    log('🧹 [CLOSE] Editor de subtítols buidat (' + when + ' del tancament)');
+                    return true;
+                }
+                log("⚠️ [CLOSE] SrtEditor no disponible (" + when + ") · no es pot buidar l'editor", 'WARN');
+            } catch (e) {
+                log("⚠️ [CLOSE] Error buidant l'editor de subtítols (" + when + '): ' + e.message, 'WARN');
+            }
+            return false;
+        },
+
         runClose: async function () {
+            const R = FASTPASS_UI.Workflows.Render || this;
             getUtils().log("🔘 Botó CLOSE clicat", "INFO");
             getUtils().log("🔍 isJsxReady: " + getUtils().isJsxReady, "DEBUG");
             if (!getUtils().isJsxReady) {
@@ -1347,20 +1516,22 @@
                 return;
             }
             getUtils().log("🔒 Tancant projecte...", "INFO");
+            let res = null;
             try {
-                await FASTPASS_UI.Logic.Project.close();
-                getUtils().status("Projecte tancat i lock eliminat", "exito");
+                res = await FASTPASS_UI.Logic.Project.close();
             } catch (e) {
                 getUtils().handleError(e, "RenderClose");
             }
-            // Netejar l'editor de subtítols (timeline + waveform) en tancar el projecte:
-            // sense projecte obert no té sentit que es puguin seguir editant.
-            try {
-                if (window.SrtEditor && typeof window.SrtEditor.reset === 'function') {
-                    window.SrtEditor.reset();
-                }
-            } catch (e2) {
-                getUtils().log("⚠️ Error netejant editor SRT: " + e2.message, "WARN");
+            // (2026-10-28 · BUG #198) L'editor de subtítols es buida SEMPRE que
+            // l'operador demana «validar» (desa i tanca): si el tancament ha anat
+            // bé, perquè no hi ha projecte; si ha fallat, perquè el panell no pot
+            // quedar-se amb el `.srt` d'un projecte que ja no és viu. Es fa amb
+            // `_resetSrtForClose` perquè és idempotent i deixa traça al log.
+            R._resetSrtForClose('després');
+            if (res && res.ok) {
+                getUtils().status("Projecte tancat i lock eliminat · editor de subtítols buidat", "exito");
+            } else if (res && res.error) {
+                getUtils().status("Projecte tancat amb avisos: " + res.error, "warn");
             }
         }
     };

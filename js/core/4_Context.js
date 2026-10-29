@@ -316,7 +316,7 @@
 
         /**
          * _wottsToday (2026-10-21): sonda de wotts del BLOC d'avui, sense mai llançar.
-         * Delega a Scan.wottsToday (Node `birthtime` + caché per nom). `ok:false`
+         * Delega a Scan.wottsToday (`cep.fs.stat` + caché per nom). `ok:false`
          * vol dir que no s'ha pogut llegir → NO s'ha de canviar d'estat.
          *
          * ⏱️ (2026-10-22 · #113) ESPERA LIMITADA. Amb el NAS FRED la primera
@@ -557,8 +557,8 @@
                     // L'usuari fa FOTO per generar l'escaleta on demand: a partir d'eixe
                     // moment HI HA escaleta per al bloc (és el que el CREAR farà servir)
                     // i el botó ha de poder passar a CREA sense esperar cap sonda de
-                    // wotts. Abans només desbloquejaven els wotts i, en equips sense
-                    // Node (`birthtime` no disponible), la sonda podia dir 0 per sempre:
+                    // wotts. Abans només desbloquejaven els wotts i, quan la sonda
+                    // no podia datar els fitxers (sense `birthtime`), podia dir 0 per sempre:
                     // el botó es quedava a MASSA D'HORA amb l'escaleta ja baixada.
                     const escReady = !!(escFound && semaforoData.esc.local && semaforoData.esc.ready);
                     if (wots.found) {
@@ -757,7 +757,7 @@
                         }
                         // SRT: sense projecte obert no hi ha pista on mirar.
                         semaforoData.srt = 'off';
-                        // (2026-10-21) wottsToday (Node `birthtime` + caché) en comptes de
+                        // (2026-10-21) wottsToday (`cep.fs.stat` + caché) en comptes de
                         // Scanner.wotts: este llegia 963 fitxers per JSX (~4 s) cada repintat.
                         if (typeof this._wottsToday === 'function') {
                             const wN = await this._wottsToday(ctx);
@@ -807,6 +807,45 @@
             }
         },
 
+        /**
+         * setSemaforOcupat(id, title) · 2026-10-29 · BUG #204
+         * Pinta UN semàfor com a «treballant» (blau lategant) mentres dura una
+         * operació llarga sobre el NAS. Fins ara, mentres `_fullScan` llegia la
+         * carpeta de rètols (103 s en fred), el WOT es quedava en VERD INTERMITENT
+         * —que vol dir «ja importable»— i l'usuari només veia un parpadeig sense
+         * cap senyal d'activitat. Un repintat real (`updateLights`) sempre guanya:
+         * `set` esborra el registre de l'id i no es restaura res vell.
+         */
+        setSemaforOcupat(id, title) {
+            try {
+                const el = document.getElementById(id);
+                if (!el) return false;
+                if (!this._semaforoBusy) this._semaforoBusy = {};
+                if (!this._semaforoBusy[id]) {
+                    this._semaforoBusy[id] = {
+                        cls: el.className,
+                        title: el.parentElement ? el.parentElement.title : ''
+                    };
+                }
+                el.className = 'light busy';
+                if (el.parentElement && title) el.parentElement.title = title;
+                return true;
+            } catch (eSO) { return false; }
+        },
+        /** Restaura el semàfor que va quedar «ocupat» (si ningú no l'ha repintat). */
+        setSemaforLliure(id) {
+            try {
+                const el = document.getElementById(id);
+                if (!el) return false;
+                const prev = this._semaforoBusy ? this._semaforoBusy[id] : null;
+                if (!prev) return false;
+                el.className = prev.cls || 'light off';
+                if (el.parentElement) el.parentElement.title = prev.title || '';
+                delete this._semaforoBusy[id];
+                return true;
+            } catch (eSL) { return false; }
+        },
+
         updateLights(prog, bloc, theme, active, semaforoData) {
             const set = (id, state, title) => {
                 const el = document.getElementById(id);
@@ -817,9 +856,12 @@
                     else if (state === 'error') className = "light error";
                     else if (state === true || state === 'on') className = "light ready";
                     else if (state === 'blink') className = "light blink"; 
+                    else if (state === 'busy') className = "light busy";
                     
                     el.className = className;
                     if (title) el.parentElement.title = title;
+                    // Este id ja té estat real: el «busy» anterior queda obsolet.
+                    if (this._semaforoBusy && this._semaforoBusy[id]) { delete this._semaforoBusy[id]; }
                 }
             };
 

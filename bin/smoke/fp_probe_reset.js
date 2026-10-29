@@ -26,9 +26,10 @@
  *
  * AMPLIACIO 2026-10-22 (#180) - EL RESET NO TANCAVA NI ESBORRAVA
  *   Dos forats que el #175 no podia vore (li passaven un `fs` simulat):
- *   1) al panell NO hi ha Node (`_nodeFs()` -> null) i el motor no tenia
- *      alternativa → `SENSE-NODE` i cap fitxer esborrat. Nova part 4b: el MATEIX
- *      arbre, pero amb `cep.fs` simulat, per a `FsWipe.cepFs()`.
+ *   1) al panell NO hi ha Node (el manifest no declara `--enable-nodejs`) i el
+ *      motor no tenia alternativa → `SENSE-NODE` i cap fitxer esborrat. Nova
+ *      part 4b: el MATEIX arbre, pero amb `cep.fs` simulat, per a
+ *      `FsWipe.cepFs()`.
  *   2) `runReset` calculava la carpeta amb `_targetDateDir()` (sempre HOY) i el
  *      projecte obert podia ser d'una altra data → no el tancava i el `.prproj`
  *      seguia bloquejat. Nova part 5b/6: `_setupContext()` + carpeta del projecte
@@ -199,10 +200,10 @@
                 'ok=' + r6.ok + ' * reason=' + r6.reason + ' * arbre=' + Object.keys(d6.tree).length);
 
             // ── 4b) MOTOR ALTERNATIU `cep.fs` (2026-10-22 · #180) ──────────────
-            // En aquest equip el panell NO te Node (`_nodeFs()` -> null: el
-            // manifest no porta --enable-nodejs): el RESET responia SENSE-NODE i
-            // NO esborrava RES. `cepFs()` fa la mateixa faena amb `cep.fs` (natiu
-            // de CEP, sempre present), amb els comptadors i el codi d'error iguals.
+            // En aquest equip el panell NO te Node (el manifest no porta
+            // --enable-nodejs): el RESET responia SENSE-NODE i NO esborrava RES.
+            // `cepFs()` fa la mateixa faena amb `cep.fs` (natiu de CEP, l'UNIC
+            // motor: `Utils` ja no te cap via Node), amb comptadors i errors iguals.
             ok('#180/1 `FsWipe.cepFs()` existeix (motor alternatiu sense Node)',
                 typeof FW.cepFs === 'function', 'tipus=' + typeof FW.cepFs);
 
@@ -373,7 +374,6 @@
                 var out = {
                     log: function () { },
                     delay: function () { return Promise.resolve(); },
-                    _nodeFs: function () { return null; },
                     _fsWipe: function () { return FW; }
                 };
                 for (var i = 0; i < names.length; i++) {
@@ -405,9 +405,9 @@
             var idx = await readRepo('index.html');
             ok('#175/20 index.html carrega `19_Fs_Wipe.js` i ha pujat els cache-busts',
                 /19_Fs_Wipe\.js\?v=2/.test(idx) && /utils\.js\?v=28/.test(idx) &&
-                /flow_mainButton\.js\?v=38/.test(idx) && /srt_editor\.js\?v=86/.test(idx),
+                /flow_mainButton\.js\?v=39/.test(idx) && /srt_editor\.js\?v=87/.test(idx),
                 'modul=' + /19_Fs_Wipe\.js\?v=2/.test(idx) + ' * utils=' + /utils\.js\?v=28/.test(idx) +
-                ' * main=' + /flow_mainButton\.js\?v=38/.test(idx) + ' * srt=' + /srt_editor\.js\?v=86/.test(idx));
+                ' * main=' + /flow_mainButton\.js\?v=39/.test(idx) + ' * srt=' + /srt_editor\.js\?v=87/.test(idx));
 
             // ── 5b) GUARDES DEL #180 (RESET: tancar el projecte i esborrar de debò) ──
             ok('#180/7 utils: `_wipeFs` tria motor i `wipeFolder`/`deleteFolder` l usen',
@@ -610,6 +610,170 @@
                 UI.Utils.callJSX = origCall;
                 UI.Utils.delay = origDelay;
             }
+            // ── 6) BUGs #196 / #198 / #200 (28/10/2026) ────────────────────────
+            // #198: el botó verd (VALIDAR) ha de deixar el panell NET: l'editor de
+            // subtítols es buida en tancar i el reset no pot quedar-se a mitjan
+            // camí si un bloc llança.
+            var rd = noComments(await readRepo('js/workflows/flow_render.js'));
+            ok('#198 flow_render: `_resetSrtForClose` existix i crida `SrtEditor.reset`',
+                /_resetSrtForClose: function/.test(rd) && /SrtEditor\.reset\(\)/.test(rd),
+                'metode=' + /_resetSrtForClose: function/.test(rd));
+            var iRC = rd.indexOf('runClose: async function');
+            var rcBody = (iRC >= 0) ? rd.slice(iRC, iRC + 2600) : '';
+            ok('#198 runClose buida l\'editor DESPRÉS del tancament',
+                /_resetSrtForClose\('després'\)/.test(rcBody),
+                'crida=' + /_resetSrtForClose\('després'\)/.test(rcBody));
+            ok('#198 srt_editor.reset és a prova d\'excepcions (blocs `pas(...)`)',
+                /function pas\(fn\)/.test(ed) && (ed.match(/pas\(function/g) || []).length >= 8,
+                'pas=' + (ed.match(/pas\(function/g) || []).length);
+
+            // #200: Anchor Point + Rotation de la còpia de la Portada. Es llig i
+            // s'escriu amb un script inline del pont: `jsx/` queda INTACTE.
+            ok('#200 flow_render: `_framingJsx`/`_framingProbe`/`_framingApply`',
+                /_framingJsx: function/.test(rd) && /_framingProbe: async function/.test(rd) &&
+                /_framingApply: async function/.test(rd),
+                'jsx=' + /_framingJsx: function/.test(rd) + ' * probe=' + /_framingProbe: async function/.test(rd) +
+                ' * apply=' + /_framingApply: async function/.test(rd));
+            ok('#200 el script inline busca ANCHOR (índex 5) i ROTAT/ROTACI (índex 4)',
+                /\['ANCHOR','ANCLAJE','ANCORATGE'\],5/.test(rd) && /\['ROTAT','ROTACI'\],4/.test(rd),
+                'anchor=' + /\['ANCHOR','ANCLAJE','ANCORATGE'\],5/.test(rd) +
+                ' * rot=' + /\['ROTAT','ROTACI'\],4/.test(rd));
+            ok('#200 la còpia hereta el framing DESPRÉS de `setMotionValues`',
+                rd.indexOf('_framingApply(T_V1, idxCopy') > rd.indexOf('Anim.setMotionValues(${T_V1}, ${idxCopy}'),
+                'i=' + rd.indexOf('_framingApply(T_V1, idxCopy') + ' * set=' + rd.indexOf('Anim.setMotionValues(${T_V1}, ${idxCopy}'));
+
+            // Prova REAL del script inline del #200: s'extrau `_framingJsx` del
+            // repo, es genera el codi per a un clip SIMULAT i s'executa amb V8.
+            // No toca Premiere: comprova el nom/índex de les propietats i el JSON.
+            try {
+                var iFJ = rd.indexOf('_framingJsx: function');
+                var fjSrc = (iFJ >= 0) ? rd.slice(iFJ, rd.indexOf('\n        },', iFJ) + 11) : '';
+                var FJ = eval('({' + fjSrc + '})')._framingJsx;
+                var mkProp = function (mn, dn, val) {
+                    return {
+                        matchName: mn, displayName: dn, _v: val,
+                        getValue: function () { return this._v; },
+                        setValue: function (v) { this._v = v; }
+                    };
+                };
+                var mkClip = function (props) {
+                    var motion = { matchName: 'AE.ADBE Motion', displayName: 'Motion', properties: props };
+                    var comps = { numItems: 1 };
+                    comps[0] = motion;
+                    return { components: comps, setSelected: function () { } };
+                };
+                var mkRun = function (clip) {
+                    var seq = { videoTracks: [{ clips: [clip] }] };
+                    var appS = { project: { activeSequence: seq } };
+                    var fpS = { Context: { getWorkSequence: function () { return seq; } } };
+                    var $S = { global: { FASTPASS: fpS } };
+                    return function (js) {
+                        return new Function('app', '$', 'FASTPASS', 'return ' + js)(appS, $S, fpS);
+                    };
+                };
+                var propsNom = [
+                    mkProp('ADBE Video Position', 'Position', [0.5, 0.5]),
+                    mkProp('ADBE Video Scale', 'Scale', 100),
+                    mkProp('ADBE Video Scale Width', 'Scale Width', 100),
+                    mkProp('ADBE Video Uniform Scale', 'Uniform Scale', true),
+                    mkProp('ADBE Video Rotate', 'Rotation', 12.5),
+                    mkProp('ADBE Video Anchor Point', 'Anchor Point', [0.25, 0.75])
+                ];
+                var runNom = mkRun(mkClip(propsNom));
+                var resLlegeix = JSON.parse(runNom(FJ(1, 0, null)));
+                ok('#200 _framingJsx LLIG anchor [0.25,0.75] i rotation 12,5 PEL NOM',
+                    !!resLlegeix.anchor && resLlegeix.anchor[0] === 0.25 && resLlegeix.anchor[1] === 0.75 &&
+                    resLlegeix.rotation === 12.5, JSON.stringify(resLlegeix));
+                var resEscriu = JSON.parse(runNom(FJ(1, 0, JSON.stringify({ anchor: [0.1, 0.2], rotation: 0 }))));
+                ok('#200 _framingJsx ESCRIU anchor/rotation a la còpia',
+                    resEscriu.written && resEscriu.written.join(',') === 'anchor,rotation' &&
+                    propsNom[5]._v[0] === 0.1 && propsNom[5]._v[1] === 0.2 && propsNom[4]._v === 0,
+                    JSON.stringify(resEscriu));
+                // Fallback per ÍNDEX quan el motor NO dóna noms recognoscibles:
+                // 5 = Anchor Point i 4 = Rotation (el «2 = Anchor» del comentari és fals).
+                var propsIdx = [
+                    mkProp('X0', 'X0', [0, 0]), mkProp('X1', 'X1', 100), mkProp('X2', 'X2', 100),
+                    mkProp('X3', 'X3', true), mkProp('X4', 'X4', 33), mkProp('X5', 'X5', [0.4, 0.6])
+                ];
+                var resIdx = JSON.parse(mkRun(mkClip(propsIdx))(FJ(1, 0, null)));
+                ok('#200 fallback per ÍNDEX: anchor = props[5] i rotation = props[4]',
+                    !!resIdx.anchor && resIdx.anchor[0] === 0.4 && resIdx.rotation === 33,
+                    JSON.stringify(resIdx));
+            } catch (eFJ) {
+                ok('#200 la prova del script inline no ha llancat cap excepcio', false, eFJ && eFJ.message);
+            }
+
+            // #196: el navegador de GRÀFICS ha d'arrancar a la carpeta del dia.
+            var mp = noComments(await readRepo('js/workflows/flow_mapa.js'));
+            ok('#196 flow_mapa: `_folderExists` (IO.exists) + `_dialogFolder`',
+                /_folderExists: async function/.test(mp) && /_dialogFolder: async function/.test(mp) &&
+                /IO\.exists/.test(mp),
+                'exists=' + /_folderExists: async function/.test(mp) + ' * dialog=' + /_dialogFolder: async function/.test(mp));
+            var iAsk = mp.indexOf('_askFiles: async function');
+            var askBody = (iAsk >= 0) ? mp.slice(iAsk, iAsk + 1400) : '';
+            ok('#196 `_askFiles` obri amb `_dialogFolder` i no amb la ruta crua',
+                /_dialogFolder\(folder\)/.test(askBody) && /showOpenDialog\([^)]*startDir/.test(askBody),
+                'dialog=' + /_dialogFolder\(folder\)/.test(askBody) + ' * startDir=' + /showOpenDialog\([^)]*startDir/.test(askBody));
+
+            // #196 · CAUSA ARREL (28/10, evidència FASTPASS.log 27/10 14:53:35): la data
+            // de treball caia al RELLOTGE quan el poll desancorava `projectDateDir`, així
+            // que de nit obria la carpeta del DIA SEGÜENT. Ara mana el .prproj obert.
+            ok('#196 `_resolveDateDir` és async i consulta la data REAL del .prproj',
+                /_resolveDateDir: async function/.test(mp) && /_resolveProjectDateDir/.test(mp),
+                'async=' + /_resolveDateDir: async function/.test(mp) + ' * ctx=' + /_resolveProjectDateDir/.test(mp));
+            ok('#196 els dos cridadors esperen `_resolveDateDir` amb await',
+                (mp.match(/await this\._resolveDateDir\(\)/g) || []).length >= 2,
+                'await=' + (mp.match(/await this\._resolveDateDir\(\)/g) || []).length);
+
+            // Prova de COMPORTAMENT: s'extrau el mètode del repo i s'executa amb
+            // escenaris simulats (el cas real era «projecte del 27 + State a null»).
+            try {
+                var iRD = mp.indexOf('_resolveDateDir: async function');
+                var rdSrc = '';
+                if (iRD >= 0) {
+                    var iBrace = mp.indexOf('{', iRD), depth = 0, end = -1;
+                    for (var k = iBrace; k < mp.length; k++) {
+                        var chk = mp.charAt(k);
+                        if (chk === '{') depth++;
+                        else if (chk === '}') { depth--; if (depth === 0) { end = k; break; } }
+                    }
+                    if (end > iBrace) rdSrc = mp.slice(iRD, end + 1);
+                }
+                var mkResolve = function (ctxDate, state) {
+                    var winS = {
+                        FASTPASS_UI: {
+                            State: state,
+                            Core: { Context: { _resolveProjectDateDir: async function () { return ctxDate; } } },
+                            SessionManifest: { _cache: (state && state.__cache) ? state.__cache : {} }
+                        }
+                    };
+                    var noLog = function () { };
+                    return new Function('L', 'window',
+                        'return (function(){ var o = {' + rdSrc + '}; return o._resolveDateDir; })();')(noLog, winS);
+                };
+                var dA = await mkResolve('2026_10_27', { projectDateDir: null, workTarget: null })();
+                ok('#196 amb el .prproj del 27 obert la data és 2026_10_27 (mai el rellotge)',
+                    dA === '2026_10_27', 'got=' + dA);
+                var dB = await mkResolve(null, { projectDateDir: '2026_10_26', workTarget: null })();
+                ok('#196 sense .prproj mana State.projectDateDir', dB === '2026_10_26', 'got=' + dB);
+                var dC = await mkResolve(null, {
+                    projectDateDir: null, workTarget: null,
+                    __cache: { 'x/2020_01_01/a.json': 1, 'x/2020_01_02/b.json': 1 }
+                })();
+                ok('#196 el manifest AMBIGU (2 dies) no s\'usa per a la data',
+                    dC !== '2020_01_01' && dC !== '2020_01_02', 'got=' + dC);
+                var dD = await mkResolve(null, { projectDateDir: null, workTarget: null, __cache: { 'x/2020_01_03/a.json': 1 } })();
+                ok('#196 el manifest amb UN sol dia sí que s\'usa', dD === '2020_01_03', 'got=' + dD);
+            } catch (eRD) {
+                ok('#196 la prova de comportament de `_resolveDateDir` no ha llancat', false, eRD && eRD.message);
+            }
+
+            ok('cache-busts 28/10: flow_render 38 · flow_mapa 31 · srt_editor 87',
+                /flow_render\.js\?v=38/.test(idx) && /flow_mapa\.js\?v=31/.test(idx) &&
+                /srt_editor\.js\?v=87/.test(idx),
+                'render=' + /flow_render\.js\?v=38/.test(idx) + ' * mapa=' + /flow_mapa\.js\?v=31/.test(idx) +
+                ' * srt=' + /srt_editor\.js\?v=87/.test(idx));
+
         } catch (e) {
             ok('#175 la prova no ha llancat cap excepcio', false, e && (e.message + ' | ' + e.stack));
         }

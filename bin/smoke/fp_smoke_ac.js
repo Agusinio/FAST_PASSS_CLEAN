@@ -792,6 +792,84 @@ window.__runTests = async function () {
         Math.abs(revStartT - (zoneEndT - exitDur6)) < 1e-9 &&
         CH._coberturaFreezeEnd(zoneEndT, revStartT, true) === revStartT);
 
+    // ── 16. BUG #197 (2026-10-27): el grafisme ocupa la SEUA DURADA SENCERA ──────
+    // Un tall de V1 dins del mateix ítem encongia l'Out del rètol (el final s'agafava
+    // de `ci.end`). Regla d'usuari: el gràfic s'inserix SENCER; només el MARCADOR
+    // SEGÜENT el pot retallar. La regla viu a `_limiteOutChyron` (pura, sense JSX).
+    ph('16-bug197-durada-sencera');
+    ok('#197: _limiteOutChyron existeix (regla pura)', typeof CH._limiteOutChyron === 'function');
+    var L197 = function (p) { return CH._limiteOutChyron(p); };
+    // (a) Cas del bug: wott de 5 s que entra a 10 s i el clip de V1 acaba a 12 s,
+    //     sense marcador següent → el final ha de ser 15 s (sencer), NO 12 s.
+    var r197a = L197({ durOwn: 5, placeStart: 10, mkTime: 8, marcadorSeg: null, clipEnd: 12 });
+    ok('#197: sense marcador següent mana la DURADA del wott (15 s), no el tall de V1 (12 s)',
+        r197a.lim === 15, 'lim=' + r197a.lim + ' · ' + r197a.why);
+    ok('#197: el motiu del límit ho diu al log (durada pròpia)',
+        /durada pròpia/.test(r197a.why), r197a.why);
+    // (b) El marcador següent SÍ que mana (frontera de l'ítem, regla 21/09).
+    var r197b = L197({ durOwn: 5, placeStart: 10, mkTime: 8, marcadorSeg: 14, clipEnd: 12 });
+    ok('#197: el MARCADOR SEGÜENT segueix manant (14 s) encara que V1 talle a 12 s',
+        r197b.lim === 14, 'lim=' + r197b.lim + ' · ' + r197b.why);
+    // (c) Sense durada resolta es manté el comportament antic (final del clip).
+    var r197c = L197({ durOwn: 0, placeStart: 10, mkTime: 8, marcadorSeg: null, clipEnd: 12 });
+    ok('#197: sense durada resolta (dur=0) es queda el final del clip (12 s)',
+        r197c.lim === 12, 'lim=' + r197c.lim + ' · ' + r197c.why);
+    var r197d = L197({ durOwn: null, placeStart: 10, mkTime: null, marcadorSeg: null, clipEnd: null });
+    ok('#197: sense cap dada → sense límit (el cridador conserva la durada del mèdia)',
+        r197d.lim === null, String(r197d.lim));
+    // (d) Un «marcador» que no és posterior (nm ≤ mkTime+0.1) s'ignora: torna a manar la durada.
+    var r197e = L197({ durOwn: 4, placeStart: 20, mkTime: 20, marcadorSeg: 20, clipEnd: 21 });
+    ok('#197: el marcador del MATEIX ítem no compta com a «següent» → durada pròpia (24 s)',
+        r197e.lim === 24, 'lim=' + r197e.lim + ' · ' + r197e.why);
+    // (e) El FINAL calculat pel cridador cobreix tota la durada amb un tall de V1 pel mig.
+    var st197 = 30, du197 = 3.2;
+    var lim197 = L197({ durOwn: du197, placeStart: st197, mkTime: 28, marcadorSeg: null, clipEnd: st197 + 1.0 }).lim;
+    ok('#197: el FINAL cobreix la durada sencera (30 → 33.2 s) amb un tall de V1 a 31 s',
+        Math.abs(Math.min(lim197, st197 + du197) - 33.2) < 1e-9,
+        'end=' + Math.min(lim197, st197 + du197));
+
+    // ── 16b. BUG #201 (2026-10-28): rètols de text ACOTATS pel clip de referència ──
+    // Decisió d'usuari (28/10): s'acoten NOM-CÀRREC i les connexions (Enviat / Directe /
+    // Presencial); LLOC/DATA i FIRMA NO (mantenen la durada pròpia de #197). I el
+    // decalatge de 10 frames només s'aplica al PRIMER clip del timeline.
+    ph('16b-bug201-retol-acotat');
+    ok('#201: _esRetolAcotat i _esPrimerClipTimeline existeixen (polítiques pures)',
+        typeof CH._esRetolAcotat === 'function' && typeof CH._esPrimerClipTimeline === 'function');
+    var ACOT = function (n, r) { return CH._esRetolAcotat({ name: n, rol: r }); };
+    ok('#201: el NOM-CÀRREC s\'acota pel rol NOMCARREC',
+        ACOT('Wott_TNC_v2_02_00.01_dona pas X_631037_Nomcarrec_Josep Fores_director.mov', 'NOMCARREC') === true);
+    ok('#201: el NOM-CÀRREC es reconeix pel nom encara que el rol vinga buit',
+        ACOT('WOTT_TNC_NC_Miguel Domingo.mov', '') === true);
+    ok('#201: l\'ENVIAT s\'acota', ACOT('Wott_TNC_v2_04_ENVIAT_Laura Catalan.mov', 'ENVIAT') === true);
+    ok('#201: el DIRECTE/PRESENCIAL s\'acota',
+        ACOT('Wott_TNV_v1_04i_Directe_PRESENCIAL_Vimbodi i P..mov', 'DIRECTE') === true);
+    ok('#201: LLOC/DATA NO s\'acota (conserva la durada pròpia)',
+        ACOT('Wott_TNC_v2_02_Lloc_Barcelona.mov', 'LLOCDATA') === false);
+    ok('#201: FIRMA NO s\'acota (conserva la durada pròpia)',
+        ACOT('Wott_TNC_v2_02_Firma_Alcaldessa.mov', 'FIRMA') === false);
+    ok('#201: una TRADUCCIÓ amb «Només» al text NO s\'acota',
+        ACOT('Wott_TNC_v3_14_644349_TRADUCCIO [2-3] Només n\'existei un.mov', 'TRADUCCIO') === false);
+    // El límit: amb `acotat:true` mana el FINAL del clip encara que el wott dure més
+    // (cas real: Josep Forés 65,04 → 68,28 s, amb un wott estimat de 8 s).
+    var r201a = CH._limiteOutChyron({ durOwn: 8, placeStart: 65.04, mkTime: 60, marcadorSeg: null, clipEnd: 68.28, acotat: true });
+    ok('#201: rètol acotat → final del CLIP de referència (68,28 s), no la durada del wott (73,04 s)',
+        Math.abs(r201a.lim - 68.28) < 1e-9 && /clip de referència/.test(r201a.why),
+        'lim=' + r201a.lim + ' · ' + r201a.why);
+    var r201b = CH._limiteOutChyron({ durOwn: 8, placeStart: 65.04, mkTime: 60, marcadorSeg: null, clipEnd: 68.28 });
+    ok('#201: sense acotar (Lloc/Firma/grafisme) es manté #197 → durada pròpia (73,04 s)',
+        Math.abs(r201b.lim - 73.04) < 1e-9, 'lim=' + r201b.lim);
+    var r201c = CH._limiteOutChyron({ durOwn: 8, placeStart: 65.04, mkTime: 60, marcadorSeg: 66, clipEnd: 68.28, acotat: true });
+    ok('#201: el MARCADOR SEGÜENT seguix manant per damunt del clip', r201c.lim === 66, 'lim=' + r201c.lim);
+    // Decalatge d'entrada: només al primer clip del timeline.
+    var c1 = { name: 'A', start: 0, end: 10 }, c2 = { name: 'B', start: 10, end: 20 };
+    ok('#201: decalatge de 10 frames NOMÉS al primer clip del timeline',
+        CH._esPrimerClipTimeline([c1, c2], c1) === true && CH._esPrimerClipTimeline([c1, c2], c2) === false,
+        'primer=' + CH._esPrimerClipTimeline([c1, c2], c1) + ' segon=' + CH._esPrimerClipTimeline([c1, c2], c2));
+    ok('#201: un sol clip que arrenca a 0 també compta com a «primer clip»',
+        CH._esPrimerClipTimeline([c1], c1) === true);
+    ok('#201: un clip que arrenca més enllà de 0 (o sense llista) no rep decalatge',
+        CH._esPrimerClipTimeline([c2], c2) === false && CH._esPrimerClipTimeline(null, c2) === false);
+
     // ── Guarda de regressió: cap WARN/ERROR silenciós dels mòduls ─────────
     var warns = window.__LOG.filter(function (l) { return /WARN|ERROR/.test(l); });
     ok('cap WARN/ERROR dels mòduls al llarg del flux', warns.length === 0, warns.slice(0, 3).join(' | '));

@@ -1,30 +1,42 @@
 # BUGS — catàleg únic
 
-> **Únic lloc** on viu l'estat dels bugs. Actualitzat: **2026-10-27**.
+> **Únic lloc** on viu l'estat dels bugs. Actualitzat: **2026-10-29**.
 > Les funcionalitats i implementacions viuen a [`FEATURES.md`](FEATURES.md).
 >
 > El text llarg de cada bug resolt (símptoma complet, causa arrel, solució i fitxers tocats)
 > es va retirar el 27/10 per orde de l'usuari: queda a l'historial de git
 > (`git log -p ce18186 -- docs/BUGS_FIXED.md`). Ací hi ha el resum operatiu de tots.
 
-**Resum**: 10 pendents · 128 resolts/tancats.
+**Resum**: 19 pendents · 134 resolts/tancats.
 
 ---
 
-## 1 · PENDENTS (10)
+## 1 · PENDENTS (19)
 
 | Nº | Estat | Què passa |
 |---|---|---|
+| **#208** | **Corregit** (29/10) · pendent de validar en viu · 100% JS (`jsx/` intacte) | **La finestra del Ctrl+clic a la DIANA no ensenyava els tuit que s'exporten A MÀ**: al clip del tuit de Salvador Illa la llista no tenia ni `wott x salvador illa.00666202.mov` ni `wott x salvador illa1.00666204.mov` (tampoc `wott_v3 x pedro.00666211.mov` pel clip de Pedro Sánchez), tot i ser a `rutas.chyrons`. Causa arrel: `esXarxes` (D13) només reconeix el rol `XARXES`, la marca `LUCYS` o el bloc a seques `_V_00_00.00_`; la família `wott x <nom>` no encaixa enlloc → `_dayMovies` la descartava **abans de datar-la** i la llista eixia sense eixos fitxers. SOLUCIÓ (D22/D23 de [`docs/specs/TWITTS_OCR.md`](docs/specs/TWITTS_OCR.md)): (a) `esXarxes` accepta `^wott(_vN)? x <nom>` (els ròtols corrents `Wott_MAT_v2_105…`/`Wott_TNM_V4_082…` segueixen fora); (b) la finestra **s'ordena per semblança amb el text OCR del clip** (`rankPick`/`semNombre`/`nomNet`: «Salvador Illa» → `wott x salvador illa…` al cap, amb ★punts) i desempata pel **número d'export** (`fileSuffix`, equivalent a l'hora de creació); (c) **cercador** `#tw-pick-q` que filtra en viu pel nom (+ comptador, ↑/↓ i ⏎); (d) `_dayMovies` guarda a `other` el que cau en un altre dia o sense data i l'emergència n'afig els 20 exports més recents (etiqueta «altre dia»), perquè un tuit exportat a les 00:30 no desaparega. Validat: **ALL GREEN \| js 64/64 \| smoke 665/665 \| jsx intacte** (casos nous `#TW/55`-`#TW/64`). |
+| **#207** | **Corregit** (D21) · pendent de validar en viu (29/10) | **Els tuits es col·locaven 2 clips ABANS del que toca**: Feijóo i Nogueras van anar a `33:13`/`36:22` quan els seus clips són `40:07`/`43:08`. Causa: la mostra (D19) s'extraia del MEDIA amb `srcTime` i el frame del clip `36:22` eixia del **contingut del `43:08`** (mapa TC→segon del fitxer no fiable en la V1). Solució: `samplePng` torna a capturar de la **TIMELINE** amb QE (`Render.snapshot` = `exportFrameQE`), ffmpeg només de reserva (spec `docs/specs/TWITTS_OCR.md` §D21) |
 | **#193** | R1+R2+R4+R6 **aplicats**; pendent validar R6 en viu + R3/R5 (27/10) | **Inici del bloc i finestres degenerades**: `01dir` havia d'anar a `34,50 s` i va quedar a `0,00 s` amb altres tres marcadors. Causa arrel (6 baules), retocs R1-R6 i rollback a [`docs/specs/FIX_INICI_BLOC.md`](docs/specs/FIX_INICI_BLOC.md) |
 | **#191** | Pendent de validar en viu (26/10) | Els wotts amb el bloc **a seques** (`Wott_TNM_V_…`, els `XARXES-TEXT`) ja s'importen, però **no es col·loquen** |
-| **#113** | Pendent de validar en fred | **Arrencada en fred lenta**: 92,7 s el 22/10 (el 99% era NAS fred dins `checkContext`) |
+| **#113** | **Reobert** (28/10) · el panell NO és el coll d'ampolla | **Arrencada en fred lenta**: 92,7 s el 22/10 (el 99% era NAS fred dins `checkContext`). **MESURA EN FRED DEL 28/10** (logs del host + `_boot_timing.log`): Premiere (NGL `09:24:57`) → PlugPlug/CEP (`09:25:02,9`) → extensió carregada (`09:25:09,1`) → navegació del panell (`09:25:11`, −548 ms al log) → **ARRENCADA COMPLETA +335 ms**. És a dir: **~14 s entre obrir Premiere i tindre el panell llest, dels quals només ~0,9 s són del panell** (navegació 548 ms + 335 ms); la resta és **arrancada del host CEP/Premiere**, que cap JS del panell pot mesurar (el WebView encara no existix). El sensor de la marca del `<head>` (27/10) ha fet la seua faena: ha demostrat que el temps no es perd al codi. PENDENT: (a) **conservar l'històric** d'arrancades (hui `_boot_timing.log` es REESCRIU a cada arrancada → si el panell es reobri, la mesura en fred es perd) i (b) marcar `primer pintat` — **FET el 28/10**: `_boot_timing_hist.log` (una línia per arrencada amb `arrencada`, `total` fins al primer pintat, `nav→main`, `DCL` i marca `1R DEL DIA`, finestra de 40, a la carpeta de l'extensió i a `C:\temp`) i marca `primer pintat` per `rAF`×2. RESTA OBERT només el tram **host CEP → WebView** (~12 s), que no és instrumentable des del panell: s'ha de creuar a mà amb `%LOCALAPPDATA%\Temp\CEP12-PPRO.log` i els `NGLClient_PremierePro*.log` |
 | **#111** | Investigació oberta (29/09) | Els ítems d'escaleta **FLOTANTS** (`flotant:true`) no reben cap marcador; segons la regla de l'usuari n'haurien de portar un de **VERMELL** |
 | **#116** | Nota pendent de decisió (30/09) | **Marcador VERMELL DE CUA** que no hauria d'existir: el filtre el descarta bé i la vàlvula de seguretat de `_safePlaceByPrefixes` el torna a afegir |
 | **#117** | Nota pendent de decisió (30/09) | **Semàfors trencats sense projecte** per `ReferenceError: mediaN is not defined` a `checkContext` → es perden els semàfors SRT i WOTTS |
-| **#196** | Nou (27/10) · sense diagnòstic | **La finestra de GRÀFICS no obri sempre a la carpeta de la DATA del projecte**: ha d'arrancar al directori del dia del bloc (el de l'escaleta), no a l'últim recordat |
-| **#197** | Nou (27/10) · sense diagnòstic | **El grafisme no s'inserix al timeline en tota la seua longitud**: un **corte a V1** afecta el seu **Out** (el gràfic s'encongeix). La inserció ha d'ocupar la durada sencera del gràfic, sense retallar-se al punt d'edició de V1 |
-| **#198** | Nou (27/10) · sense diagnòstic | **Tancar el projecte amb el botó verd ha de BUIDAR l'editor de subtítols**: si hi ha un `.srt` carregat, en eixir el panell (i el projecte) ha de quedar net |
-| **#199** | Nou (27/10) · sense diagnòstic | **El botó EXPORT no respecta la posició del clip original de V1**: en inserir els clips nous al final, han d'anar a la posició del clip de V1 original, no al final de la seqüència |
+| **#196** | **TANCAT** (28/10, validat en viu per l'usuari) | **La finestra de GRÀFICS obri la carpeta del DIA SEGÜENT al del projecte**: ha d'arrancar al directori del dia del bloc (el de l'escaleta). CAUSA ARREL (no era la carpeta inexistent, com es va suposar): `flow_mapa._resolveDateDir()` confiava en `State.projectDateDir`, però el poll d'estat el **desancora a null** al segon cicle sense `Registry.activeProjectName` (evidència al `FASTPASS.log` del 27/10 14:53:35: «🔓 [dateDir] Desancorant projectDateDir=2026_10_27» amb el `.prproj` obert); a partir d'ací la data queia al **RELLOTGE**, i de nit (després de mitjanit) això és el dia següent al del projecte. SOLUCIÓ: `_resolveDateDir` és **async** i la font de veritat passa a ser la **ruta real del `.prproj` obert** (`Context._resolveProjectDateDir`, el mateix criteri del BUG #156/#187 a `flow_srt.js`), amb orde: .prproj → `State.projectDateDir` → manifest (només si **no** és ambigu, un sol dia al cache) → `workTarget='yesterday'` → rellotge amb avís `WARN`; els dos cridadors l'esperen amb `await`. Complement (defensa en profunditat): `_folderExists` (via `IO.exists`) + `_dialogFolder` (carpeta del dia → arrel de `rutas.grafismos` → null amb avís) i `_askFiles` obri amb `_dialogFolder(folder)`, així que mai es passa al diàleg una ruta inexistent |
+| **#197** | **Corregit** (27/10) · pendent de validar en viu | **El grafisme no s'inserix al timeline en tota la seua longitud**: un **corte a V1** afecta el seu **Out** (el gràfic s'encongeix). Regla d'usuari: la inserció ocupa la **durada sencera** del gràfic i el tall de V1 **no** és frontera; només el **marcador següent** el pot retallar. Causa arrel: `ci.end` (final del clip de V1) s'usava com a sostre de l'Out i el `Math.min(end2, ci2.end)` el re-aplicava a cada reposicionament. Solució: predicat pur **`_limiteOutChyron({durOwn, placeStart, mkTime, marcadorSeg, clipEnd})`** a `js/workflows/flow_chyrons.js` amb prioritat **marcador següent > durada pròpia > final del clip (últim recurs)**; el `ci2.end` només queda com a fallback si la durada no s'ha pogut resoldre |
+| **#198** | **TANCAT** (28/10, validat en viu per l'usuari) | **Tancar el projecte amb el botó verd ha de BUIDAR l'editor de subtítols**: si hi ha un `.srt` carregat, en eixir el panell (i el projecte) ha de quedar net. Solució: `Render._resetSrtForClose(quan)` a `js/workflows/flow_render.js` (idempotent, amb traça al log) cridat **després** de tancar dins `runClose`, que a més ara comprova `res.ok` i avisa si el tancament ha fallat; i `SrtEditor.reset()` reescrit **a prova d'excepcions** (blocs `pas(...)`: si un peta, la resta es neteja igual i el panell SEMPRE acaba ocult) |
+| **#199** | Nou (27/10) · en anàlisi | **El botó EXPORT no respecta la posició del clip original de V1**: en inserir els clips nous al final, han d'anar a la posició del clip de V1 original, no al final de la seqüència. **Descartat** (log en viu 14:54) que siga la **Portada**: `runPortada` ja hereta el Motion de l'original (posició `[483,540]` idèntica a la còpia) |
+| **#201** | **Corregit** (28/10) · pendent de validar en viu · **derivada de #197** | **Els rètols de NOM-CÀRREC es col·locaven en CADENA i no al seu corte**: a TNC V2 (bloc del 27/10) el rètol de *Miguel Domingo* ocupava tota la seua longitud, però el de *Josep Forés* entrava **al final de l'anterior** en lloc del seu corte (~1:05:01) i havia d'acabar amb el seu **clip de referència** (~1:08:07); a remolc, el de *Lourdes Massip* també entrava tard. CAUSA: el fix de **#197** va fer que `_limiteOutChyron` descartara SEMPRE el final del clip de V1 («marcador següent → durada pròpia del wott»); per als rètols de text això contradiu la regla del 16/09 («entra a +10 frames del clip de referència **i ACABA quan acaba eixe clip**») → el rètol s'allargava i `_chooseSlot` → `_firstFreeStart` desplaçava el següent al final de l'anterior (efecte dòmino). SOLUCIÓ (tot JS, `jsx/` intacte): (a) predicat pur **`_esRetolAcotat`** — s'acoten **NOM-CÀRREC** i les **CONNEXIONS** (Enviat / Directe / Presencial); **LLOC/DATA i FIRMA queden FORA** (decisió d'usuari 28/10 · mantenen la durada pròpia de #197); (b) `_limiteOutChyron` rep **`acotat`**: si és cert mana el **FINAL DEL CLIP de referència** (orde: marcador següent → clip → durada pròpia → final del clip); (c) predicat pur **`_esPrimerClipTimeline`**: el **decalatge de 10 frames** només s'aplica si el clip de referència **obri el timeline** (00:00) — en la resta l'entrada és exacta (l'usuari el veia innecessari); el log `📐` diu els frames reals. 🐞 **Trampa caçada per la prova**: `indexOf('NC_')` feia FALS POSITIU amb «WOTT_**NC_**V2» (codi de programa) i hauria acotat LLOC/DATA i FIRMA → ara és token exacte (`split('_')`). Cache-buster: `flow_chyrons.js?v=86`. Inventari a `docs/specs/CHYRON_OUT_POLICY.md`. VALIDACIÓ: **ALL GREEN | js 61/61 | smoke 533/533 | jsx intacte**. |
+| **#200** | **TANCAT** (28/10, validat en viu per l'usuari) · **sense tocar `jsx/`** | **La còpia de la Portada no hereta l'Anchor Point ni la Rotation**: `Anim.get/setMotionValues` (`jsx/`) només exposen posició, escala, escala X i retalls, però **`callJSX()` accepta scripts inline** (mateix patró que `srt_editor.js::_clearSubtitleTracks`) → el pont NO cal tocar-lo. Solució: `_framingJsx`/`_framingProbe`/`_framingApply` a `js/workflows/flow_render.js` busquen el component Motion **pel nom** (`ANCHOR/ANCLAJE/ANCORATGE`, `ROTAT/ROTACI`) amb **fallback als índexs reals** (5 = Anchor Point, 4 = Rotation; el comentari de `_getMotionProps` que diu «2 = Anchor Point» és erroni: l'índex 2 és Scale Width), llig l'enquadrament de l'original al cabezal i l'escriu a la còpia **després** de `setMotionValues`, amb comprovació `Δanchor`/`Δrot` al log |
+| **#202** | **Corregit** (28/10) · pendent de validar en viu · **derivada de #197** | **La MÀSCARA quedava TAPADA pel grafisme**: provant en viu `app google tots sant gervasi esvoranc.mov` (paleta 🎨 del 27/10), el grafisme eixia a V3 i deixava la màscara de l'ítem davall. La detecció de zona grisa deia la veritat — foto a SANG: **3,1 %** de `#D9D9D9` (mesurat frame a frame, 1 s: 0,2 % a 1-3 s i 3,1 % de 5 a 15 s; cap franja grisa en tot el clip) → la 1a implementació el deixava a V3. DECISIÓ D'USUARI (28/10): **sempre** s'ha de cortar el troç de màscara de l'ítem i pujar-lo a V3, i el grafisme va a V2 (la mesura del gris passa a ser només INFO al log). SOLUCIÓ (`js/workflows/flow_mapa.js::_placeClips`, tot JS): (a) el moviment de la màscara ja NO depén de `hasGrey`; (b) **neteja prèvia** de les restes del bloc A LES DOS pistes (V2 i V3) abans de moure la màscara, perquè un intent anterior no bloquege amb `DESTI_OCUPAT` ni es confonga amb la màscara; (c) fallbacks intactes: sense rang d'ítem / sense màscara a V2 / V3 ocupada → col·locació de sempre a V3. `jsx/` intacte. **3a volta** (28/10, 2n provat en viu: la màscara ja puja i el grafisme va a V2, però el tall es feia entre **SUB-ÍTEMS**): `_itemRangeAt` passa a acceptar com a frontera només els números de **LÍNIA** d'escaleta (`01i`, `01`, `01dir`, `02dp`, `19C`) i no els sub-ítems (`01p21`, `01p22`…), així que el tall és **de MARCADOR a MARCADOR** (a la seqüència provada: `01i - intro` → `01 - ELS VEÏNS…`, el rang sencer de l'ítem, en lloc de `01p22` → `01p23`); si no hi ha cap marcador de línia es cau a qualsevol número (no es queda sense rang). A més, `_mascaraAParking` desa la **cobertura efectiva** (`cov`) i avisa al log si la màscara de V2 no cobrix tot l'ítem |
+| **#203** | **Corregit** (28/10) · pendent de validar en viu · **derivada de #202** | **El grafisme s'inseria al CABEZAL o al MARCADOR SELECCIONAT i no al marcador del seu ítem, i el tall de la màscara quedava 1-2 frames curt del marcador següent**: provant en viu (28/10), amb un altre marcador seleccionat al panell, l'insert eixia a eixa posició; a més el troç de V3 «quasi» arribava al marcador (Premiere arredoniX al frame el `end` de `Clips.retrim`). SOLUCIÓ (`js/workflows/flow_mapa.js`, tot JS, `jsx/` intacte): (a) **`_anchorMarker(picked, cti)`** tria el marcador per **coincidència RELATIVA de nom** entre el fitxer triat i els comentaris numerats («NN… - Nom», sub-ítems inclosos); `_scoreNombre` mesura quina part del nom del marcador es reconeix al del fitxer amb **Dice per bigrames** i **`_normFon`** (B→V, Y→I, C+E/I→S, QU→K, plural -S), així que «app google tots sant gervasi esvoranc.mov» casa amb «01p22 - P2 PAS 1 GOOGLE tots SANT GERVASI ESVORANC» (**0,91**) sense ser exacte; guanya el millor score i, en empat, el més pròxim al cabezal; per davall de **`MATCH_MIN`=0,60** o si el marcador no té clip de V1 es manté el cabezal de sempre; (b) l'àncora és l'**inici de la LÍNIA** del marcador coincident (**`ANCHOR_LINE`**), així el grafisme i el rang de la màscara parlen del mateix ítem (`01i`, no `01p22`); (c) **`_ajustarFiAlMarcador(track, idx, e, b)`** llig el `end` **REAL** amb `Clips.get` i, si no arriba al marcador, reintenta `Clips.retrim` allargant el troç (fins a 3 intents, +0,06 s per cobrir el frame del TC); si el mèdia no en dóna més (`WARN_INVALID`) **restaura** el clip com estava i diu quants segons falten — mai deixa un clip trencat. Cache-buster `flow_mapa.js?v=31`. VALIDACIÓ: **ALL GREEN | js 62/62 | smoke 598/598 | jsx intacte** (casos `#203` nous a `bin/smoke/fp_probe_grafzona.js`, amb `mediaDur` al `retrim` simulat) |
+| **#204** | **Corregit** (29/10) · 2 capes · pendent de validar en fred | **El `_boot_timing.log` no mesurava l'espera real i el semàfor WOT es quedava 103 s en verd intermitent («ja importable») sense cap senyal d'activitat**: a l'arrencada en fred del 29/10 (`_keyframe_trace.log`) l'`ARRENCADA COMPLETA` va ser a **+330 ms**, però entre `[SCAN] Analitzant context i materials` (09:02:50) i `[SCAN:wotts] Filtre per data` (09:04:33) van passar **103 s sense una sola línia al `_boot_timing.log`** (i després 7 s de portades i 3 s de `ffprobe`). CAUSA: (a) `_bootClosed = true` a l'ARRENCADA COMPLETA descartava **totes** les `_bmark`/`[SCAN]` del darrere i `_fullScan` no marcava res; (b) eixa espera és `Utils.readFolder` de la carpeta de rètols **UNC via JSX** (`File.created` de 1281 fitxers) → crida síncrona que **bloqueja el fil del WebView**: només l'animació CSS seguia viva, i el WOT estava en `blink` (verd intermitent = «ja importable»). SOLUCIÓ (tot JS/CSS, `jsx/` intacte): (a) **finestra post-arrencada** a `js/main.js` (`_bootPostMs` 3 min · `_bootPostSlowMs` 400 ms): després de l'ARRENCADA COMPLETA només es desen les marques **lentes**, amb prefix `[post]`, i la **primera** deixa línia a `_boot_timing_hist.log` («1a espera post-arrencada») → el rècord ja no pot dir 330 ms si el panell no és lliure fins a 2 min després (`Boot.setPostWindow()` ho ajusta o ho apaga); (b) marques `force` a `_fullScan` (wotts · portades · carpeta del projecte · TOTAL) i a `Scanner.wotts` (carpeta de rètols i filtre per data, amb nº de fitxers); (c) **estat `busy`** del semàfor (`4_Context.setSemaforOcupat`/`setSemaforLliure`, classe `.light.busy` = blau lategant): `_fullScan` el pinta a `sem-wot` abans de tocar el NAS i el restaura al `finally`, amb tooltip «Analitzant els rètols del NAS…». Cache-busters: `main.js?v=95`, `4_Context.js?v=32`, `Scanner.js?v=25`, `flow_mainButton.js?v=39`, `style.css?v=62`. VALIDACIÓ: **js 62/62 · smoke 601/601 · jsx intacte** (casos nous `#BOOT/20`, `#WOTT/55` i `#WOTT/56`). CAPA 2 (29/10) · per què costava 103 s: **no era el NAS**. Mesurat des de .NET (la via nativa que usa CEP, sense Node): `GetFiles` de la carpeta = **1281 fitxers en 2 ms**, `FileInfo` amb `created`+`mtime`+`size` = **3 ms**, 50 `stat` individuals = **7 ms**. El cost estava en **com** es preguntava: `IO.scanDirectory` (JSX) llig `length`, `modified` i `created` de CADA fitxer (cada getter és una consulta SMB dins del motor d'ExtendScript) i, si `length` ve 0 (habitual en .mov per UNC), **obri el fitxer** per traure'n `eof` → milers d'operacions síncrones per a unes dades que només calien per a ~20 candidats. SOLUCIÓ CAPA 2 (tot JS, `jsx/` intacte, **sense Node**): `Scanner._listNamesNative` (`cep.fs.readdir` = només noms, fallback a `Utils.readFolder`), `Scanner._dateCandidates` (data NOMÉS dels candidats: caché persistent `fp_wott_dates_v1` → `cep.fs.stat` natiu → `IO.fileInfo` per als pocs que fallen) i `Scanner.wotts` reordenat (llistat natiu → filtre per nom → datació → `filterByWorkDate`, que no canvia). Salvaguarda: si cap candidat no és datable es rellig la carpeta via JSX com abans. PENDENT: comprovar en fred que el log llista `[post] _fullScan · wotts del NAS (Xs)`, `wotts · llistat natiu (Xs, N noms)` en mil·lisegons i que el semàfor passa a blau |
+| **#205** | **Corregit** (29/10) · pendent de validar en viu · 100% JS (`jsx/` intacte) | **La passada TWITTS acabava sempre en «0 col·locat(s) · 0 pendent(s)»**: `FASTPASS.log` del projecte confirmava que `runAuto` es disparava i que `scanClips` mirava **11 clips**, però cap arribava a l'OCR. Causa arrel: el frame de mostra es demanava amb `Render.frame` (= `seq.exportFrame`), API **que no existix al DOM de Premiere 25** → cada crida tornava error i `samplePng` eixia **sense escriure res al log** (el `return` era abans del `log` d'`ocrClip`), així que el fracàs era invisible. SOLUCIÓ (D19 de [`docs/specs/TWITTS_OCR.md`](docs/specs/TWITTS_OCR.md)): (a) **via ràpida** = `FFmpeg.extractFramePng` sobre el **MEDIA del clip** (mateix àtom del OCR de títols, 0,25-0,33 s/frame, no toca la timeline i el frame no porta chyrons al damunt); el segon dins del fitxer el dóna `srcTime(clip,t)` = `inPoint + offset` escalat per `(outPoint−inPoint)/(end−start)`; (b) `flotants()` publica `paths` (nom→ruta del media) i `pathOf` resol el nom amb tolerància (majúscules/extensió); (c) **reserva** = `Render.snapshot` (QE `exportFramePNG`) ampliant i restaurant l'Out point, per a anidades/multicam/sense ruta; (d) **mai més en silenci**: `⚠️ [TWITTS] <tc> «<clip>» sense mostra per a l'OCR: <motiu>` i la via (`ffmpeg`/`QE`) al log bo. Validat: **ALL GREEN \| js 64/64 \| smoke 650/650 \| jsx intacte** (casos nous `#TW/46`-`#TW/49`). |
+| **#206** | **Corregit** (29/10) · pendent de validar en viu · 100% JS (`jsx/` intacte) | **La passada TWITTS col·locava el tuit al lloc equivocat i tapava el tuit bo**: amb la captura ja arreglada (BUG #205), el `FASTPASS.log` del projecte (29/10 13:47) deia exactament el que tocava (`00:00:36:22 «TNM_V3_CLIP.mp4» · TUIT · @miriamnoguerasm · 165` → `✅ col·locat «…Miriam Nogueras…» 00:00:36:22 → 00:00:40:07`) i el PNG de mostra (`C:\temp\fp_twitts_5.png`) era eixe mateix tuit: **ni l'OCR ni el TC estaven malament**. Causa arrel: **`Clips.insert` (JSX, `6_Clips.jsx:313-320`) ajusta la duració amb `clips[numItems-1]`**, és a dir l'**ÚLTIM** clip de la pista i **no el que acaba d'inserir`**. Com que la passada va DESPRÉS de COLOCAR, V3 ja té chyrons i el tuit (que entra ENMIG) es quedava amb la **duració sencera del mèdia** (~20 s) → tapava els clips de V1 següents (amb el tuit bo inclòs) i, a més, **retallava el chyron més tardà**. Per això eixia igual moguent el cabezal: l'ancoratge sempre va ser `clip.start`/`clip.end` del clip on l'OCR ha casat (D15) i el que fallava era el FINAL, no el principi. SOLUCIÓ (D20, `jsx/` intacte): `_place` llig la pista de grafismes **ABANS** de l'insert (`before`) i, **DESPRÉS**, crida `_fixPlacement` (`js/workflows/flow_twitts.js`) → (a) localitza el clip per **NOM + `start`** (mai per instant: un chyron pot arrencar al mateix TC), (b) el retalla **coherent** `inPoint → outPoint → end` amb `Clips.retrim` (reserva `Clips.endAt` si el mèdia no dóna), (c) **restaura** els clips preexistents que hagen canviat de final i (d) **verifica el resultat REAL**: si el clip no hi és o el final no quadra, la col·locació **NO compta** (`❌ … inserit però NO verificat`) i el log bo diu el clip de V1 objectiu (`sobre el clip de V1 <tc>→<tc> «nom»`). Validat: **ALL GREEN \| js 64/64 \| smoke 655/655 \| jsx intacte** (casos nous `#TW/50`-`#TW/54`). |
+
+
+
 
 ### 1.1 · ✅ Validats en viu · **CODI SENSIBLE: NO TOCAR**
 
@@ -204,6 +216,87 @@ mesura també el tram de navegació + càrrega dels 48 mòduls.
 - Comparativa: (a) sense projecte, (b) amb el projecte de sempre, (c) amb el *Customer
   Improvement Program* desactivat.
 **Fitxers**: `js/core/4_Context.js`, `js/logic/Scanner.js`, `index.html`, `js/main.js`.
+
+### #204 · El timing no mesurava l'espera real (i el semàfor en verd mentia)
+
+**Símptoma**: en arrencada en fred el panell es quedava **molt de rato** amb el semàfor
+dels WOTTS en **verd intermitent** i el `_boot_timing.log` deia que l'arrencada havia
+durat **330 ms**. Al `_keyframe_trace.log` del 29/10 es veu l'espera de veritat:
+
+| hora | què |
+|---|---|
+| 09:02:32 | `ARRENCADA COMPLETA` (330 ms de panell) |
+| 09:02:50 | `[SCAN] Analitzant context i materials...` |
+| **09:04:33** | `[SCAN:wotts] Filtre per data projecte 20261028 …` (**+103 s**) |
+| 09:04:40 | `[SCAN:portades]` (+7 s) |
+| 09:04:43 | `[duration] ffprobe … → 6480.02s` (+3 s) |
+
+**Causa arrel** (2 baules):
+1. `js/main.js` tancava el log a l'ARRENCADA COMPLETA (`_bootClosed = true`) i
+   `_bootMark` descartava tot el que no fóra `'force'` → **cap** de les marques del
+   darrere (`[SCAN]`, `[Context]`) arribava al fitxer. A més `_fullScan` no tenia cap
+   marca pròpia.
+2. Eixa espera no és càlcul: és `Utils.readFolder` sobre la carpeta de **rètols UNC**,
+   que va **via JSX** (`File.created` de **1281 fitxers**) → crida síncrona que
+   **bloqueja el fil del WebView**. L'única cosa que seguix viva és l'**animació CSS**
+   del semàfor, que estava en `blink` = verd intermitent = «ja importable». D'ací la
+   sensació de «parpadeja i no fa res».
+
+**Solució** (tot JS/CSS, `jsx/` intacte):
+- `js/main.js`: **finestra post-arrencada** (`_bootPostMs` = 3 min, `_bootPostSlowMs` =
+  400 ms). Passada l'ARRENCADA COMPLETA només es desen les marques **lentes**, amb
+  prefix `[post]`; la primera deixa una línia a `_boot_timing_hist.log`
+  («1a espera post-arrencada: …»). `FASTPASS_UI.Boot.setPostWindow(ms, slowMs)` ho
+  ajusta (o ho apaga amb `0`); `Boot.postWindow()` ho consulta.
+- `js/workflows/flow_mainButton.js::_fullScan`: marques `force`
+  (`_fullScan · wotts del NAS`, `· portades`, `· carpeta del projecte`, `TOTAL`) dins
+  d'un `try/finally`.
+- `js/logic/Scanner.js::wotts`: marques a la **lectura de la carpeta de rètols** (nº de
+  fitxers) i al **filtre per data**.
+- `js/core/4_Context.js`: `setSemaforOcupat(id, title)` / `setSemaforLliure(id)` i estat
+  `busy` a `updateLights` (`style.css` → `.light.busy`, blau lategant). `_fullScan` el
+  pinta a `sem-wot` abans de tocar el NAS i el restaura al `finally`.
+
+**Capa 2 (29/10) · per què eixa espera costava 103 s**: **no era el NAS**. Mesurat el
+mateix dia des de .NET (la via nativa que usa CEP, **sense Node**):
+
+| operació | fitxers | temps |
+|---|---|---|
+| `GetFiles` (només noms, 1 passada) | 1281 | **2 ms** |
+| `FileInfo` (nom + `created` + mtime + size, 1 passada) | 1281 | **3 ms** |
+| 50 `stat` individuals de `created` | 50 | **7 ms** |
+
+El cost estava en **com** es preguntava: `IO.scanDirectory` (JSX) llig `length`,
+`modified` i `created` de **cada** fitxer (cada getter és una consulta SMB feta des
+del motor d'ExtendScript) i, si `length` ve 0 (habitual en `.mov` per UNC), **obri el
+fitxer** per traure'n `eof`. Amb 1281 fitxers són milers d'operacions síncrones per a
+unes dades que només calien per a ~20 candidats — i per això el fil del WebView es
+bloquejava sencer.
+
+**Solució capa 2** (tot JS, `jsx/` intacte, **sense Node**):
+- `Scanner._listNamesNative(folder)`: `cep.fs.readdir` → **només noms** (fallback a
+  `Utils.readFolder` si la via nativa no hi és).
+- `Scanner._dateCandidates(folder, files)`: posa `created`/`mtime` **només als
+  candidats** (bloc + flotants), en tres passades de cost creixent: caché persistent
+  `fp_wott_dates_v1` (cost 0) → `cep.fs.stat` natiu → `IO.fileInfo` via JSX per als
+  pocs que fallen. Si l'origen ja portava la data, no es fa res.
+- `Scanner.wotts`: llistat natiu → filtre per nom → `_dateCandidates` →
+  `filterByWorkDate` (mecanisme únic, intacte). **Salvaguarda**: si cap candidat no
+  és datable, es rellig la carpeta via JSX (`File.created`) com abans (evita repetir
+  el desastre del 2026-09-22, «69 → 0, NO datables»).
+
+**Què falta validar** (només val en **fred**, equip tot just engegat):
+- `_boot_timing.log` amb una línia `[post] [SCAN] _fullScan · wotts del NAS (Xs)` i
+  `[post] [SCAN] _fullScan TOTAL (Xs)`.
+- `_boot_timing_hist.log` amb la línia «1a espera post-arrencada».
+- El WOT en **blau** mentres escaneja i el tooltip «Analitzant els rètols del NAS…».
+- Que `wotts · llistat natiu (Xs, N noms)` ixca en **mil·lisegons** (no en desenes de
+  segons) i `wotts · datació de candidats` amb poques desenes, no 1281.
+
+**Fitxers**: `js/main.js`, `js/core/4_Context.js`, `js/logic/Scanner.js`,
+`js/workflows/flow_mainButton.js`, `style.css`, `index.html`,
+`bin/smoke/fp_probe_arrancada.js` (`#BOOT/20`), `bin/smoke/fp_probe_wotts.js`
+(`#WOTT/55`, `#WOTT/56`), `bin/smoke/fp_probe_srt.js` (`#F3/25`).
 
 ### #111 / #116 / #117 · Notes antigues de markers i semàfors
 
