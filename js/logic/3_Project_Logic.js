@@ -478,9 +478,31 @@
                 try {
                     const chyFolder = ctx.config && ctx.config.rutas && ctx.config.rutas.chyrons;
                     if (chyFolder) {
-                        const allChy = await utils.readFolder(chyFolder);
+                        // ── DATACIÓ SELECTIVA (2026-10-30 · rendiment) ──────────────
+                        // ABANS: `utils.readFolder(chyFolder)` via JSX (File.created de
+                        // CADA fitxer de la carpeta de rètols, 1281 noms) → **17,9 s**
+                        // mesurats al `_boot_timing.log` del 30/10, i es pagaven a CADA
+                        // CREAR/ACTUALITZAR/GO/LOAD. Només calia la data dels noms que
+                        // s'ingesten (decenes), no la de tota la carpeta.
+                        // ARA: `_dateCandidates` data NOMÉS eixos noms (caché persistent
+                        // `fp_wott_dates_v1` + `cep.fs.stat`), mateix criteri que #182/#204.
+                        const wanted = [];
+                        (wottData && wottData.list ? wottData.list : []).forEach(function (w) {
+                            wanted.push({ name: w.name });
+                        });
+                        (portadas || []).forEach(function (p) {
+                            // Les portades del BIN PORTADES ja porten la seua data.
+                            if (!p.created && !p.mtime) wanted.push({ name: p.name });
+                        });
+                        if (wanted.length > 0 && typeof ScanAPI._dateCandidates === 'function') {
+                            const _tD = Date.now();
+                            await ScanAPI._dateCandidates(chyFolder, wanted);
+                            const _dated = wanted.filter(function (w) { return !!(w.created || w.mtime); }).length;
+                            utils.log('[INGEST] Datació selectiva de ' + wanted.length + " nom(s) en " +
+                                (Date.now() - _tD) + ' ms (' + _dated + ' amb data)', 'DEBUG');
+                        }
                         const statsByName = {};
-                        (allChy || []).forEach(function (fc) { statsByName[fc.name] = fc; });
+                        wanted.forEach(function (w) { statsByName[w.name] = w; });
 
                         if (wottData && wottData.list && wottData.list.length > 0) {
                             const withStats = wottData.list.map(function (w) {

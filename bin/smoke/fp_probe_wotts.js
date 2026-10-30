@@ -247,8 +247,8 @@
                 /placeEnd = gridDown\(placeEnd - REV_FRAME\);/.test(chySrc));
             var idxW = await readRepo('index.html');
             ok('#WOTT/24 cache-bust al dia (4_Context, flow_chyrons, Scanner)',
-                /4_Context\.js\?v=32/.test(idxW) && /flow_chyrons\.js\?v=86/.test(idxW) &&
-                /Scanner\.js\?v=25/.test(idxW),
+                /4_Context\.js\?v=33/.test(idxW) && /flow_chyrons\.js\?v=86/.test(idxW) &&
+                /Scanner\.js\?v=26/.test(idxW),
                 (idxW.match(/4_Context\.js\?v=\d+/) || '') + ' ' +
                 (idxW.match(/flow_chyrons\.js\?v=\d+/) || '') + ' ' +
                 (idxW.match(/Scanner\.js\?v=\d+/) || ''));
@@ -499,8 +499,8 @@
                 /else if \(escReady\) \{/.test(ctxSrc) &&
                 ctxSrc.indexOf('CREA: escaleta local') > 0);
 
-            ok('#WOTT/39 cache-bust del #182 (4_Context 32 · Scanner 25)',
-                /4_Context\.js\?v=32/.test(idxW) && /Scanner\.js\?v=25/.test(idxW),
+            ok('#WOTT/39 cache-bust del #182 (4_Context 33 · Scanner 26)',
+                /4_Context\.js\?v=33/.test(idxW) && /Scanner\.js\?v=26/.test(idxW),
                 (idxW.match(/4_Context\.js\?v=\d+/) || '') + ' ' + (idxW.match(/Scanner\.js\?v=\d+/) || ''));
 
             // (2026-10-22 · #182) TESTIMONI al log: si el stat d'UNC no dóna cap data,

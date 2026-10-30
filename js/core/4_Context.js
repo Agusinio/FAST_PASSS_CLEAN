@@ -30,10 +30,18 @@
     // Marca fites al _boot_timing.log (infraestructura a main.js → FASTPASS_UI.Boot)
     // per saber QUINA fase de la càrrega inicial es menja el temps (escaneig NAS,
     // escaleta, crides JSX de projecte…). Silenciós si l'API encara no hi és.
-    const _bmark = (lbl) => {
+    /**
+     * _bmark: marca una fita del cronòmetre d'arrencada.
+     * @param {string} lbl - Text de la fita
+     * @param {number} [durMs] - Durada REAL del tram (2026-10-30). Serveix perquè el
+     *   `_boot_timing.log` només anote les esperes de veritat: sense este paràmetre
+     *   el filtre post-arrencada (#204) comparava el Δ entre marques i el
+     *   auto-refresc de 15 s hi deixava una línia per cicle.
+     */
+    const _bmark = (lbl, durMs) => {
         try {
             const B = window.FASTPASS_UI && window.FASTPASS_UI.Boot;
-            if (B && typeof B.mark === 'function') B.mark('[Context] ' + lbl);
+            if (B && typeof B.mark === 'function') B.mark('[Context] ' + lbl, null, durMs);
         } catch (eBM) { }
     };
     // Durada llegible: 812 → "812 ms"; 108568 → "108,6 s".
@@ -333,10 +341,10 @@
             const _tW = Date.now();
             try {
                 const res = await this._withTimeout(sc.wottsToday(ctx), this.PROBE_TIMEOUT_MS, 'sonda wotts');
-                _bmark('checkContext · sonda wotts (' + _bsec(Date.now() - _tW) + ')');
+                _bmark('checkContext · sonda wotts (' + _bsec(Date.now() - _tW) + ')', Date.now() - _tW);
                 return res;
             } catch (e) {
-                _bmark('checkContext · sonda wotts TIMEOUT/ERROR (' + _bsec(Date.now() - _tW) + ')');
+                _bmark('checkContext · sonda wotts TIMEOUT/ERROR (' + _bsec(Date.now() - _tW) + ')', Date.now() - _tW);
                 getUtils().log('⚠️ [checkContext] wottsToday: ' + e.message +
                     ' → no es bloqueja el botó (el poll ho reintenta)', 'WARN');
                 return { ok: false, found: false, count: 0 };
@@ -474,7 +482,7 @@
                 // 2. ESCANEIG GENÈRIC (Usant Utils.readFolder a través de Scanner)
                 const _tRF = Date.now();
                 let projectFiles = await getUtils().readFolder(folderPath);
-                _bmark('checkContext · readFolder NAS (' + _bsec(Date.now() - _tRF) + ', ' + (projectFiles ? projectFiles.length : 0) + ' fitxers)');
+                _bmark('checkContext · readFolder NAS (' + _bsec(Date.now() - _tRF) + ', ' + (projectFiles ? projectFiles.length : 0) + ' fitxers)', Date.now() - _tRF);
 
                 if (!projectFiles || projectFiles.length === 0) {
                     getUtils().log("ℹ️ Carpeta buida o inexistent. Conclusió: NEW", "DEBUG");
@@ -522,7 +530,7 @@
                     } catch (eLoc) {
                         getUtils().log('⚠️ [checkContext] Error buscant escaleta local: ' + eLoc.message, 'DEBUG');
                     }
-                    _bmark('checkContext · escaleta local (' + _bsec(Date.now() - _tLoc) + ')');
+                    _bmark('checkContext · escaleta local (' + _bsec(Date.now() - _tLoc) + ')', Date.now() - _tLoc);
                 } else {
                     _bmark('checkContext · SENSE EscaletaReader');
                 }
@@ -593,7 +601,7 @@
                     data.semaforo = semaforoData;
                     this._lastConclusion = earlyState;
                     this._lastButtonData = data;
-                    _bmark('checkContext · TOTAL (' + _bsec(Date.now() - _tCC0) + ') → ' + earlyState + ' [early]');
+                    _bmark('checkContext · TOTAL (' + _bsec(Date.now() - _tCC0) + ') → ' + earlyState + ' [early]', Date.now() - _tCC0);
                     this.updateLights(elProg.value, ctx.bloque, null, false, semaforoData);
                     this.updateButton(earlyState, data);
                     return;
@@ -687,7 +695,7 @@
                 }
             
                 _bmark('checkContext · projecte obert+lock (JSX) (' + _bsec(Date.now() - _tPj) + ', ' +
-                    (existingProjectName || 'sense projecte') + ')');
+                    (existingProjectName || 'sense projecte') + ')', Date.now() - _tPj);
                 getUtils().log("🔍 Conclusión contexto: " + conclusion + (existingProjectName ? " (projecte: " + existingProjectName + ")" : ""), "DEBUG");
                 
                 // [NOU] SEMAFOR: completar estats d'assets (esc ja avaluat a la fase anterior)
@@ -700,7 +708,7 @@
                             getUtils().callJSX("FASTPASS.Project.items('CHY')"),
                             getUtils().callJSX("hasClips(1, 'subtitle')")
                         ]);
-                        _bmark('checkContext · semàfor assets (3 crides) (' + _bsec(Date.now() - _tSem) + ')');
+                        _bmark('checkContext · semàfor assets (3 crides) (' + _bsec(Date.now() - _tSem) + ')', Date.now() - _tSem);
 
                         // MP4
                         const mp4Present = (hasMp4 === "true");
@@ -771,7 +779,7 @@
                     } catch (eSN) {
                         getUtils().log('⚠️ [checkContext] Error calculant semàfor NEW: ' + eSN.message, 'DEBUG');
                     }
-                    _bmark('checkContext · semàfor NEW (' + _bsec(Date.now() - _tSN) + ')');
+                    _bmark('checkContext · semàfor NEW (' + _bsec(Date.now() - _tSN) + ')', Date.now() - _tSN);
                 }
 
                 // 4. FEEDBACK UI
@@ -783,7 +791,7 @@
                     data.isLockOwned = lockOwner.trim() === ctx.config.autor.trim();
                 }
                 
-                _bmark('checkContext · TOTAL (' + _bsec(Date.now() - _tCC0) + ') → ' + conclusion);
+                _bmark('checkContext · TOTAL (' + _bsec(Date.now() - _tCC0) + ') → ' + conclusion, Date.now() - _tCC0);
                 this.updateLights(elProg.value, ctx.bloque, null, (conclusion === 'UPDATE'), semaforoData);
                 this._lastConclusion = conclusion;
                 this._lastButtonData = data;
@@ -791,7 +799,7 @@
             
             } catch (e) {
                 getUtils().log("💥 Error checkContext: " + e.message, "ERROR");
-                _bmark('checkContext · ERROR (' + _bsec(Date.now() - _tCC0) + '): ' + e.message);
+                _bmark('checkContext · ERROR (' + _bsec(Date.now() - _tCC0) + '): ' + e.message, Date.now() - _tCC0);
                 // FIX A3: No mantenir 'NEW' per defecte en cas d'error.
                 // Un error de xarxa/permisos es pot interpretar erròniament com
                 // "carpeta buida". Forcem WAITING per evitar que l'usuari premi
@@ -1134,7 +1142,7 @@
                 console.log("💾 [CONTEXT] Selección recuperada:", p.value, b.value);
             }
         
-            _bmark('init · selectors PROG/BLOC (' + _bsec(Date.now() - _tInit0) + ')');
+            _bmark('init · selectors PROG/BLOC (' + _bsec(Date.now() - _tInit0) + ')', Date.now() - _tInit0);
 
             // 4. Definir el Trigger con LOGS
             const trigger = async () => {
@@ -1160,15 +1168,15 @@
             try {
                 const _tChk = Date.now();
                 await this.checkContext();
-                _bmark('init · checkContext (' + _bsec(Date.now() - _tChk) + ')');
+                _bmark('init · checkContext (' + _bsec(Date.now() - _tChk) + ')', Date.now() - _tChk);
                 const _tCond = Date.now();
                 await this.syncConductorUI();
-                _bmark('init · syncConductorUI/COND (' + _bsec(Date.now() - _tCond) + ')');
+                _bmark('init · syncConductorUI/COND (' + _bsec(Date.now() - _tCond) + ')', Date.now() - _tCond);
             } catch (e) {
                 console.error("💥 Error en inicialización de contexto:", e);
                 _bmark('init · ERROR: ' + e.message);
             }
-            _bmark('init · TOTAL (' + _bsec(Date.now() - _tInit0) + ')');
+            _bmark('init · TOTAL (' + _bsec(Date.now() - _tInit0) + ')', Date.now() - _tInit0);
         },
 
         // ── CACHÉ DE LA LLISTA DE CONDUCTORES ──────────────────────────────
@@ -1321,10 +1329,10 @@
             try {
                 nasNames = await this._withTimeout(
                     this._listConductorNames(config.rutas.conductors, defaults.length === 0), 8000, 'conductors');
-                _bmark('syncConductorUI · NAS conductors (' + _bsec(Date.now() - _tNas) + ', ' + (nasNames ? nasNames.length : 0) + ' noms)');
+                _bmark('syncConductorUI · NAS conductors (' + _bsec(Date.now() - _tNas) + ', ' + (nasNames ? nasNames.length : 0) + ' noms)', Date.now() - _tNas);
             } catch (eCond) {
                 FASTPASS_UI.Utils.log('⚠️ [COND] Llistat del NAS no disponible (' + eCond.message + '): es mantenen els del programa', 'WARN');
-                _bmark('syncConductorUI · NAS conductors TIMEOUT/ERROR (' + _bsec(Date.now() - _tNas) + ')');
+                _bmark('syncConductorUI · NAS conductors TIMEOUT/ERROR (' + _bsec(Date.now() - _tNas) + ')', Date.now() - _tNas);
                 this._conductorUIRendered = programKey;
                 return;
             }

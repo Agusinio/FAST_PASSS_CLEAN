@@ -930,19 +930,46 @@
                 if (fromProj && fromProj.length > 0) return fromProj;
 
                 const pathNAS = ctx.config.rutas.chyrons;
-                const allFiles = await utils.readFolder(pathNAS);
-                if (!allFiles || allFiles.length === 0) return [];
 
                 var fProg = (ctx.progData && ctx.progData.wott) ? ctx.progData.wott.toUpperCase() : 'TNV';
                 var fBloc = ctx.bloque ? '_' + ctx.bloque + '_' : '_V1_';
                 var prefix = (fProg + fBloc).toUpperCase();
-    
-                let filtered = allFiles.filter(function (f) {
-                    var name = f.name.toUpperCase();
-                    // (2026-10-21 · #177) La portada és el PNG amb `PORTADA` al nom;
-                    // `TEMA-TITOL` pot faltar-hi (era el motiu del fals negatiu).
-                    return name.indexOf(prefix) !== -1 && name.endsWith('.PNG') && name.indexOf('PORTADA') !== -1;
-                });
+                // (2026-10-21 · #177) La portada és el PNG amb `PORTADA` al nom;
+                // `TEMA-TITOL` pot faltar-hi (era el motiu del fals negatiu).
+                var isPortada = function (nm) {
+                    var up = String(nm || '').toUpperCase();
+                    return up.indexOf(prefix) !== -1 && up.slice(-4) === '.PNG' && up.indexOf('PORTADA') !== -1;
+                };
+
+                // ── LLISTAT (2026-10-30 · rendiment d'arrencada) ─────────────────
+                // ABANS: `utils.readFolder(pathNAS)` via JSX (File.created de CADA
+                // fitxer de la carpeta de rètols, 1281 noms) → **17,9 s** mesurats al
+                // `_boot_timing.log` del 30/10 (era el 99% de l'espera en obrir el
+                // panell: `_fullScan · portades`). I és la MATEIXA carpeta que
+                // `Scan.wotts` acaba de llistar per la via nativa.
+                // ARA: només els NOMS (`cep.fs.readdir`, 2-54 ms) i es daten DESPRÉS
+                // només els candidats (`_dateCandidates`: caché + `cep.fs.stat`).
+                var allFiles = null;
+                var _tN0 = Date.now();
+                if (!this._readCache) this._readCache = {};
+                var _ck = 'names:' + pathNAS;
+                var _cch = this._readCache[_ck];
+                if (_cch && (Date.now() - _cch.at) < 30000 && _cch.list && _cch.list.length > 0) {
+                    allFiles = _cch.list;
+                } else {
+                    var _names = this._listNamesNative(pathNAS);
+                    if (_names) {
+                        allFiles = _names.map(function (n) { return { name: n }; });
+                    } else {
+                        // Via nativa no disponible: es manté el camí de sempre (JSX).
+                        allFiles = await utils.readFolder(pathNAS);
+                    }
+                    if (allFiles && allFiles.length > 0) this._readCache[_ck] = { at: Date.now(), list: allFiles };
+                }
+                if (!allFiles || allFiles.length === 0) return [];
+                _bm('portades · llistat (' + _ms(_tN0) + ', ' + allFiles.length + ' noms)');
+
+                let filtered = allFiles.filter(function (f) { return isPortada(f.name); });
     
                 // MECÀNICA D'INICI (2026-09-04): eliminada la guarda per mtime (22h);
                 // el filtre per data (a continuació) ja restringeix al dia de treball.
@@ -955,6 +982,14 @@
                 // MECANISME ÚNIC de filtrat per data (Scan.filterByWorkDate).
                 var dateTarget = ctx.dateDir ? String(ctx.dateDir).replace(/_/g, '') : null;
                 if (dateTarget) {
+                    // (2026-10-30 · rendiment) Si el llistat ve de la via nativa els
+                    // candidats NO porten `created`/`mtime`: es daten ARA, i només
+                    // ells (caché persistent + `cep.fs.stat`), amb el mateix
+                    // mecanisme que `Scan.wotts` (#182/#204). Amb la llista JSX
+                    // antiga ja venien datats i este pas no costa res (pas 0).
+                    var _tD0 = Date.now();
+                    if (freshFiles.length > 0) await this._dateCandidates(pathNAS, freshFiles);
+                    _bm('portades · datació de candidats (' + _ms(_tD0) + ', ' + freshFiles.length + ')');
                     var resF = this.filterByWorkDate(freshFiles, ctx.dateDir);
                     utils.log('[SCAN:portades] Filtre per data projecte ' + dateTarget + ': ' + freshFiles.length + ' -> ' + resF.keep.length +
                         (resF.dropped.length ? ' (descartats ' + resF.dropped.length + " d'altres dies: " + resF.dropped.slice(0, 3).map(function(x){ return x.name; }).join(', ') + '...)' : '') +

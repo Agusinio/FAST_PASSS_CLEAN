@@ -1,13 +1,13 @@
 # FEATURES — catàleg únic d'implementacions
 
-> **Únic lloc** on viu l'estat de les funcionalitats i implementacions. Actualitzat: **2026-10-29**.
+> **Únic lloc** on viu l'estat de les funcionalitats i implementacions. Actualitzat: **2026-10-30**.
 > Els bugs viuen a [`BUGS.md`](BUGS.md).
 >
 > Tres estats possibles: **validada** (provada en viu a Premiere),
 > **pendent de validar** (codi fet, falta la prova en viu),
 > **en cua** (dissenyada o apuntada, sense codi).
 
-**Resum**: 19 validades · 12 pendents de validar · 6 en cua.
+**Resum**: 19 validades · 13 pendents de validar · 6 en cua.
 
 ---
 
@@ -49,7 +49,7 @@
 
 ---
 
-## 2 · Pendents de validar (12)
+## 2 · Pendents de validar (13)
 
 Codi fet, **només** falta la prova en viu a Premiere. Les quatre de rètol cremat TITOLET es
 proven amb un cleanFeed real (`2026_10_25/V3/TNM_V3`, bloc vertical); referència tècnica:
@@ -66,6 +66,7 @@ proven amb un cleanFeed real (`2026_10_25/V3/TNM_V3`, bloc vertical); referènci
 
 | `FIX_INICI_BLOC` | `#193` · inici del bloc = primer estructural **en orde d'escaleta**; F5 amb **cadena de durades**, finestra degenerada oberta i **hora fora del material descartada** (R1+R2+R4+R6) · `#194` **els gràfics mai s'ancoren a un directe** | `01BT @ 0,00` · `01dir @ 34,52` · `02 @ 41,08` · `01 TE-1 @ 10,00` i `01 TD-1 @ 15,00` (grocs, dins del DonaPas `01BT`, cap a dins de la connexió `01dir`) |
 
+| `BOOT_FAST` | **`#113` · arrencada sense el llistat JSX de portades** (17,9 s de 18) ni el d'`ingestAssets`: la carpeta de rètols es llista amb `cep.fs.readdir` (noms, caché 30 s) i es daten només els candidats (`_dateCandidates`). També: el poll de 15 s ja no escriu a `_boot_timing.log` (`Boot.mark(label, lvl, durMs)`) | Reiniciar en fred amb el panell net: `_boot_timing.log` ha de mostrar `_fullScan · portades` en **mil·lisegons** (no 17,9 s), cap línia `[post] … readFolder NAS` repetida i cap espera llarga després d'`ARRENCADA COMPLETA`; després fer un CREAR i comprovar que `[INGEST] Datació selectiva` ix en poques desenes de ms |
 | `BOOT_HIST` | `#113` · **històric d'arrencades** (`_boot_timing_hist.log`, una línia per sessió amb `arrencada`, `total` fins al **primer pintat**, `nav→main`, `DCL` i marca **`1R DEL DIA`**) + marca `primer pintat` per `rAF`×2 | Reiniciar el PC, obrir Premiere i mirar que `_boot_timing_hist.log` tinga **una** línia nova amb `1R DEL DIA`; reobrir el panell i comprovar que la mesura anterior **no** s'ha perdut |
 
 | `CHYRON_OUT_POLICY` | `#201` · **NomCàrrec i connexions (Enviat/Directe/Presencial) acaben amb el seu clip de referència**; LLOC/DATA, FIRMA i grafismes conserven la durada pròpia (#197). El **decalatge de 10 frames** només al primer clip del timeline. Predicats purs `_esRetolAcotat` i `_esPrimerClipTimeline` | TNC V2 amb tres nom-càrrec seguits: cada rètol entra **al seu corte** (no al final de l'anterior) i acaba amb el seu clip (`📐 … (acurtat per final del clip de referència)`); els de Lloc/Data i Firma segueixen amb durada pròpia; només el primer rètol del timeline entra `+10f` |

@@ -144,6 +144,7 @@ saber **on** es va el temps hi ha un log de fites: `_boot_timing.log`.
 | Ruta des de JS | `FASTPASS_UI.Boot.logPath()` |
 | Obrir el log | `FASTPASS_UI.Boot.openLog()` (ShellExecute; fallback Notepad via `IO.executeShell`) |
 | Marcar una fita nova | `FASTPASS_UI.Boot.mark('[ElMeuModul] fase X')` |
+| Marcar una fita **lenta** (post-arrencada) | `FASTPASS_UI.Boot.mark('[ElMeuModul] fase X', null, <ms del tram>)` — sense el 3r paràmetre el filtre compara el `Δ` entre marques, i un cicle de fons de 15 s hi entra sempre encara que duràs 3 ms (2026-10-30) |
 
 **Format**: `+<ms des de l'inici> ms  (Δ<ms des de la marca anterior>)  <etiqueta>`.
 `Δ` gran = la fase anterior és la culpable.

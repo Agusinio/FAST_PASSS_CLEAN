@@ -369,7 +369,18 @@ function applySliderLimits() {
         } catch (eHist) { }
     };
     var _bootHistSafe = function () { try { _bootHist(); } catch (eHS) { } };
-    var _bootMark = function (label, lvl) {
+    /**
+     * _bootMark: anota una fita del cronòmetre.
+     * @param {string} label - Què s'ha fet
+     * @param {string} [lvl] - 'force' → sempre s'escriu al fitxer
+     * @param {number} [durMs] - Durada REAL del tram que s'anota (2026-10-30).
+     *   Sense este paràmetre el filtre post-arrencada mira el Δ (temps des de la
+     *   marca anterior), i qualsevol cicle de fons que arribe 15 s després passava
+     *   el filtre encara que duràs 3 ms: el `_boot_timing.log` s'omplia d'una
+     *   línia `[post] checkContext · readFolder NAS` cada 15 s. Amb `durMs` es
+     *   mesura el tram, no l'espera inerta.
+     */
+    var _bootMark = function (label, lvl, durMs) {
         var now = Date.now();
         var ms = now - _tBoot;
         var dt = now - _bootLast;
@@ -379,8 +390,10 @@ function applySliderLimits() {
         //   · lvl = 'force'  → sempre (l'usa qui sap que eixe tram importa)
         //   · marca LENTA dins la finestra post → sempre: són les esperes que
         //     l'usuari patix, i són just les que abans no quedaven enlloc.
+        // «LENTA» = el TRAM ha costat >= _bootPostSlowMs (o el Δ si no es declara).
         if (_bootClosed && lvl !== 'force') {
-            if (_bootPostMs <= 0 || now > _bootPostUntil || dt < _bootPostSlowMs || _bootLines.length >= 120) {
+            var cost = (typeof durMs === 'number' && durMs >= 0) ? durMs : dt;
+            if (_bootPostMs <= 0 || now > _bootPostUntil || cost < _bootPostSlowMs || _bootLines.length >= 120) {
                 try { console.log('⏱️ [BOOT·post] ' + label + ' (+' + ms + ' ms · Δ' + dt + ')'); } catch (eC2) { }
                 return;
             }
@@ -404,7 +417,7 @@ function applySliderLimits() {
         try { if (utils && utils.log) utils.log('⏱️ [BOOT] ' + label + ' (+' + ms + ' ms)', lvl || 'INFO'); } catch (eL) { }
     };
     try { _bootRoot = csInterface.getSystemPath(SystemPath.EXTENSION).replace(/[\\/]+$/, ''); } catch (eRoot) { _bootRoot = null; }
-    var _bootMarkSafe = function (label, lvl) { try { _bootMark(label, lvl); } catch (eM) { } };
+    var _bootMarkSafe = function (label, lvl, durMs) { try { _bootMark(label, lvl, durMs); } catch (eM) { } };
     // ── API PÚBLICA DE TIMING D'ARRENCADA ───────────────────────────────────
     // Qualsevol mòdul pot marcar fites amb:  FASTPASS_UI.Boot.mark('[Context] …')
     // (els mòduls ho fan de manera silenciosa si l'API encara no hi és).
@@ -414,7 +427,7 @@ function applySliderLimits() {
             logPath: function () { return _bootRoot ? (_bootRoot + '\\_boot_timing.log') : 'C:\\temp\\_boot_timing.log'; },
             /** Històric d'arrencades (una línia per sessió · 2026-10-28 · #113). */
             histPath: function () { return _bootHistPath() || ('C:\\temp\\' + _bootHistFile); },
-            mark: function (label, lvl) { _bootMarkSafe(label, lvl); },
+            mark: function (label, lvl, durMs) { _bootMarkSafe(label, lvl, durMs); },
             text: function () { return _bootText(); },
             /**
              * TRAM PREVI A MAIN.JS (2026-10-27). El cronòmetre comença en este
