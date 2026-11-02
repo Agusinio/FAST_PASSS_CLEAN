@@ -186,6 +186,18 @@
                 /markBtnBusy\(btnRenderPortada/.test(mj) && /clearBtnBusy\(btnRenderPortada\)/.test(mj));
             ok('#172 style.css: `.btn-busy` + `@keyframes fpBtnBusyPulse`',
                 /button\.btn-busy/.test(css) && /@keyframes fpBtnBusyPulse/.test(css));
+            // ── #214 (2026-11-02) · MENTRE OCUPAT, NOMÉS EL RELLOTGE D'ARENA ────
+            // L'etiqueta i la icona s'amaguen i el marcatge es restaura SENCER: abans
+            // es desava `innerText` (perdia les icones) i l'anella es pintava DAMUNT.
+            ok('#214 main.js: `markBtnBusy` desa/restaura `innerHTML` (no `innerText`)',
+                /btn\.dataset\.busyHtml = btn\.innerHTML/.test(mj) &&
+                /btn\.innerHTML = btn\.dataset\.busyHtml/.test(mj) &&
+                !/busyLabel/.test(mj) && !/btn\.innerText = text/.test(mj));
+            ok('#214 style.css: ocupat = només el rellotge (text i fills amagats)',
+                /button\.btn-busy[^{]*\{[^}]*font-size: 0 !important/.test(css) &&
+                /button\.btn-busy > \*\s*\{[^}]*display: none !important/.test(css) &&
+                /content: "\\23F3";/.test(css) &&
+                /button\.btn-busy\.icon-only/.test(css));
             var html = String(SRCS['index.html'] || '');
             var verOf = function (rel) {
                 var m3 = new RegExp(rel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\?v=(\\d+)').exec(html);

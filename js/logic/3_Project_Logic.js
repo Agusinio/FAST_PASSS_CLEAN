@@ -9,7 +9,7 @@
     FASTPASS_UI.Logic = FASTPASS_UI.Logic || {};
 
     const utils = window.FASTPASS_UI.Utils;
-    const callJSX = (s) => utils.callJSX(s);
+    const callJSX = (s, o) => utils.callJSX(s, o);
 
     FASTPASS_UI.Logic.Project = {
         
@@ -576,8 +576,28 @@
                     await callJSX(`FASTPASS.Project.bin('${encodeURIComponent('CHY')}')`);
                     
                     // 2. Importem la llista al Root
+                    //    (2026-11-02 · BUG #215) `importList` va EN BLOCS i reintenta
+                    //    (vegeu `utils.importList`): el 02/11 la importació dels 26
+                    //    rètols va deixar el diàleg «Import Files» de Premiere penjat i
+                    //    el flux va continuar com si s'haguera fet. Ací es mira el
+                    //    resultat i, si algun bloc ha fallat, es reintenta d'un en un.
                     const safeWotts = newWotts.map(f => f.path.replace(/\\/g, "/"));
-                    await utils.importList(safeWotts, "root");
+                    let impW = await utils.importList(safeWotts, "root");
+                    if (!impW.ok && !impW.timeout) {
+                        utils.log(`🔁 [INGEST] Reintent de la ingesta de rètols d'un en un (${safeWotts.length})…`, 'WARN');
+                        impW = await utils.importList(safeWotts, "root", { chunkSize: 1 });
+                    }
+                    // ── CORTACIRCUITS (2026-11-02 · BUG #215) ──────────────────────
+                    // Si el motor de Premiere no respon (diàleg modal obert), no es
+                    // reintenta res més ni es mou ítem a ítem: cada crida tornaria a
+                    // esperar el seu temps límit (26 × 15 min). S'avorta ja, amb el
+                    // motiu, i NO es crea cap projecte sense rètols.
+                    if (impW.timeout) {
+                        throw new Error('Premiere no respon: la importació dels rètols ha ' +
+                            'quedat bloquejada (' + impW.chunks + ' bloc(s), ' + impW.failed +
+                            ' sense resposta). Tanca el diàleg que tinga obert Premiere i ' +
+                            'torna-ho a provar amb MAIN. Projecte NO creat.');
+                    }
                     // L'índex de durades del bin CHY ha canviat: invalidem la caché
                     // perquè el proper Tema‑Titol llegeixi els nous wotts.
                     this._wottIdxCache = null;
@@ -591,13 +611,15 @@
                         const safeName = escapedName.replace(/'/g, "\\'");
 
                         // Intento 1: per nom exacte (pot fallar si el root encara indexa)
-                        let moveRes = await callJSX(`FASTPASS.Project.move('${safeName}', 'CHY')`);
+                        // (2026-11-02 · BUG #215) 60 s: moure un ítem del panell és
+                        // instantani; si no contesta, Premiere està bloquejat.
+                        let moveRes = await callJSX(`FASTPASS.Project.move('${safeName}', 'CHY')`, { timeoutMs: 60000 });
                         if (moveRes !== "OK") {
                             // Intento 2: extreiem l'ID (ex: 336346) i movem per ID
                             const idMatch = wott.name.match(/[0-9]{6}/);
                             if (idMatch) {
                                 const wottID = idMatch[0];
-                                const moveByRes = await callJSX(`FASTPASS.Project.moveByID('${wottID}', 'CHY')`);
+                                const moveByRes = await callJSX(`FASTPASS.Project.moveByID('${wottID}', 'CHY')`, { timeoutMs: 60000 });
                                 if (moveByRes === "OK") {
                                     utils.log(`📦 [INGEST] Rètol mogut a CHY via ID: ${wott.name.substring(0, 60)}...`, "INFO");
                                 } else {
@@ -607,6 +629,25 @@
                                 utils.log(`❌ [INGEST] No s'ha pogut moure rètol a CHY (sense ID al nom): ${wott.name}`, "ERROR");
                             }
                         }
+                    }
+
+                    // 5. VERIFICACIÓ (2026-11-02 · BUG #215) ─────────────────────────
+                    // El cas real del 02/11: el diàleg «Import Files» de Premiere es
+                    // va penjar, l'usuari el va cancel·lar i el flux va construir el
+                    // projecte SENSE cap rètol, sense avisar. Ací es compta què ha
+                    // arribat de veritat al bin CHY; si no hi ha arribat res, s'avorta
+                    // amb un error clar: val més no crear el projecte que crear-lo mut.
+                    const postW = await this._getExistingAssets();
+                    const arribats = postW.wotts.length - (existing.wotts ? existing.wotts.length : 0);
+                    utils.log(`📊 [INGEST] Bin CHY: ${postW.wotts.length} rètol(s) · nous ` +
+                        `${arribats > 0 ? arribats : 0} de ${newWotts.length} demanats` +
+                        (impW.ok ? '' : ' (la importació va fallar en bloc)'),
+                        arribats > 0 ? 'INFO' : 'WARN');
+                    if (arribats <= 0) {
+                        throw new Error('Ingesta de rètols fallida: cap dels ' + newWotts.length +
+                            ' rètols ha arribat al bin CHY (Premiere ha deixat la importació a ' +
+                            'mitges o hi havia un diàleg obert). Projecte NO creat. Torna-ho a ' +
+                            'provar amb MAIN.');
                     }
                 }
             }
@@ -652,12 +693,12 @@
                         const escapedName = encodeURIComponent(p.name);
                         const safeName = escapedName.replace(/'/g, "\\'");
                         const safeBinName = encodeURIComponent('PORTADES').replace(/'/g, "\\'");
-                        let moveRes = await callJSX(`FASTPASS.Project.move('${safeName}', '${safeBinName}')`);
+                        let moveRes = await callJSX(`FASTPASS.Project.move('${safeName}', '${safeBinName}')`, { timeoutMs: 60000 });
                         if (moveRes !== "OK") {
                             const idMatch = p.name.match(/[0-9]{6}/);
                             if (idMatch) {
                                 const portId = idMatch[0];
-                                const moveByRes = await callJSX(`FASTPASS.Project.moveByID('${portId}', '${safeBinName}')`);
+                                const moveByRes = await callJSX(`FASTPASS.Project.moveByID('${portId}', '${safeBinName}')`, { timeoutMs: 60000 });
                                 if (moveByRes === "OK") {
                                     utils.log(`🖼️ [PORTADES] Portada moguda al bin via ID: ${p.name.substring(0, 70)}...`, "INFO");
                                 } else {

@@ -143,6 +143,61 @@
             });
         },
         /**
+         * _sh: llança una comanda de sistema SENSE finestra de consola.
+         *
+         * (2026-11-02 · O-B1) Fins ara TOTES les crides d'este mòdul anaven per
+         * `IO.executeShell` (JSX), que escriu un .bat i el llança amb
+         * `File.execute()` → una finestra de CMD per cada ffprobe/ffmpeg, damunt
+         * del panell i del Premiere. Ara es prova primer `Utils.execHidden()`
+         * (wscript + bin\hidden.vbs, finestra 0) i, si no estiguera disponible,
+         * es manté el camí antic perquè res deixe de funcionar.
+         *
+         * @param {string} cmd - comanda tal com aniria dins del .bat
+         * @param {Object} [opts] - { timeoutMs }
+         * @returns {Promise<{mode:'hidden'|'jsx', ok:boolean, code:number}>}
+         *   `mode:'hidden'` = el procés JA ha acabat (no cal esperar cap fitxer
+         *   de senyal, es pot llegir la sortida de seguida).
+         */
+        _sh: async function(cmd, opts) {
+            var U = window.FASTPASS_UI && window.FASTPASS_UI.Utils;
+            if (U && typeof U.execHidden === 'function') {
+                var r = null;
+                try { r = await U.execHidden(cmd, opts || {}); } catch (eX) { r = { started: false, err: String((eX && eX.message) || eX) }; }
+                if (r && r.started && r.mode === 'hidden') return r;
+                // Sense via oculta (CEP antic, sense bin\hidden.vbs…): es diu al log
+                // i es continua com sempre, amb la finestra de consola.
+                utils.log('⚠️ [shell] execHidden no disponible (' + ((r && r.err) || '?') + ') → IO.executeShell (amb finestra de CMD)');
+            }
+            try { await utils.callJSX(`IO.executeShell(${JSON.stringify(cmd)})`); } catch (eS) { }
+            return { mode: 'jsx', ok: true, code: 0, started: true };
+        },
+
+        /**
+         * _waitDone: espera el `.done` que escriuen els .ps1 d'este mòdul.
+         * Si la comanda s'ha llançat per la via oculta JA ha acabat, així que
+         * n'hi ha prou amb una lectura (abans es pollava amb `waitForFile`, que
+         * espera el primer tick de l'interval: 0,5-2 s regalats per tasca).
+         * @param {string} doneFile - fitxer .done ('OK' o 'FAIL:...')
+         * @param {Object} res - resultat de `_sh`
+         * @param {number} intervalMs - per a la via antiga
+         * @param {number} timeoutMs - per a la via antiga
+         */
+        _waitDone: async function(doneFile, res, intervalMs, timeoutMs) {
+            if (res && res.mode === 'hidden') {
+                let txt = '';
+                try { txt = String(await utils.callJSX(`IO.readTxt(${JSON.stringify(doneFile)})`) || ''); } catch (eR) { txt = ''; }
+                const t = txt.trim();
+                if (t.indexOf('OK') === 0) return true;
+                // Sense .done vàlid: la comanda ha mort antes (el codi d'eixida ja
+                // és al log d'execHidden). Es llança perquè el cridador ho tracte
+                // igual que un FAIL del .ps1.
+                throw new Error('ERR_CMD: ' + (t || ('sense .done · exit=' + ((res && res.code != null) ? res.code : '?'))) + ' → ' + doneFile);
+            }
+            await this.waitForFile(doneFile, intervalMs || 1000, timeoutMs || 180000);
+            return true;
+        },
+
+        /**
          * checkClipExists: Verifica si un clip ja existeix al disc.
          * Usa IO.stat en lloc d'IO.exists perquè IO.exists pot donar
          * falsos positius en paths UNC (xarxa). IO.stat retorna les
@@ -215,7 +270,10 @@
                 const safeTemp = tempOut.replace(/\\/g, '\\\\');
                 const cmd = `"${ffprobeBin}" -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${sourcePath}" > "${tempOut}" 2>&1`;
                 utils.log(`📏 [duration] ffprobe: ${String(sourcePath).split(/[\\/]/).pop()}`);
-                await utils.callJSX(`IO.executeShell(${JSON.stringify(cmd)})`);
+                // (2026-11-02 · O-B1) Sense finestra de consola. Amb la via oculta el
+                // procés ja ha acabat quan torna, així que no cal pollar estabilitat.
+                const shRes = await this._sh(cmd, { timeoutMs: 60000 });
+                const hidden = !!(shRes && shRes.mode === 'hidden');
 
                 // Polling del CONTINGUT (el redirect crea el fitxer buit de seguida).
                 // Només s'accepta una línia que sigui EXACTAMENT un número: si ffprobe ha
@@ -226,7 +284,7 @@
                 let _prevLen = -1;
                 let _stable = 0;
                 for (let i = 0; i < 25; i++) {
-                    await new Promise(r => setTimeout(r, 400));
+                    if (!(hidden && i === 0)) await new Promise(r => setTimeout(r, 400));
                     let chunk = '';
                     try { chunk = await utils.callJSX(`IO.readTxt('${safeTemp}')`); } catch (eR) { chunk = ''; }
                     if (chunk && chunk.length > raw.length) raw = chunk;
@@ -239,6 +297,7 @@
                         }
                     }
                     if (dur > 0) {
+                        if (hidden) break;   // el procés ja ha acabat: no cal confirmar res
                         if (raw.length === _prevLen) { _stable++; } else { _stable = 0; }
                         _prevLen = raw.length;
                         if (_stable >= 2) break;
@@ -294,13 +353,14 @@
             // Executar ffprobe per obtenir durada: -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1
             const tempOut = `C:\\temp\\ffprobe_dur_${Date.now()}.txt`;
             const cmd = `"${ffprobeBin}" -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${sourcePath}" > "${tempOut}" 2>&1`;
-            const safeCmd = JSON.stringify(cmd);
             utils.log(`🎬 [checkSourceDuration] Executant ffprobe: ${cmd}`);
 
             try {
-                await utils.callJSX(`IO.executeShell(${safeCmd})`);
-                // ffprobe és molt ràpid, esperar màxim 5s
-                await this.waitForFile(tempOut, 200, 5000);
+                // (2026-11-02 · O-B1) sense finestra de CMD. Si la via oculta ha
+                // funcionat, el fitxer ja hi és i no cal esperar res.
+                const shRes = await this._sh(cmd, { timeoutMs: 20000 });
+                // ffprobe és molt ràpid, esperar màxim 5s (només via antiga)
+                if (!(shRes && shRes.mode === 'hidden')) await this.waitForFile(tempOut, 200, 5000);
             } catch (e) {
                 utils.log(`⚠️ [checkSourceDuration] Timeout esperant ffprobe: ${e.message}`);
                 return { ok: false, wait: false, duration: 0, error: `ffprobe timeout: ${e.message}` };
@@ -367,7 +427,10 @@
                 // Només 12 s de paquets al voltant de la posició → lectura ràpida fins i tot en UNC.
                 const cmd = `"${ffprobeBin}" -v error -select_streams v:0 -show_entries packet=pts_time,flags -of csv=p=0 -read_intervals "${from}%+12" "${sourcePath}" > "${tempOut}" 2>&1`;
                 utils.log(`🔑 [keyframe] ffprobe: ${from.toFixed(2)}s..${(from + 12).toFixed(2)}s de ${String(sourcePath).split(/[\\/]/).pop()}`);
-                await utils.callJSX(`IO.executeShell(${JSON.stringify(cmd)})`);
+                // (2026-11-02 · O-B1) sense finestra de CMD: la via oculta ja ha acabat
+                // quan torna, així que n'hi ha prou amb una lectura del fitxer.
+                const shRes = await this._sh(cmd, { timeoutMs: 60000 });
+                const hidden = !!(shRes && shRes.mode === 'hidden');
 
                 // ⚠️ (2026-09-25d) El redirect crea el fitxer BUID de seguida: esperar IO.exists i
                 // llegir 400 ms després donava contingut incomplet → "Sense keyframe <= 783s" i
@@ -380,13 +443,14 @@
                 let _stable = 0;
                 let _prevLen = -1;
                 for (let i = 0; i < 30; i++) {
-                    await new Promise(r => setTimeout(r, 400));
+                    if (!(hidden && i === 0)) await new Promise(r => setTimeout(r, 400));
                     let chunk = '';
                     try { chunk = await utils.callJSX(`IO.readTxt('${safeTemp}')`); } catch (eR) { chunk = ''; }
                     if (chunk && chunk.length > raw.length) raw = chunk;
                     kf = _parseKeyframePts(raw, requested);
                     // Sortida: (a) keyframe prou a prop del demanat (≤2 s abans), o (b) l'eixida
                     // ha deixat de créixer (ffprobe ha acabat) i ja tenim algun keyframe.
+                    if (hidden) break;   // la via oculta ja ha acabat: no hi ha res a esperar
                     if (kf !== null && (requested - kf) <= 2.0) break;
                     if (raw.length === _prevLen) { _stable++; } else { _stable = 0; }
                     _prevLen = raw.length;
@@ -461,8 +525,9 @@
                 utils.log('🎯 [titolet] Escanejant ROI del cleanFeed (' + fps + ' fps, ' + w + 'x' + h +
                     ', x ' + x0 + '-' + (x0 + xW) + ', y ' + y0 + '-' + rY[1] + ') des de ' + (opts.tStart || 0) + 's…');
                 const psCmd = 'powershell -NoProfile -ExecutionPolicy Bypass -File "' + psFile + '"';
-                await utils.callJSX('IO.executeShell(' + JSON.stringify(psCmd) + ')');
-                await this.waitForFile(doneFile, 1000, 900000);
+                // (2026-11-02 · O-B1) sense finestra de CMD
+                const shRes = await this._sh(psCmd, { timeoutMs: 900000 });
+                await this._waitDone(doneFile, shRes, 1000, 900000);
                 await utils.callJSX('IO.remove(' + JSON.stringify(doneFile) + ')').catch(() => { });
                 await utils.callJSX('IO.remove(' + JSON.stringify(psFile) + ')').catch(() => { });
                 return { ok: true, path: outPath, w: w, h: h, fps: fps, error: null };
@@ -514,8 +579,9 @@
                 if (!cepFs || !cepFs.writeFile) return { ok: false, path: outPath, error: 'cep.fs.writeFile no disponible' };
                 cepFs.writeFile(psFile, '\uFEFF' + psContent);
                 const psCmd = 'powershell -NoProfile -ExecutionPolicy Bypass -File "' + psFile + '"';
-                await utils.callJSX('IO.executeShell(' + JSON.stringify(psCmd) + ')');
-                await this.waitForFile(doneFile, 500, 120000);
+                // (2026-11-02 · O-B1) sense finestra de CMD
+                const shRes = await this._sh(psCmd, { timeoutMs: 180000 });
+                await this._waitDone(doneFile, shRes, 500, 120000);
                 await utils.callJSX('IO.remove(' + JSON.stringify(doneFile) + ')').catch(() => { });
                 await utils.callJSX('IO.remove(' + JSON.stringify(psFile) + ')').catch(() => { });
                 return { ok: true, path: outPath, error: null };
@@ -587,22 +653,21 @@
                 cepFs.writeFile(psFile, psContent);
                 utils.log(`✅ [extractClip] .ps1 creat: ${psFile}`);
 
-                // Executar .ps1 via PowerShell
+                // Executar .ps1 via PowerShell (2026-11-02 · O-B1: sense finestra de CMD)
                 const psCmd = `powershell -NoProfile -ExecutionPolicy Bypass -File "${psFile}"`;
-                const safeCmd = JSON.stringify(psCmd);
                 utils.log(`🎬 [extractClip] Executant: ${psCmd}`);
-                await utils.callJSX(`IO.executeShell(${safeCmd})`);
-                utils.log(`⏳ [extractClip] PowerShell llançat. Polling .done: ${doneFile}`);
+                const shRes = await this._sh(psCmd, { timeoutMs: 360000 });
+                utils.log(`⏳ [extractClip] .done: ${doneFile}`);
 
-                // Polling .done amb IO.readTxt (FIABLE)
+                // .done amb IO.readTxt (FIABLE)
                 try {
-                    await this.waitForFile(doneFile, 2000, 300000);
+                    await this._waitDone(doneFile, shRes, 2000, 300000);
                     await utils.callJSX(`IO.remove(${JSON.stringify(doneFile)})`).catch(() => {});
                     await utils.callJSX(`IO.remove(${JSON.stringify(psFile)})`).catch(() => {});
                     utils.log(`✅ [extractClip] Clip extret correctament: ${outputPath}`);
                     return { ok: true, path: outputPath, error: null };
                 } catch(e) {
-                    utils.log(`❌ [extractClip] Timeout .done: ${doneFile}`);
+                    utils.log(`❌ [extractClip] .done: ${e.message}`);
                     return { ok: false, path: outputPath, error: `Timeout extracció` };
                 }
             } catch (e) {
@@ -614,7 +679,10 @@
 
         /**
          * runCommand: Executa un comando genèric de FFmpeg.
-         * Retorna "OK_EXECUTING" un cop el procés ha estat llançat (no espera finalització).
+         * Retorna "OK_EXECUTING" un cop el procés ha acabat (2026-11-02 · O-B1:
+         * abans tornava de seguida perquè el llançament era asíncron; ara espera
+         * la fi del procés, que és el que feien tots els cridadors amb
+         * `waitForFile` just després) o "ERR:..." si ha fallat.
          *
          * @param {string} args - Arguments del comando FFmpeg
          */
@@ -624,9 +692,9 @@
             const fullCommand = `"${ffmpegBin}" ${args}`;
             utils.log(`🎬 Executant FFmpeg: ${fullCommand}`);
 
-            // JSON.stringify per a un escapat segur de cometes i barres
-            const safeCommand = JSON.stringify(fullCommand);
-            return await utils.callJSX(`IO.executeShell(${safeCommand})`);
+            const shRes = await this._sh(fullCommand, { timeoutMs: 1800000 });
+            if (shRes && shRes.mode === 'hidden' && !shRes.ok) return 'ERR:exit=' + shRes.code;
+            return 'OK_EXECUTING';
         },
 
         /**
@@ -687,9 +755,10 @@
                     utils.log(`🔄 [reverse] Invertint clip: ${fileName} → ${outName}`);
 
                     const psCmd = `powershell -NoProfile -ExecutionPolicy Bypass -File "${psFile}"`;
-                    await utils.callJSX(`IO.executeShell(${JSON.stringify(psCmd)})`);
-                    utils.log(`⏳ [reverse] Polling .done: ${doneFile}`);
-                    await this.waitForFile(doneFile, 1000, 180000);
+                    // (2026-11-02 · O-B1) sense finestra de CMD
+                    const shRes = await this._sh(psCmd, { timeoutMs: 240000 });
+                    utils.log(`⏳ [reverse] .done: ${doneFile}`);
+                    await this._waitDone(doneFile, shRes, 1000, 180000);
                     await utils.callJSX(`IO.remove(${JSON.stringify(doneFile)})`).catch(() => {});
                     await utils.callJSX(`IO.remove(${JSON.stringify(psFile)})`).catch(() => {});
                     utils.log(`✅ [reverse] Clip invertit: ${outputPath}`);

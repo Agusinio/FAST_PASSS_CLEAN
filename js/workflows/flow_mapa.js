@@ -104,8 +104,12 @@
          * marcador GROC porta un GRAFISME associat a la carpeta ZZZ_GRAFISME del dia.
          * (2026-09-23) Ampliable: afegir aquí els casos nous (p. ex. 'GF', 'INFOGRAFIA',
          * 'EVOLUCIO', 'PANORAMICA'…). La comparació és sense accents i en majúscules.
+         * (2026-10-30 · petició d'usuari) `GOOGLE` també: els grafismes de Google
+         * (`app google tots sant gervasi esvoranc.mov`) es guien pels marcadors amb
+         * «GOOGLE» al títol, igual que els MAPA. La pregunta deixa de ser «és MAPA?»
+         * i passa a ser «és MAPA o GOOGLE?».
          */
-        GRAF_KEYWORDS: ['MAPA'],
+        GRAF_KEYWORDS: ['MAPA', 'GOOGLE'],
 
         /**
          * MATCH_MIN: llindar (0-1) de la coincidència RELATIVA de nom per a ancorar el

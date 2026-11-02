@@ -863,6 +863,15 @@
         }
     }
 
+    /** _existsNow: comprovacio PUNTUAL d'existencia d'un fitxer (sense polling). */
+    function _existsNow(path) {
+        try {
+            const fs = window.cep && window.cep.fs;
+            if (fs && fs.stat) return !!(fs.stat(path) && fs.stat(path).err === 0);
+        } catch (e) { }
+        return false;
+    }
+
     /** _readText: llegeix un .txt UTF-8 des de JS (amb _fromMojibake si cal). */
     async function _readText(path) {
         let s = '';
@@ -910,8 +919,22 @@
             : ' -Lang "' + langs[0] + '"';
         const cmd = 'powershell -NoProfile -ExecutionPolicy Bypass -File "' + ocrScript +
             '" -In "' + pngPath + '" -Out "' + outTxt + '"' + langArg;
-        try { await utils.callJSX('IO.executeShell(' + JSON.stringify(cmd) + ')'); } catch (eS) { return ''; }
-        const ready = await _waitForPath(outTxt, 250, 45000);
+        // (2026-11-02 · O-B1) SENSE FINESTRA DE CONSOLA: `Utils.execHidden` llança
+        // ocr.ps1 amb wscript (finestra 0) i ESPERA la fi, així que el .txt ja hi és
+        // quan torna. Si la via oculta no estiguera disponible es manté el
+        // llançament antic (asíncron) i es polla amb `_waitForPath`.
+        let ready = false;
+        const U = window.FASTPASS_UI && window.FASTPASS_UI.Utils;
+        let shRes = null;
+        if (U && typeof U.execHidden === 'function') {
+            try { shRes = await U.execHidden(cmd, { timeoutMs: 90000 }); } catch (eX) { shRes = null; }
+        }
+        if (shRes && shRes.started && shRes.mode === 'hidden') {
+            ready = _existsNow(outTxt);
+        } else {
+            try { await utils.callJSX('IO.executeShell(' + JSON.stringify(cmd) + ')'); } catch (eS) { return ''; }
+            ready = await _waitForPath(outTxt, 250, 45000);
+        }
         if (!ready) {
             utils.log('⚠️ [titolet] OCR (' + langs.join('/') + '): sense resultat en 45 s → ' + outTxt, 'high');
             return '';

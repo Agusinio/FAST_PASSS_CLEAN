@@ -873,8 +873,23 @@
                     var cep = window.cep || window.__adobe_cep__;
                     if (!cep || !cep.process) { resolve({ success: false, message: "cep.process no disponible", removedTracks: 0 }); return; }
                     var psArgs = "-ExecutionPolicy Bypass -File \"C:\\temp\\manage_prproj.ps1\" -prprojPath \"" + projPath + "\" -action remove_old_tracks";
-                    cep.process.createProcess("powershell.exe", psArgs);
-                    setTimeout(function() { resolve({ success: true, message: "PowerShell executat", removedTracks: -1 }); }, 10000);
+                    // (2026-11-02 · #213) ABANS: `cep.process.createProcess("powershell.exe", psArgs)`
+                    // amb tots els arguments en UNA cadena (CEP els passa com UN sol
+                    // argument → la comanda no s'executava) i amb la finestra de
+                    // PowerShell A LA VISTA damunt de Premiere. I el resultat era un
+                    // `setTimeout` de 10 s que deia «executat» sense mirar res.
+                    var U = window.FASTPASS_UI && window.FASTPASS_UI.Utils;
+                    if (!U || typeof U.execHidden !== 'function') {
+                        resolve({ success: false, message: "execHidden no disponible", removedTracks: 0 });
+                        return;
+                    }
+                    U.execHidden('powershell -NoProfile ' + psArgs, { timeoutMs: 120000 }).then(function(r) {
+                        if (!r || !r.started) { resolve({ success: false, message: "No s'ha pogut llançar PowerShell: " + ((r && r.err) || '?'), removedTracks: 0 }); return; }
+                        if (!r.ok) { resolve({ success: false, message: "PowerShell ha fallat (" + (r.err || '?') + "): revisa " + psArgs.split('"')[1], removedTracks: 0 }); return; }
+                        resolve({ success: true, message: "PowerShell executat (ocult via " + (r.via || '?') + ")", removedTracks: -1 });
+                    }, function(eR) {
+                        resolve({ success: false, message: "Excepció: " + ((eR && eR.message) || eR), removedTracks: 0 });
+                    });
                 } catch(e) { resolve({ success: false, message: "Excepció: " + e.message, removedTracks: 0 }); }
             });
         }

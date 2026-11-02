@@ -63,6 +63,14 @@
             log(`🔧 [DIAG] FFmpeg.extractClip existeix? ${!!(window.FASTPASS_UI && window.FASTPASS_UI.Logic && window.FASTPASS_UI.Logic.FFmpeg && typeof window.FASTPASS_UI.Logic.FFmpeg.extractClip === 'function')}`);
             getUtils().updateUIState('BUSY');
 
+            // (2026-11-02 · BUG #215) Rellotge d'espera al botó MAIN mentre dura el
+            // flux (CREAR/ACTUALITZAR pot dur minuts). Abans, si una crida al motor
+            // de Premiere es quedava penjada (diàleg «Import Files»), el botó seguia
+            // amb la seua etiqueta i el panell semblava mort.
+            const _btnMain = document.getElementById('btnMainAction');
+            const _uiApi = (window.FASTPASS_UI && window.FASTPASS_UI.UI) || null;
+            if (_uiApi && _uiApi.markBtnBusy && _btnMain) _uiApi.markBtnBusy(_btnMain);
+
             try {
                 switch (action) {
                     case 'NEW': await this._runNew(); break;
@@ -74,6 +82,7 @@
             } catch (e) {
                 getUtils().handleError(e, "MainAction");
             } finally {
+                if (_uiApi && _uiApi.clearBtnBusy && _btnMain) _uiApi.clearBtnBusy(_btnMain);
                 getUtils().updateUIState('READY');
             }
         },
@@ -168,7 +177,7 @@
                     log("↩️ [RESET] Cancel·lat per l'usuari.", 'INFO');
                     return;
                 }
-                if (btn) { btn.disabled = true; btn.innerText = '⏳'; }
+                if (btn) { btn.disabled = true; btn.innerText = '⏳'; btn.classList.add('btn-busy'); }
                 getUtils().updateUIState('BUSY');
 
                 // ── 2. TANCAR el projecte (VERIFICAT) ─────────────────────────
@@ -255,7 +264,7 @@
             } catch (e) {
                 getUtils().handleError(e, 'Reset');
             } finally {
-                if (btn) { btn.disabled = false; btn.innerText = '🔄'; }
+                if (btn) { btn.disabled = false; btn.innerText = '🔄'; btn.classList.remove('btn-busy'); }
                 getUtils().updateUIState('READY');
             }
         },

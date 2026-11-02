@@ -635,18 +635,56 @@ button.btn-debug {
 /* BOTÓ OCUPAT (2026-10-16 · BUG #172): mentre la portada s'exporta (còpia a la zona neta +
    captura QE + neteja = 10-30 s) el botó queda desactivat amb un pols, perquè es vegi que hi
    ha feina en curs i no es torni a clicar. L'afegeix/treu `markBtnBusy`/`clearBtnBusy`
-   (js/main.js). El clic repetit, a més, el descarta la guarda `_portadaRunning` del flux. */
+   (js/main.js). El clic repetit, a més, el descarta la guarda `_portadaRunning` del flux.
+   (2026-11-02 · O-C2) A més del pols, el botó porta ara un RELLOTGE girant (::before):
+   és el senyal de «procediment en marxa» mentre la tasca externa corre oculta
+   (ffprobe/ffmpeg/OCR sense finestres de consola, vegeu Utils.execHidden). */
 @keyframes fpBtnBusyPulse {
     0%   { opacity: 1; }
-    50%  { opacity: 0.4; }
+    50%  { opacity: 0.55; }
     100% { opacity: 1; }
 }
-button.btn-busy {
-    animation: fpBtnBusyPulse 1s ease-in-out infinite;
+button.btn-busy,
+button.btn-busy.icon-only,
+button.btn-busy.icon-only.doble {
+    /* (2026-11-02 · #214) Mentre dura la tasca el botó ensenya NOMÉS el rellotge
+       d'arena. `font-size:0` amaga els nodes de TEXT (i els emoji) i la regla dels
+       fills amaga el marcatge (`<span>`/`<img>` de les icones). `markBtnBusy` buida
+       el botó i en desa el marcatge, així que això és la xarxa per als fluxos que
+       pinten el botó a mà (p. ex. `flow_mainButton`, RESET). Els selectors
+       `.icon-only[.doble]` hi són perquè eixes regles porten `!important` i, amb la
+       mateixa especificitat, guanyarien per orde. */
+    font-size: 0 !important;
+    animation: fpBtnBusyPulse 1.6s ease-in-out infinite;
     cursor: progress !important;
     background-color: #b06a12;
     color: #fff2d9;
     box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.2);
+}
+button.btn-busy > * {
+    display: none !important;
+}
+/* El rellotge d'arena: l'ÚNIC senyal visible mentre la tasca corre oculta. */
+button.btn-busy::before {
+    content: "\23F3";
+    display: inline-block;
+    font-size: 14px;
+    line-height: 1;
+    vertical-align: -1px;
+    margin-right: 2px;
+    animation: fpBusyHour 1.1s ease-in-out infinite;
+}
+/* Text de progrés OPCIONAL (el posa `markBtnBusy` només si rep `text`). */
+button.btn-busy > .fp-busy-txt {
+    display: inline !important;
+    font-size: 11px;
+    vertical-align: 1px;
+    margin-left: 4px;
+    white-space: nowrap;
+}
+@keyframes fpBusyHour {
+    0%, 40%   { transform: rotate(0deg); }
+    60%, 100% { transform: rotate(180deg); }
 }
 button.btn-busy:disabled {
     opacity: 1;

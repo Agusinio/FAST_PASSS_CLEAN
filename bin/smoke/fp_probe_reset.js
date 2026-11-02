@@ -404,12 +404,22 @@
 
             var idx = await readRepo('index.html');
             ok('#175/20 index.html carrega `19_Fs_Wipe.js` i ha pujat els cache-busts',
-                /19_Fs_Wipe\.js\?v=2/.test(idx) && /utils\.js\?v=28/.test(idx) &&
-                /flow_mainButton\.js\?v=39/.test(idx) && /srt_editor\.js\?v=87/.test(idx),
-                'modul=' + /19_Fs_Wipe\.js\?v=2/.test(idx) + ' * utils=' + /utils\.js\?v=28/.test(idx) +
-                ' * main=' + /flow_mainButton\.js\?v=39/.test(idx) + ' * srt=' + /srt_editor\.js\?v=87/.test(idx));
+                /19_Fs_Wipe\.js\?v=2/.test(idx) && /utils\.js\?v=30/.test(idx) &&
+                /flow_mainButton\.js\?v=41/.test(idx) && /srt_editor\.js\?v=87/.test(idx),
+                'modul=' + /19_Fs_Wipe\.js\?v=2/.test(idx) + ' * utils=' + /utils\.js\?v=30/.test(idx) +
+                ' * main=' + /flow_mainButton\.js\?v=41/.test(idx) + ' * srt=' + /srt_editor\.js\?v=87/.test(idx));
 
-            // ── 5b) GUARDES DEL #180 (RESET: tancar el projecte i esborrar de debò) ──
+            // ── 5a-bis) #213 · LLANÇADOR OCULT (2026-11-02) ─────────────────────
+            // `cep.process.createProcess` NO busca al PATH: amb 'wscript.exe' a
+            // seques torna err=3 i tot queia a IO.executeShell (finestra de CMD).
+            ok('#213 utils: `wscript.exe` amb RUTA ABSOLUTA + reserva PowerShell oculta',
+                /_wscriptExe: function/.test(ut) &&
+                /C:\\\\Windows\\\\System32\\\\wscript\.exe/.test(ut) &&
+                !/createProcess\('wscript\.exe'/.test(ut) &&
+                /_psHiddenPayload: function/.test(ut) &&
+                /'-WindowStyle', 'Hidden', '-EncodedCommand'/.test(ut) &&
+                !/bin\\\\hidden\.vbs no trobat'; return res/.test(ut));
+
             ok('#180/7 utils: `_wipeFs` tria motor i `wipeFolder`/`deleteFolder` l usen',
                 /_wipeFs: function/.test(ut) && /var pick = o\.fs \?/.test(ut) &&
                 (ut.match(/_wipeFs\(\)/g) || []).length >= 2 && !/var fs = o\.fs \|\| this\._nodeFs\(\)/.test(ut),
@@ -769,9 +779,9 @@
             }
 
             ok('cache-busts 28/10: flow_render 38 · flow_mapa 31 · srt_editor 87',
-                /flow_render\.js\?v=38/.test(idx) && /flow_mapa\.js\?v=31/.test(idx) &&
+                /flow_render\.js\?v=39/.test(idx) && /flow_mapa\.js\?v=32/.test(idx) &&
                 /srt_editor\.js\?v=87/.test(idx),
-                'render=' + /flow_render\.js\?v=38/.test(idx) + ' * mapa=' + /flow_mapa\.js\?v=31/.test(idx) +
+                'render=' + /flow_render\.js\?v=39/.test(idx) + ' * mapa=' + /flow_mapa\.js\?v=32/.test(idx) +
                 ' * srt=' + /srt_editor\.js\?v=87/.test(idx));
 
         } catch (e) {

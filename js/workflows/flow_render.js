@@ -431,7 +431,10 @@
                 }
 
                 getUtils().status('Renderitzant des de Premiere…', 'procesando');
-                const rDir = await callJSX(`Render.renderDirect('${presetPath}', '${getUtils().escape(outputDir)}', '${getUtils().escape(fileName)}')`);
+                // (2026-11-02 · BUG #215) `timeoutMs: 0`: este és l'ÚNIC JSX que pot
+                // dur legítimament molt de temps (exportAsMediaDirect sencer). La
+                // vigilància del pont no hi ha de tallar res.
+                const rDir = await callJSX(`Render.renderDirect('${presetPath}', '${getUtils().escape(outputDir)}', '${getUtils().escape(fileName)}')`, { timeoutMs: 0 });
                 log('🎬 [Render] directe → ' + rDir);
 
                 if (rDir && String(rDir).indexOf('OK') === 0) {

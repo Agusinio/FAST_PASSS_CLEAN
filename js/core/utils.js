@@ -35,6 +35,11 @@
         _logPending: [],
         _auditPending: [],
         _ioTimer: 0,
+        // (2026-11-02 · O-B1) Estat de la via OCULTA (`execHidden`): ruta ja
+        // resolta de bin\hidden.vbs i carpeta temporal verificada. Es desen per
+        // no repetir `cep.fs.stat`/proves d'escriptura a cada tasca.
+        _hiddenRunnerPath: '',
+        _hiddenTempDir: '',
         // Filtre de logs per tema: string amb keywords separades per coma o null (desactivat).
         // Quan està actiu, log() NOMÉS escriu els missatges que continguin alguna keyword.
         // ⚠️ TEMPORAL (2026-09-04): DESACTIVAT per poder veure els logs del botó Main
@@ -342,6 +347,26 @@
         },
 
         /**
+         * JSX_TIMEOUT_MS: (2026-11-02 · BUG #215) Vigilància del pont ExtendScript.
+         *
+         * PER QUÈ: `csInterface.evalScript` no té temps límit. Si Premiere obri un
+         * diàleg MODAL (el cas real: la finestra de progrés «Import Files» en
+         * ingestar 26 rètols ProRes de 44 MB per xarxa) el motor queda bloquejat i
+         * la resposta NO arriba MAI: el panell esperava indefinidament, sense
+         * rellotge al botó ni cap error al log (FASTPASS.log es quedava mut des de
+         * l'inici de la importació). Amb esta vigilància la crida es talla amb un
+         * ERROR explícit i el flux pot reintentar o avortar en compte de penjar-se.
+         * `opts.timeoutMs = 0` la desactiva per a una crida concreta.
+         *
+         * VALOR: 15 min, el mateix topall que la xarxa de seguretat del botó ocupat
+         * (`BUSY_MAX_MS` a `main.js`). És prou llarg per a una crida legítimament
+         * lenta (`Project.open` d'una plantilla gran, `saveAs`…) i, en canvi, talla
+         * un bloqueig infinit. La RENDER (`Render.renderDirect` =
+         * `exportAsMediaDirect`) va amb `timeoutMs: 0`: un export pot dur molt més.
+         */
+        JSX_TIMEOUT_MS: 900000,
+
+        /**
          * Pont asíncron cap al motor ExtendScript (JSX).
          */
         callJSX: function(script, opts) {
@@ -349,6 +374,13 @@
             // distingir "error de transport" de "resposta buida"). Per defecte es
             // manté el comportament clàssic (ERR → "[]") per no alterar els llamants.
             var rawError = !!(opts && opts.rawError);
+            // Vigilància (BUG #215): valor per defecte generós; el retorn és el
+            // sentinella '__TIMEOUT__' (no comença per "ERR:" perquè no és un error
+            // del codi JSX, sinó que Premiere no ha contestat).
+            var timeoutMs = (opts && typeof opts.timeoutMs === 'number')
+                ? opts.timeoutMs
+                : (typeof this.JSX_TIMEOUT_MS === 'number' ? this.JSX_TIMEOUT_MS : 900000);
+            var self = this;
             // Auditoria: registra cada script enviat a Premiere (per poder comparar
             // les accions reals amb el que el codi pretén executar)
             if (this._auditPath) {
@@ -368,9 +400,26 @@
             this._jsxCount(script);   // 📊 FASE 0: compta la crida real a Premiere
 
             return new Promise(function(resolve) {
-                var isAnimX = script.indexOf("Anim.x") !== -1;
                 var safeScript = "try{" + script + "}catch(e){'ERR:'+e.message}";
+                // (2026-11-02 · BUG #215) rellotge de vigilància + guarda perquè la
+                // resposta tardana (Premiere desbloquejat després del timeout) no
+                // resolga dos vegades ni trepitge el sentinella.
+                var resolt = false;
+                var timer = null;
+                if (timeoutMs > 0) {
+                    timer = setTimeout(function() {
+                        if (resolt) return;
+                        resolt = true;
+                        self.log('⏱️ [JSX] Premiere no ha contestat en ' + Math.round(timeoutMs / 1000) + ' s · ' +
+                            String(script).substring(0, 140) +
+                            ' — si hi ha un diàleg de Premiere obert (p. ex. «Import Files»), tanca\'l o cancel·la\'l.', 'ERROR');
+                        resolve('__TIMEOUT__');
+                    }, timeoutMs);
+                }
                 csInterface.evalScript(safeScript, function(res) {
+                    if (resolt) return;
+                    resolt = true;
+                    if (timer) clearTimeout(timer);
                     if (!res || res === "undefined") {
                         resolve("");
                     } else if (res.indexOf("ERR:") === 0) {
@@ -718,37 +767,100 @@
 
 
         /**
-         * Ingesta de fitxers a Premiere Pro.
-         * @param {Array} pathList - Llista de rutes (UNC o locals).
-         * @param {string} binName - Nom del Bin de destí (o "root").
+         * _importChunk: una sola crida `FASTPASS.IO.importFiles` per a un bloc de rutes.
+         * @param {Array<string>} paths - rutes ja normalitzades
+         * @param {string} binName - bin destí
+         * @param {number} timeoutMs - vigilància del pont JSX
+         * @returns {Promise<string>} "OK" o el motiu del fracàs ("__TIMEOUT__", "ERR:...", …)
          */
-        importList: async function(pathList, binName) {
-            if (!pathList || !pathList.length) return;
-        
+        _importChunk: async function(paths, binName, timeoutMs) {
+            // 📍 BLINDAJE: (2026-09-23) El payload viatja dins d'un LITERAL ExtendScript
+            // ('...'), així que cal una DOBLE escapada: JSON.stringify converteix cada \
+            // en \\ i utils.escape les torna a duplicar, de manera que el literal les
+            // retorni senceres (i de pas escapa les cometes simples).
+            // ABANS només s'escapaven les cometes simples → les barres invertides es
+            // perdien en arribar al JSX (\P, \Z, \S… → P, Z, S) i la ruta quedava
+            // trencada: la ingesta fallava amb ERR:MOVE_FAILED i després l'ítem no
+            // existia (ERR_ITEM_NOT_FOUND en col·locar-lo).
+            // No es notava al flux de Project perquè allà les rutes es passen amb "/"
+            // (f.path.replace(/\\/g, "/")) i escape() no toca les barres normals.
+            // Mateixa tècnica que _freezeTemaTitol (flow_chyrons.js).
+            const payload = this.escape(JSON.stringify(paths));
+            const res = await this.callJSX(`FASTPASS.IO.importFiles('${payload}', '${binName}')`,
+                { timeoutMs: timeoutMs });
+            return res;
+        },
+
+        /**
+         * Ingesta de fitxers a Premiere Pro, EN BLOCS i amb reintent.
+         *
+         * (2026-11-02 · BUG #215) PER QUÈ EN BLOCS: `FASTPASS.IO.importFiles` fa un
+         * `app.project.importFiles()` SÍNCRON. Amb 26 rètols ProRes-4444 de 44 MB
+         * per xarxa, Premiere obri un diàleg modal de progrés («Import Files») que
+         * es va quedar penjat: el motor ExtendScript no va tornar mai la resposta,
+         * l'usuari el va cancel·lar i el flux va continuar com si s'haguera
+         * importat → **projecte creat sense cap rètol**, en silenci.
+         * Amb blocs: (a) cada crida és curta, (b) si un bloc no contesta se sap
+         * QUINS fitxers han sigut, (c) es reintenta automàticament (el reintent és
+         * el que sempre ha funcionat a mà) i (d) es retorna un resum perquè el
+         * cridador puga verificar-ho abans de construir el projecte.
+         *
+         * @param {Array} pathList - Llista de rutes (UNC o locals) o objectes { path }.
+         * @param {string} binName - Nom del Bin de destí (o "root").
+         * @param {Object} [opts] - { chunkSize = 5, timeoutMs = 180000 }
+         * @returns {Promise<{ok:boolean, sent:number, chunks:number, failed:number, timeout:boolean}>}
+         *   `timeout:true` = Premiere ha deixat de contestar; les rutes que queden NO
+         *   s'han intentat (el cridador ha d'avortar, no de reintentar-ho tot).
+         */
+        importList: async function(pathList, binName, opts) {
+            const out = { ok: true, sent: 0, chunks: 0, failed: 0, timeout: false };
+            if (!pathList || !pathList.length) return out;
+
             // Extraemos solo el path si es un objeto
-            const rawPaths = pathList.map(item => item.path || item);
-        
+            const rawPaths = pathList.map(item => item.path || item).filter(p => !!p);
+            if (rawPaths.length === 0) return out;
+
+            const chunkSize = Math.max(1, (opts && opts.chunkSize) || 5);
+            const timeoutMs = (opts && typeof opts.timeoutMs === 'number') ? opts.timeoutMs : 180000;
+            const total = Math.ceil(rawPaths.length / chunkSize);
+            let n = 0;
+
             try {
-                // 📍 BLINDAJE: (2026-09-23) El payload viatja dins d'un LITERAL ExtendScript
-                // ('...'), així que cal una DOBLE escapada: JSON.stringify converteix cada \
-                // en \\ i utils.escape les torna a duplicar, de manera que el literal les
-                // retorni senceres (i de pas escapa les cometes simples).
-                // ABANS només s'escapaven les cometes simples → les barres invertides es
-                // perdien en arribar al JSX (\P, \Z, \S… → P, Z, S) i la ruta quedava
-                // trencada: la ingesta fallava amb ERR:MOVE_FAILED i després l'ítem no
-                // existia (ERR_ITEM_NOT_FOUND en col·locar-lo).
-                // No es notava al flux de Project perquè allà les rutes es passen amb "/"
-                // (f.path.replace(/\\/g, "/")) i escape() no toca les barres normals.
-                // Mateixa tècnica que _freezeTemaTitol (flow_chyrons.js).
-                const payload = this.escape(JSON.stringify(rawPaths));
-                
-                const res = await this.callJSX(`FASTPASS.IO.importFiles('${payload}', '${binName}')`);
-                
-                if (res !== "OK") throw new Error(res);
-                //this.log(`✅ Ingesta OK a ${binName}`, "INFO");
+                for (let i = 0; i < rawPaths.length; i += chunkSize) {
+                    const chunk = rawPaths.slice(i, i + chunkSize);
+                    n++;
+                    out.chunks++;
+                    this.log(`📥 [INGEST] Bloc ${n}/${total} (${chunk.length} fitxer(s)) → ${binName}`, 'DEBUG');
+
+                    let res = await this._importChunk(chunk, binName, timeoutMs);
+                    if (res !== "OK") {
+                        // Reintent (una vegada): és el que s'ha fet sempre a mà.
+                        this.log(`⚠️ [INGEST] Bloc ${n}/${total} no ha importat (${res}) → reintent en 1,5 s…`, 'WARN');
+                        await this.delay(1500);
+                        res = await this._importChunk(chunk, binName, timeoutMs);
+                    }
+                    if (res === "OK") {
+                        out.sent += chunk.length;
+                    } else {
+                        out.failed++;
+                        out.ok = false;
+                        this.log(`❌ [INGEST] Bloc ${n}/${total} NO importat (${res}) · primers: ` +
+                            chunk.slice(0, 2).map(p => String(p).split('/').pop()).join(', '), 'ERROR');
+                        // Cortacircuits: si Premiere no respon, els blocs que queden
+                        // també esperarien el temps límit (n × timeout). S'atura ací.
+                        if (res === '__TIMEOUT__') {
+                            out.timeout = true;
+                            this.log(`⛔ [INGEST] S'atura la resta (${total - n} bloc(s) pendent(s)): ` +
+                                'el motor de Premiere no respon.', 'ERROR');
+                            break;
+                        }
+                    }
+                }
             } catch (e) {
+                out.ok = false;
                 this.log(`🔴 Error Ingesta: ${e.message}`, "ERROR");
             }
+            return out;
         },
 
         sanitizeName: function(str) {
@@ -1286,6 +1398,336 @@
                 if (Date.now() - t0 >= limit) return false;
                 await this.delay(250);
             }
+        },
+
+        /**
+         * _extRoot: carpeta REAL de l'extensió (sense barra final) o '' si no es
+         * pot resoldre. Mateix mètode que `_ensureExtLogPath`.
+         * @returns {string}
+         */
+        _extRoot: function() {
+            try {
+                if (this.csInterface && typeof SystemPath !== 'undefined' && SystemPath.EXTENSION) {
+                    var p = this.csInterface.getSystemPath(SystemPath.EXTENSION);
+                    if (p) return String(p).replace(/[\\/]+$/, '');
+                }
+            } catch (e) { }
+            return '';
+        },
+
+        /**
+         * _hiddenRunner: ruta de `bin\hidden.vbs` (llançador ocult). Es prova la
+         * ruta nativa de l'extensió i, si no, la de la pàgina. NO es desa un
+         * resultat negatiu: si CEP encara no estava a punt, la propera crida ho
+         * torna a provar.
+         * @returns {string} '' si no s'ha trobat
+         */
+        _hiddenRunner: function() {
+            if (this._hiddenRunnerPath) return this._hiddenRunnerPath;
+            var cands = [];
+            var ext = this._extRoot();
+            if (ext) cands.push(ext + '\\bin\\hidden.vbs');
+            try {
+                var href = window.location.href;
+                var qi = href.indexOf('/index.html');
+                if (qi > 0) {
+                    var p = decodeURIComponent(href.substring(0, qi));
+                    if (p.indexOf('file:///') === 0) p = p.substring(8);
+                    cands.push(p.replace(/\//g, '\\') + '\\bin\\hidden.vbs');
+                }
+            } catch (eH) { }
+            var fs = window.cep && window.cep.fs;
+            if (fs && fs.stat) {
+                for (var i = 0; i < cands.length; i++) {
+                    try {
+                        var st = fs.stat(cands[i]);
+                        if (st && st.err === 0) { this._hiddenRunnerPath = cands[i]; return cands[i]; }
+                    } catch (eS) { }
+                }
+            }
+            return '';
+        },
+
+        /**
+         * _tempDir: carpeta per als fitxers de `execHidden` (.txt / .exit).
+         * Primer `Folder.temp` del sistema (l'única que sempre existix i sempre
+         * es pot escriure) i, si no, `C:\temp` (la que ja usa el flux de ffmpeg).
+         * Es comprova ESCREVINT: `cep.fs` no dona cap manera de saber-ho abans.
+         * @returns {Promise<string>} '' si no n'hi ha cap d'escrivible
+         */
+        _tempDir: async function() {
+            if (this._hiddenTempDir) return this._hiddenTempDir;
+            var fs = window.cep && window.cep.fs;
+            if (!fs || !fs.writeFile) return '';
+            var cands = [];
+            try {
+                var t = String(await this.callJSX('Folder.temp.fsName') || '');
+                if (t && t.indexOf('ERR') !== 0 && t.indexOf('/') !== 0) cands.push(t.replace(/[\\/]+$/, ''));
+            } catch (eT) { }
+            cands.push('C:\\temp');
+            for (var i = 0; i < cands.length; i++) {
+                var probe = cands[i] + '\\fp_probe_' + Date.now() + '.tmp';
+                try {
+                    var w = fs.writeFile(probe, 'ok');
+                    if (w && w.err === 0) {
+                        try { fs.deleteFile(probe); } catch (eD) { }
+                        this._hiddenTempDir = cands[i];
+                        return cands[i];
+                    }
+                } catch (eW) { }
+                // `C:\temp` pot no existir en un equip nou: es prova de crear.
+                try {
+                    if (fs.makedir) {
+                        fs.makedir(cands[i]);
+                        var w2 = fs.writeFile(probe, 'ok');
+                        if (w2 && w2.err === 0) {
+                            try { fs.deleteFile(probe); } catch (eD2) { }
+                            this._hiddenTempDir = cands[i];
+                            return cands[i];
+                        }
+                    }
+                } catch (eM) { }
+            }
+            return '';
+        },
+
+        /**
+         * _readNum: llig un fitxer i en trau el primer enter ('' → null).
+         * S'usa per llegir el `.exit` que deixa `bin\hidden.vbs`.
+         * @param {string} path
+         * @returns {number|null}
+         */
+        _readNum: function(path) {
+            try {
+                var fs = window.cep && window.cep.fs;
+                if (!fs || !fs.readFile) return null;
+                var r = fs.readFile(path);
+                if (!r || r.err !== 0 || r.data == null) return null;
+                var s = String(r.data).replace(/[^\-0-9]/g, '');
+                if (!s || s === '-') return null;
+                var n = parseInt(s, 10);
+                return isFinite(n) ? n : null;
+            } catch (e) { return null; }
+        },
+
+        /**
+         * execHidden: executa una comanda de sistema SENSE finestra de consola.
+         *
+         * PER QUE (2026-11-02 · O-B1): `IO.executeShell` (jsx/modules/2_IO.jsx)
+         * escriu un .bat i el llança amb `File.execute()`, que SEMPRE obri una
+         * finestra de CMD. Amb 30 clips són 30 finestres tapant el panell.
+         * Ací es llança `wscript.exe //nologo //B bin\hidden.vbs <cmd.txt> <exit>`
+         * amb `cep.process.createProcess` (l'API nativa de CEP que ja fa servir
+         * setup.html per a pick_folder.ps1): wscript és una app GUI (no crea
+         * consola) i el seu `sh.Run(cmd, 0, True)` engega cmd.exe amb finestra 0 i
+         * en RETORNA el codi d'eixida. Mesurat en este equip: ~250 ms per llancada
+         * i 0 finestres (PowerShell ocult, la via del #180, en costa ~800).
+         *
+         * AUTOPROVEÏDORA: la primera crida de la sessió llança una comanda trivial
+         * (`echo fp_ok`) pel MATEIX camí (mateix .vbs, mateixa carpeta temporal) i,
+         * si no torna cap codi, deixa la via oculta DESACTIVADA. Així, si algun dia
+         * `cep.process`, `wscript` o una ruta amb espais fallen en un equip, no es
+         * queda un flux penjat 3 minuts: es va pel camí antic i punt.
+         *
+         * @param {string} command - comanda tal com aniria dins del .bat
+         * @param {Object} [opts] - { timeoutMs=180000, intervalMs=80, keepFiles=false }
+         * @returns {Promise<{ok:boolean, started:boolean, code:number, mode:string,
+         *                    err:string, timedOut:boolean, ms:number, tag:string}>}
+         *   `started:false` = NO s'ha pogut llançar → el cridador ha de fer servir
+         *   la via antiga (IO.executeShell) perquè res deixe de funcionar.
+         *   `mode:'hidden'` = el procés JA ha acabat quan torna la promesa.
+         */
+        execHidden: async function(command, opts) {
+            if (this._hiddenOk === false) {
+                return { ok: false, started: false, code: -1, mode: 'cap', err: 'via oculta desactivada', timedOut: false, ms: 0, tag: '' };
+            }
+            if (this._hiddenOk === null) {
+                // 1a crida de la sessió: prova d'encesa pel camí real.
+                var probe = await this._runHiddenOnce('echo fp_ok', { timeoutMs: 15000, silent: true });
+                this._hiddenOk = !!(probe.started && !probe.timedOut);
+                this.log(this._hiddenOk
+                    ? '🖥️ [EXEC ocult] actiu (' + probe.ms + ' ms via ' + (probe.via || '?') + ')'
+                    : '⚠️ [EXEC ocult] DESACTIVAT (' + (probe.err || '?') + ') → es llançarà amb IO.executeShell (amb finestra de CMD)', this._hiddenOk ? 'INFO' : 'WARN');
+                if (!this._hiddenOk) {
+                    return { ok: false, started: false, code: -1, mode: 'cap', err: probe.err || 'prova KO', timedOut: false, ms: probe.ms, tag: '' };
+                }
+            }
+            return await this._runHiddenOnce(command, opts);
+        },
+
+        /**
+         * _wscriptExe: ruta ABSOLUTA de `wscript.exe`, o '' si no hi és.
+         *
+         * PER QUE (2026-11-02 · #213): `cep.process.createProcess` NO busca res
+         * al PATH: amb `'wscript.exe'` a seques torna `err=3`
+         * (ERROR_PATH_NOT_FOUND) i la crida queia al camí vell
+         * (`IO.executeShell` → finestra de CMD). Es va vore al log del panell:
+         *   «[shell] execHidden no disponible (createProcess err=3)»
+         * → cada ffmpeg/ffprobe/OCR obria la seua finestra damunt de Premiere,
+         * i el clipeig del MP4 (6-30 s de ffmpeg) era la més cantada.
+         * @returns {string}
+         */
+        _wscriptExe: function() {
+            var cands = [
+                'C:\\Windows\\System32\\wscript.exe',
+                'C:\\Windows\\SysWOW64\\wscript.exe'
+            ];
+            var fs = window.cep && window.cep.fs;
+            if (!fs || !fs.stat) return '';
+            for (var i = 0; i < cands.length; i++) {
+                try {
+                    var st = fs.stat(cands[i]);
+                    if (st && st.err === 0) return cands[i];
+                } catch (eW) { }
+            }
+            return '';
+        },
+
+        /**
+         * _psHiddenPayload: script PowerShell (base64 UTF-16LE) que executa la
+         * comanda del `.txt` i deixa el codi d'eixida al `.exit`.
+         *
+         * És la VIA B de `_runHiddenOnce`: la recepta del #180 (la de
+         * l'esborrat de l'arbre, `_rmTreeProc`) però amb el MATEIX contracte
+         * `.txt`/`.exit` que `bin\hidden.vbs`, així el bucle d'espera és el
+         * mateix. Costa ~800 ms perquè arranca PowerShell sencer, però és
+         * preferible a caure al `.bat` visible si `bin\hidden.vbs` no hi és.
+         *
+         * La comanda es llig del fitxer (no viatja per la línia de comandes) i
+         * s'executa amb `cmd.exe /d /s /c`: /d evita l'AutoRun i /s lleva només
+         * la primera i l'última cometa, així una comanda que comence per cometa
+         * (`"C:\Program Files\...\ffmpeg.exe" -i ...`) arriba intacta.
+         * @param {string} cmdFile
+         * @param {string} exitFile
+         * @returns {string} base64 ('' si no hi ha btoa)
+         */
+        _psHiddenPayload: function(cmdFile, exitFile) {
+            var q = function(s) { return String(s == null ? '' : s).replace(/'/g, "''"); };
+            var ps = "$ErrorActionPreference='Continue';" +
+                "$c='';" +
+                "try{$c=[IO.File]::ReadAllText('" + q(cmdFile) + "',[Text.Encoding]::UTF8)}catch{};" +
+                "$c=$c.Trim();" +
+                "$code=-1;" +
+                "if($c){& cmd.exe /d /s /c $c; if($LASTEXITCODE -ne $null){$code=$LASTEXITCODE}};" +
+                "try{[IO.File]::WriteAllText('" + q(exitFile) + "',[string]$code)}catch{}";
+            return this._b64utf16(ps);
+        },
+
+        /**
+         * _runHiddenOnce: cos de `execHidden` (una llancada). No la crides directament
+         * llevat de l'autoproveïdora.
+         * @param {string} command
+         * @param {Object} [opts] - { timeoutMs, intervalMs, keepFiles, silent }
+         */
+        _runHiddenOnce: async function(command, opts) {
+            var o = opts || {};
+            var t0 = Date.now();
+            var res = { ok: false, started: false, code: -1, mode: 'cap', err: '', timedOut: false, ms: 0, tag: '', via: '' };
+            var cmd = String(command == null ? '' : command).trim();
+            if (!cmd) { res.err = 'comanda buida'; return res; }
+            var cep = window.cep || window.__adobe_cep__ || null;
+            var fs = cep && cep.fs;
+            if (!cep || !cep.process || typeof cep.process.createProcess !== 'function' || !fs || !fs.writeFile) {
+                res.err = 'sense cep.process/cep.fs';
+                return res;
+            }
+            var runner = this._hiddenRunner();
+            // ⚠️ (2026-11-02 · #213) Sense `bin\hidden.vbs` NO s'abandona: la VIA B
+            // (PowerShell ocult) no el necessita, i abandonar ací era justament el
+            // que deixava la finestra de CMD quan el .vbs no es trobava.
+            var dir = await this._tempDir();
+            if (!dir) { res.err = 'sense carpeta temporal escrivible'; return res; }
+
+            var tag = 'fp_exec_' + Date.now() + '_' + Math.floor(Math.random() * 100000);
+            var cmdFile = dir + '\\' + tag + '.txt';
+            var exitFile = dir + '\\' + tag + '.exit';
+            res.tag = tag;
+            try { fs.deleteFile(exitFile); } catch (eD0) { }
+            var w = null;
+            try { w = fs.writeFile(cmdFile, cmd); } catch (eW) { w = { err: -1 }; }
+            if (!w || w.err !== 0) { res.err = 'no s\'ha pogut escriure ' + cmdFile; return res; }
+
+            // ⚠️ `cep.process.createProcess` es crida VARIÀDIC (un argument per token),
+            // que és com ho fa setup.html amb pick_folder.ps1: passar una sola cadena
+            // amb espais la deixa com UN argument i wscript no trobaria el .vbs.
+            // ⚠️⚠️ I l'EXECUTABLE VA AMB RUTA ABSOLUTA (#213): `cep.process` no
+            // busca al PATH i `'wscript.exe'` a seques torna err=3.
+            var ws = this._wscriptExe();
+            var r = null;
+            var whyA = '';
+            if (ws && runner) {
+                try { r = cep.process.createProcess(ws, '//nologo', '//B', runner, cmdFile, exitFile); } catch (eC) { r = { err: String((eC && eC.message) || eC) }; }
+                if (!r || (r.err != null && r.err !== 0)) {
+                    whyA = 'wscript err=' + ((r && r.err != null) ? r.err : '?');
+                    r = null;
+                } else {
+                    res.via = 'wscript';
+                }
+            } else {
+                whyA = 'wscript.exe no trobat';
+            }
+
+            // ── VIA B (reserva): PowerShell OCULT (`-WindowStyle Hidden` + base64)
+            // Mateix contracte `.txt`/`.exit` que bin\hidden.vbs. Només s'usa si la
+            // via A no està disponible: així mai es cau al .bat visible.
+            if (!r) {
+                var enc = this._psHiddenPayload(cmdFile, exitFile);
+                var psExe = 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe';
+                if (!enc) {
+                    res.err = whyA + ' · sense btoa';
+                    try { fs.deleteFile(cmdFile); } catch (eD1a) { }
+                    return res;
+                }
+                try {
+                    r = cep.process.createProcess(psExe,
+                        '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
+                        '-WindowStyle', 'Hidden', '-EncodedCommand', enc);
+                } catch (eP) { r = { err: String((eP && eP.message) || eP) }; }
+                if (!r || (r.err != null && r.err !== 0)) {
+                    res.err = whyA + ' · powershell err=' + ((r && r.err != null) ? r.err : '?');
+                    try { fs.deleteFile(cmdFile); } catch (eD1b) { }
+                    return res;
+                }
+                res.via = 'powershell';
+            }
+            res.started = true;
+            res.mode = 'hidden';
+
+            // Espera el `.exit`: el fitxer es crea BUID i s'ompli tot seguit, així
+            // que una lectura sense número només vol dir «encara no».
+            var timeoutMs = Number(o.timeoutMs) > 0 ? Number(o.timeoutMs) : 180000;
+            var iv = Number(o.intervalMs) > 0 ? Number(o.intervalMs) : 80;
+            var code = null;
+            var tw = Date.now();
+            for (;;) {
+                code = this._readNum(exitFile);
+                if (code !== null) break;
+                if (Date.now() - tw >= timeoutMs) break;
+                await this.delay(iv);
+            }
+            res.ms = Date.now() - t0;
+            if (code === null) {
+                res.timedOut = true;
+                res.code = -2;
+                res.err = 'timeout ' + Math.round(timeoutMs / 1000) + 's';
+            } else {
+                res.code = code;
+                res.ok = (code === 0);
+                if (!res.ok) res.err = 'exit=' + code;
+            }
+            if (!o.keepFiles) {
+                try { fs.deleteFile(exitFile); } catch (eD2) { }
+                try { fs.deleteFile(cmdFile); } catch (eD3) { }
+            }
+            // B5: res passa en silenci — al log del panell sempre hi ha una línia.
+            // (`silent` només el fa servir l'autoproveïdora, que ja logueja el resultat.)
+            var shortCmd = String(cmd).replace(/\s+/g, ' ').substring(0, 140);
+            if (!res.ok) {
+                this.log('⚠️ [EXEC ocult] ' + res.err + ' (' + res.ms + ' ms via ' + (res.via || '?') + ') · ' + shortCmd, 'WARN');
+            } else if (!o.silent) {
+                this.log('🖥️ [EXEC ocult] exit=0 · ' + res.ms + ' ms via ' + (res.via || '?') + ' · ' + shortCmd, 'DEBUG');
+            }
+            return res;
         },
 
         /**

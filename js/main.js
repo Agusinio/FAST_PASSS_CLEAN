@@ -1035,16 +1035,17 @@ if (btnMarksC1) btnMarksC1.addEventListener('click', () => callWorkflow('Markers
         });
         syncChyronCasButton();
         const btnChyronColocar = document.getElementById('btnChyronColocar');
-        // (2026-10-29 · TWITTS) Ctrl+clic a la DIANA = EMERGÈNCIA
-        // (docs/specs/TWITTS_OCR.md D9): primer intenta resoldre el tuit del
-        // cabezal amb OCR contra els movies pendents; si no casa, ensenya una
-        // llista curta amb els .mov de tuit del DIA DEL PROJECTE (+ «Buscar al
-        // disc…» per al navegador natiu) i el triat es col·loca cobrint el clip
-        // de V1. Un clic normal continua fent el de sempre: col·locar TOTS els
-        // chyrons (i, al final, la passada AUTOMÀTICA dels tuits: `runAuto`).
+        // (2026-10-30 · XARXES) Ctrl+clic a la DIANA = RASTREIG DE GRIS + FINESTRA
+        // DE SELECCIÓ. Primer rastreja amb ffmpeg els clips de V1 del bloc buscant
+        // la placa grisa del tuit cremat i empareja pel nom amb els ítems
+        // CONVERSA/XARXES-TEXT del BIN; si el clip del cabezal continua sense
+        // grafisme, obri la finestra de selecció (`#twitts-pick`) per a importar
+        // el grafisme i col·locar-lo damunt d'eixe clip. Un clic normal continua
+        // fent el de sempre: col·locar TOTS els chyrons (i, al final, la passada
+        // automàtica dels grafismes OCR: `runAuto`).
         if (btnChyronColocar) btnChyronColocar.addEventListener('click', (e) => {
             if (e && (e.ctrlKey || e.metaKey)) {
-                callWorkflow('Twitts', 'runEmergency');
+                callWorkflow('Twitts', 'runGris');
                 return;
             }
             runPlaceAllChyrons();
@@ -1157,10 +1158,11 @@ if (btnMarksC1) btnMarksC1.addEventListener('click', () => callWorkflow('Markers
 
         if (btnRenderVideo) btnRenderVideo.addEventListener('click', () => callWorkflow('Render', 'runVideo'));
         // (2026-10-16 · BUG #172) La portada es exporta en 10-30 s: el botó queda OCUPAT
-        // (desactivat + pols `.btn-busy` + hora de rellotge) mentre dura i es restaura al
-        // final. Un segon clic el descarta la guarda de re-entrada del flux.
+        // (desactivat + rellotge girant `.btn-busy`) mentre dura i es restaura al final.
+        // Un segon clic el descarta la guarda de re-entrada del flux. (2026-11-02) Ja no
+        // es canvia el text per «⏳»: el rellotge el pinta el CSS i l'etiqueta es conserva.
         if (btnRenderPortada) btnRenderPortada.addEventListener('click', async () => {
-            markBtnBusy(btnRenderPortada, '⏳');
+            markBtnBusy(btnRenderPortada);
             try {
                 await callWorkflow('Render', 'runPortada');
             } finally {
@@ -1379,31 +1381,120 @@ if (btnMarksC1) btnMarksC1.addEventListener('click', () => callWorkflow('Markers
     }
 
     /**
+     * _clickedBtn: (2026-11-02 · O-C1) Botó que ha originat el clic EN CURS.
+     *
+     * PER QUE: hi ha ~40 botons que criden `callWorkflow(...)` des del seu propi handler,
+     * i el rellotge s'ha de pintar al botó que l'usuari acaba de clicar sense tocar-ne
+     * quaranta. Es captura en fase de CAPTURA (abans del handler del botó) i només val
+     * durant el *dispatch* síncron del clic: si el handler no acaba cridant `callWorkflow`,
+     * el punter es buida al següent tick i no queda enganxat a un botó vell.
+     */
+    var _clickedBtn = null;
+    document.addEventListener('click', function (ev) {
+        var t = ev && ev.target;
+        while (t && t !== document && String(t.tagName).toUpperCase() !== 'BUTTON') t = t.parentNode;
+        var b = (t && t !== document) ? t : null;
+        _clickedBtn = b;
+        if (b) setTimeout(function () { if (_clickedBtn === b) _clickedBtn = null; }, 0);
+    }, true);
+
+    /**
      * markBtnBusy / clearBtnBusy: (2026-10-16 · BUG #172) Estat OCUPAT d'un botó mentre dura
      * un flux llarg. Es guarda l'etiqueta original al dataset i es restaura en acabar.
      * S'usa amb la PORTADA (còpia a la zona neta + captura QE + neteja = 10-30 s): sense
      * senyal visual, es tornava a clicar i el segon clic muntava una segona composició
-     * (el flux també té la seva pròpia guarda de re-entrada `_portadaRunning`).
+     * (el flux també té la seua pròpia guarda de re-entrada `_portadaRunning`).
+     *
+     * (2026-11-02 · O-C1/O-C2) Dos canvis:
+     *   · RE-COMPTE: un mateix botó pot rebre més d'un `mark` (el clic l'ha marcat
+     *     `callWorkflow` i el flux el torna a marcar) i el primer `clear` no ha de
+     *     desbloquejar-lo; també es recorda si ja estava desactivat, per no reactivar-lo.
+     *   · RELLOTGE: (2026-11-02 · #214) mentre dura la tasca el botó ensenya NOMÉS un
+     *     rellotge d'arena: l'etiqueta i la icona pròpies s'amaguen pel CSS
+     *     (`button.btn-busy`, style.css) i tornen totes senceres en acabar, perquè ací
+     *     no es toca el contingut del botó. Es pot afegir un text amb `text`.
      */
+    var BUSY_MAX_MS = 15 * 60 * 1000;   // xarxa de seguretat: cap tasca hauria de durar tant
+
     function markBtnBusy(btn, text) {
-        if (!btn) return;
+        if (!btn) return false;
         try {
             if (!btn.dataset) btn.dataset = {};
-            if (btn.dataset.label === undefined) btn.dataset.label = btn.innerText;
+            var n = parseInt(btn.dataset.busyCount || '0', 10) || 0;
+            btn.dataset.busyCount = String(n + 1);
+            if (n > 0) return false;                 // ja estava ocupat: només suma
+            btn.dataset.busyOff = btn.disabled ? '1' : '0';
+            // (2026-11-02 · #214) Es GUARDA el marcatge complet i es BUIDA el botó:
+            // mentre dura la tasca l'únic contingut és el rellotge d'arena que pinta
+            // el CSS (`button.btn-busy::before`), i en acabar es restaura el marcatge
+            // ORIGINAL. Abans es desava `innerText` i es reescrivia, i això tenia dos
+            // efectes roïns: (a) `innerText` només torna text, així que el marcatge
+            // intern de la icona (`<span>`/`<img>`) es perdia per sempre al primer
+            // clic, i (b) l'anella es pintava DAMUNT de la icona (pitjor en els botons
+            // `icon-only`): es veien les dos coses alhora.
+            // L'amplària es fixa perquè el botó no s'encongisca en buidar-se.
+            btn.dataset.busyHtml = btn.innerHTML;
+            btn.dataset.busyW = String(btn.offsetWidth || 0);
+            if (btn.dataset.busyW !== '0') btn.style.minWidth = btn.dataset.busyW + 'px';
+            btn.innerHTML = '';
             btn.disabled = true;
             btn.classList.add('btn-busy');
-            if (text) btn.innerText = text;
-        } catch (e) { }
+            // Text de progrés OPCIONAL (per defecte no n'hi ha: només el rellotge).
+            if (text) {
+                var tS = document.createElement('span');
+                tS.className = 'fp-busy-txt';
+                tS.textContent = String(text);
+                btn.appendChild(tS);
+            }
+            // Xarxa de seguretat: si un flux mai no acaba, el botó no queda clavat.
+            btn._busyTimer = setTimeout(function () {
+                try {
+                    btn.dataset.busyCount = '1';
+                    clearBtnBusy(btn);
+                    if (window.FASTPASS_UI && FASTPASS_UI.Utils && FASTPASS_UI.Utils.log) {
+                        FASTPASS_UI.Utils.log('⚠️ [BUSY] Botó alliberat per temps (' + (btn.id || '?') + ')', 'WARN');
+                    }
+                } catch (eT) { }
+            }, BUSY_MAX_MS);
+            return true;
+        } catch (e) { return false; }
     }
 
     function clearBtnBusy(btn) {
         if (!btn) return;
         try {
-            btn.disabled = false;
+            if (!btn.dataset) return;
+            var n = parseInt(btn.dataset.busyCount || '0', 10) || 0;
+            n = n > 0 ? n - 1 : 0;
+            btn.dataset.busyCount = String(n);
+            if (n > 0) return;                       // encara hi ha feina pendent damunt
+            if (btn._busyTimer) { clearTimeout(btn._busyTimer); btn._busyTimer = 0; }
             btn.classList.remove('btn-busy');
-            if (btn.dataset && btn.dataset.label !== undefined) btn.innerText = btn.dataset.label;
+            // (#214) Es restaura el marcatge ORIGINAL del botó (icones incloses) i
+            // s'allibera l'amplària que s'havia fixat en marcar-lo.
+            if (btn.dataset.busyHtml !== undefined) {
+                btn.innerHTML = btn.dataset.busyHtml;
+                delete btn.dataset.busyHtml;
+            }
+            if (btn.dataset.busyW !== undefined) { btn.style.minWidth = ''; delete btn.dataset.busyW; }
+            if (btn.dataset.busyOff === '0') btn.disabled = false;
+            delete btn.dataset.busyOff;
         } catch (e) { }
     }
+
+    /**
+     * (2026-11-02 · BUG #215) El botó MAIN NO passa per `callWorkflow`: el clic va
+     * directe a `Context._onMainClick` → `Workflows.MainButton.runMainAction`, així
+     * que no rebia mai el rellotge d'espera. Quan la ingesta es va penjar (diàleg
+     * «Import Files» de Premiere), el panell sencer semblava mort. S'exposa ací
+     * perquè el flux de MAIN el puga pintar (i alliberar) al seu `try/finally`.
+     */
+    try {
+        window.FASTPASS_UI = window.FASTPASS_UI || {};
+        window.FASTPASS_UI.UI = window.FASTPASS_UI.UI || {};
+        window.FASTPASS_UI.UI.markBtnBusy = markBtnBusy;
+        window.FASTPASS_UI.UI.clearBtnBusy = clearBtnBusy;
+    } catch (eExpBusy) { }
 
     async function callWorkflow(module, method, ...args) {
         console.log(`🔘 callWorkflow: ${module}.${method}`);
@@ -1412,18 +1503,28 @@ if (btnMarksC1) btnMarksC1.addEventListener('click', () => callWorkflow('Markers
         // eixit o si el mòdul/mètode no existeix.
         const _u = window.FASTPASS_UI && FASTPASS_UI.Utils;
         if (_u && _u.log) _u.log(`🔘 [DISPATCH] ${module}.${method}`, 'INFO');
-        if (FASTPASS_UI.Workflows[module] && FASTPASS_UI.Workflows[module][method]) {
-            try {
-                await FASTPASS_UI.Workflows[module][method](...args);
-            } catch (e) {
-                console.error("💥 Error en Workflow " + module + "." + method + ":", e);
-                if (FASTPASS_UI.Utils && FASTPASS_UI.Utils.handleError) {
-                    FASTPASS_UI.Utils.handleError(e, module + "." + method);
+        // (2026-11-02 · O-C1) Rellotge al botó que l'usuari acaba de clicar mentre el
+        // flux dura. El botó es pren de `_clickedBtn` (capturat en fase de captura):
+        // si la crida és interna (pipeline, sonsonda…) no hi ha botó i no es pinta res.
+        const _busyBtn = _clickedBtn;
+        _clickedBtn = null;
+        if (_busyBtn) markBtnBusy(_busyBtn);
+        try {
+            if (FASTPASS_UI.Workflows[module] && FASTPASS_UI.Workflows[module][method]) {
+                try {
+                    await FASTPASS_UI.Workflows[module][method](...args);
+                } catch (e) {
+                    console.error("💥 Error en Workflow " + module + "." + method + ":", e);
+                    if (FASTPASS_UI.Utils && FASTPASS_UI.Utils.handleError) {
+                        FASTPASS_UI.Utils.handleError(e, module + "." + method);
+                    }
                 }
+            } else {
+                console.error("⚠️ Error: " + module + "." + method + " no existe.");
+                if (_u && _u.log) _u.log("⚠️ [DISPATCH] Workflow inexistent: " + module + "." + method, "ERROR");
             }
-        } else {
-            console.error("⚠️ Error: " + module + "." + method + " no existe.");
-            if (_u && _u.log) _u.log("⚠️ [DISPATCH] Workflow inexistent: " + module + "." + method, "ERROR");
+        } finally {
+            if (_busyBtn) clearBtnBusy(_busyBtn);
         }
     }
 
@@ -1508,9 +1609,19 @@ if (btnMarksC1) btnMarksC1.addEventListener('click', () => callWorkflow('Markers
     /**
      * runPlaceAllChyrons: Col·loca TOTS els chyrons del bloc (botó COLOCAR).
      * Ordre: Conductor, Titol, Lloc, Nom, Resto, Traducció.
+     * (2026-10-30) És IDEMPOTENT: la guarda NO-DUPLICAR de `Chyrons` és PERMANENT i cada
+     * fase mira abans si el rètol ja ocupa eixe instant del timeline → clicar el botó dos
+     * voltes només afig el que faltava (i amb el timeline buit col·loca tot, com sempre).
      */
     async function runPlaceAllChyrons() {
         const utils = FASTPASS_UI.Utils;
+        // 🛡️ (2026-10-30 · petició d'usuari) NO-DUPLICAR: no hi ha mode ni interruptor — el
+        // comptador d'omessos es posa a zero ací per poder informar al final de la passada.
+        try {
+            await callWorkflow('Chyrons', 'resetDupSkipped');
+        } catch (eND) {
+            utils.log('⚠️ [CHY] No s\'ha pogut reiniciar el comptador NO-DUPLICAR: ' + eND.message, 'WARN');
+        }
         const phases = [
             ['Conduct',   () => callWorkflow('Chyrons', 'placeChyronConductor')],
             ['Titol',     () => callWorkflow('Chyrons', 'placeChyronTitol')],
@@ -1532,7 +1643,21 @@ if (btnMarksC1) btnMarksC1.addEventListener('click', () => callWorkflow('Markers
             utils.log('✅ [CHY] ' + ph[0] + ' finalitzat (' + ((Date.now() - t0) / 1000).toFixed(1) + 's)', 'INFO');
         }
         utils.log('🏁 [CHY] Tots els chyrons col·locats.', 'INFO');
-        utils.status('Chyrons col·locats', 'exito');
+        // 🛡️ (2026-10-30) Tancament: es llig el comptador d'omessos (la guarda NO-DUPLICAR és
+        // permanent, no s'ha de desactivar res) i s'informa al log i al status.
+        let dupSkipped = 0;
+        try {
+            const chyMod = FASTPASS_UI.Workflows && FASTPASS_UI.Workflows.Chyrons;
+            dupSkipped = (chyMod && typeof chyMod.getDupSkipped === 'function') ? chyMod.getDupSkipped() : 0;
+        } catch (eND2) {
+            utils.log('⚠️ [CHY] No s\'ha pogut llegir el comptador NO-DUPLICAR: ' + eND2.message, 'WARN');
+        }
+        if (dupSkipped > 0) {
+            utils.log(`🛡️ [CHY] ${dupSkipped} rètol(s) ja eren al timeline: NO s'han duplicat (només s'ha col·locat el que faltava).`, 'INFO');
+            utils.status('Chyrons col·locats (' + dupSkipped + ' ja hi eren)', 'exito');
+        } else {
+            utils.status('Chyrons col·locats', 'exito');
+        }
 
         // ── IPD (auto): si hi ha algun marcador IPD (color turquesa=7) a la seqüència,
         //    repassa els clips del tram (des del marcador IPD fins al següent marcador
@@ -1568,14 +1693,14 @@ if (btnMarksC1) btnMarksC1.addEventListener('click', () => callWorkflow('Markers
             utils.log('⚠️ [CHY] La revisió de grafismes (MAPA) ha llançat: ' + eG.message, 'ERROR');
         }
 
-        // ── TWITTS (2026-10-29 · AUTOMÀTIC, sense botó): els movies de tuit
-        //    (XARXES / «LUCYS VERTICALITZACIÓ», bloc a seques `_V_00_`) que la
-        //    IMPORTACIÓ ha portat al projecte i que NO han entrat al timeline
-        //    (BUG #191: el generador no els lliga a cap ítem d'escaleta) es
-        //    casen amb els clips de V1 on el tuit està CREMAT: un frame per
-        //    clip (el 35 des de l'in) → OCR → comparació amb els movies que
-        //    falten → col·locació cobrint el clip. Si no en falta cap, no fa res.
-        //    L'únic mecanisme manual és Ctrl+clic a la DIANA 🎯 (emergència).
+        // ── XARXES / CONVERSA (2026-10-30 · D24/D25): els grafismes que es
+        //    localitzen A LA IMATGE (rol CONVERSA o XARXES-TEXT del BIN) que la
+        //    IMPORTACIÓ ha portat al projecte i que NO han entrat al timeline es
+        //    col·loquen segons el nom: amb TC de fiar → pel TC; amb bloc sense TC
+        //    → OCR dels clips; sense bloc (és V) → rastreig de GRIS amb ffmpeg
+        //    (placa del tuit cremat) + OCR + emparellament pel nom.
+        //    Si no en falta cap, no fa res. L'únic mecanisme manual és Ctrl+clic
+        //    a la DIANA 🎯 (`Twitts.runGris`).
         try {
             await callWorkflow('Twitts', 'runAuto');
         } catch (eT) {
