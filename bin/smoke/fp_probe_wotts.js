@@ -247,7 +247,7 @@
                 /placeEnd = gridDown\(placeEnd - REV_FRAME\);/.test(chySrc));
             var idxW = await readRepo('index.html');
             ok('#WOTT/24 cache-bust al dia (4_Context, flow_chyrons, Scanner)',
-                /4_Context\.js\?v=33/.test(idxW) && /flow_chyrons\.js\?v=86/.test(idxW) &&
+                /4_Context\.js\?v=33/.test(idxW) && /flow_chyrons\.js\?v=91/.test(idxW) &&
                 /Scanner\.js\?v=26/.test(idxW),
                 (idxW.match(/4_Context\.js\?v=\d+/) || '') + ' ' +
                 (idxW.match(/flow_chyrons\.js\?v=\d+/) || '') + ' ' +
@@ -550,9 +550,9 @@
             ok('#WOTT/43 retall del clip sencer: 3 → 2 frames i un de 2 frames NO es toca (mai <1)',
                 rC === null && rD !== null && fN(rD) === 2,
                 '2f=' + (rC === null ? 'intacte' : fN(rC)) + ' 3f=' + (rD === null ? 'n/d' : fN(rD)));
-            ok('#WOTT/44 el retall del sencer deixa traça (✂️ CLIP SENCER) i cache-bust flow_chyrons 86',
+            ok('#WOTT/44 el retall del sencer deixa traça (✂️ CLIP SENCER) i cache-bust flow_chyrons 91',
                 chySrc.indexOf('✂️ [') > 0 && chySrc.indexOf('CLIP SENCER') > 0 &&
-                /flow_chyrons\.js\?v=86/.test(idxW),
+                /flow_chyrons\.js\?v=91/.test(idxW),
                 (idxW.match(/flow_chyrons\.js\?v=\d+/) || ''));
 
             // ── O. CONGELAT DEL TITOLET: MAI CAPTURAR SOBRE EL VÍDEO (2026-10-22 · #183) ──
@@ -642,11 +642,11 @@
                     /const LIMIT_PROGRAMA = 400 \* 1024/.test(stillSrc) &&
                     /const pngSospitos = cap\.ok && Number\(cap\.bytes\) > LIMIT_PROGRAMA/.test(stillSrc) &&
                     /if \(cap\.ok && !pngSospitos\)/.test(stillSrc) &&
-                    /flow_chyrons\.js\?v=86/.test(idxW),
+                    /flow_chyrons\.js\?v=91/.test(idxW),
                     'still=' + stillSrc.length +
                     ' zoneAvansCaptura=' + (stillSrc.indexOf('_freezeZone(needZone)') > -1 && stillSrc.indexOf('_freezeZone(needZone)') < stillSrc.indexOf('_capturePng(capBase')) +
                     ' v6=' + (stillSrc.indexOf('const TEMP_TC = await this._v6FreeTC') === -1 ? 'fora' : 'DINS') +
-                    ' v86=' + /flow_chyrons\.js\?v=86/.test(idxW));
+                    ' v91=' + /flow_chyrons\.js\?v=91/.test(idxW));
             } finally {
                 UI.Utils.callJSX = savedCJZ;
             }
@@ -817,6 +817,148 @@
                     try { window.cep = savedCep56; } catch (eR56) { }
                 }
             }
+
+        // ── P. NO DUPLICATS (2026-10-30 · petició d'usuari) ────────────────────────
+        // «Sempre ha de verificar que el chyron/grafisme no estiga ja al timeline: si no
+        // hi ha res, ho col·loca tot; si n'hi ha, només el que falta.» És una REGLA
+        // PERMANENT: no hi ha mode ni interruptor que activar/desactivar.
+        var chyMod = UI.Workflows.Chyrons;
+        var chySrcP = await readRepo('js/workflows/flow_chyrons.js');
+        var mainSrcP = await readRepo('js/main.js');
+        var idxP = await readRepo('index.html');
+        ok('#WOTT/57 Chyrons: NO-DUPLICAR permanent (_ensurePlacedGuard · _isAlreadyPlaced amb instant · _insertIfMissing) a totes les portes',
+            !!chyMod &&
+            typeof chyMod._refreshPlacedGuard === 'function' &&
+            typeof chyMod._invalidatePlacedGuard === 'function' &&
+            typeof chyMod._ensurePlacedGuard === 'function' &&
+            typeof chyMod._isAlreadyPlaced === 'function' &&
+            typeof chyMod._markPlaced === 'function' &&
+            typeof chyMod._sameWottKey === 'function' &&
+            typeof chyMod._insertIfMissing === 'function' &&
+            typeof chyMod.resetDupSkipped === 'function' &&
+            typeof chyMod.getDupSkipped === 'function' &&
+            typeof chyMod.setNoDupMode === 'undefined' && chyMod._noDup === undefined &&
+            chySrcP.indexOf('_isAlreadyPlaced: function (name, at)') !== -1 &&
+            chySrcP.indexOf('this._isAlreadyPlaced(c.name, win)') !== -1 &&               // Lloc / Nom / Resto
+            chySrcP.indexOf('if (this._isAlreadyPlaced(name, { lo: start - 0.5') !== -1 &&  // Traducció
+            chySrcP.indexOf('if (this._isAlreadyPlaced(conductorFile, conductTime))') !== -1 && // Conductor
+            chySrcP.indexOf('if (this._isAlreadyPlaced(wottName, placeTime))') !== -1 &&    // Tema-Títol / titullet
+            chySrcP.indexOf('if (this._isAlreadyPlaced(conductorFile, targetTime))') !== -1 && // Magic/conductor
+            /const faltants = ttFinal\.filter/.test(chySrcP) &&                            // Titol: quant en falta
+            /this\._insertIfMissing\(chyron\.name/.test(chySrcP),                          // Magic chyrons
+            'CHY=' + !!chyMod + ' setNoDupMode=' + (chyMod && typeof chyMod.setNoDupMode) +
+            ' isAlready=' + (chyMod && typeof chyMod._isAlreadyPlaced) +
+            ' insIf=' + (chyMod && typeof chyMod._insertIfMissing) +
+            ' noDupProp=' + (chyMod && typeof chyMod._noDup));
+
+        ok('#WOTT/58 🎯: no hi ha cap mode a activar (main.js només reseteja i llig el comptador) i el title ho diu',
+            !/setNoDupMode/.test(mainSrcP) &&
+            /resetDupSkipped/.test(mainSrcP) && /getDupSkipped/.test(mainSrcP) &&
+            /NO DUPLICA/.test(idxP),
+            'main reset=' + /resetDupSkipped/.test(mainSrcP) + ' get=' + /getDupSkipped/.test(mainSrcP));
+
+        ok('#WOTT/59 Chyrons._dupKey: dues generacions del MATEIX rètol compten com U (i un altre text, no)',
+            !!chyMod &&
+            chyMod._dupKey('Wott_TNV_V1_10_00.01_TEMA A_111_Nom-Carrec_a.00000001.mov') ===
+            chyMod._dupKey('Wott_TNV_V1_10_00.01_TEMA A_111_Nom-Carrec_a.00000009.mov') &&
+            chyMod._dupKey('Wott_TNV_V1_10_00.01_TEMA A_111_Nom-Carrec_a.00000001.mov') !==
+            chyMod._dupKey('Wott_TNV_V1_11_00.01_TEMA A_111_Nom-Carrec_b.00000001.mov') &&
+            chyMod._dupKey('Wott_X.00000001.mov') === chyMod._dupKey('Wott_X.mov'),
+            chyMod ? chyMod._dupKey('Wott_TNV_V1_10_00.01_TEMA A_111_Nom_a.00000001.mov') : 'sense mòdul');
+
+        ok('#WOTT/60 Chyrons._isAlreadyPlaced: mana el par (nom + instant) · el MATEIX wott en un altre instant SÍ que entra',
+            (function () {
+                if (!chyMod) return false;
+                var res = [];
+                // 1. mateix wott (una altra generació) al mateix instant → ja hi és
+                chyMod._placedGuard = [{ k: chyMod._dupKey('Wott_A.00000001.mov'), start: 10.0, end: 14.0 }];
+                res.push(chyMod._isAlreadyPlaced('Wott_A.00000009.mov', 10.1) === true);
+                // 2. el MATEIX wott 30 s més enllà (un altre bloc/ítem) → NO hi és
+                res.push(chyMod._isAlreadyPlaced('Wott_A.00000009.mov', 40.0) === false);
+                // 3. sense `at` la pregunta és «és en algun lloc?»
+                res.push(chyMod._isAlreadyPlaced('Wott_A.mov') === true);
+                // 4. dins del clip existent (encara que el seu inici siga 3 s abans) → ja hi és
+                res.push(chyMod._isAlreadyPlaced('Wott_A.mov', 12.0) === true);
+                // 5. un altre wott al mateix instant → NO hi és
+                chyMod._placedGuard = [{ k: chyMod._dupKey('Altre.00000001.mov'), start: 3, end: 5 }];
+                res.push(chyMod._isAlreadyPlaced('Wott_Que_No_Hi_Es.00000001.mov', 3) === false);
+                // 6. nom TRUNCAT de Premiere (prefix >90) al mateix instant → ja hi és
+                var llarg = 'Wott_TNV_V1_10_00.00_CAMPANYA ELECTORAL ACCIDENT_668645_XARXES-TEXT_tp_Gabriel Rufián_ERC_k_ABCDEF';
+                chyMod._placedGuard = [{ k: chyMod._dupKey(llarg.substring(0, 93) + '.00068991.mov'), start: 20, end: 26 }];
+                res.push(chyMod._isAlreadyPlaced(llarg + 'k_00668981.mov', 21) === true);
+                // 7. reserva `_markPlaced` → bloqueja al mateix instant i no a un altre
+                chyMod._placedGuard = [];
+                chyMod._markPlaced('Wott_B.00000001.mov', 20);
+                res.push(chyMod._isAlreadyPlaced('Wott_B.00000002.mov', 20) === true);
+                res.push(chyMod._isAlreadyPlaced('Wott_B.00000002.mov', 60) === false);
+                // 8. `_markPlaced` sense instant no reserva res (no pot blocar altres blocs)
+                chyMod._placedGuard = [];
+                chyMod._markPlaced('Wott_C.mov');
+                res.push(chyMod._isAlreadyPlaced('Wott_C.mov') === false);
+                chyMod._placedGuard = null;
+                chyMod._dupSkipped = 0;
+                return res.indexOf(false) === -1;
+            })(),
+            'guarda permanent nom + instant');
+
+        // ── P2. BUG #211 (2026-10-30): la finestra de l'ÍTEM arriba al seu FINAL ────
+        // Log real del 30/10 (PROVES\FASTPASS.log, 11:50 vs 11:51): l'últim ítem (marcador
+        // 10@16.40 s, sense marcador següent) té rètols fins a 118.84 s. La finestra es
+        // tancava a `16.40 + 60 = 76.40 s` → el nom-càrrec 668945/668946/668947 i la firma
+        // 668949 es tornaven a col·locar a la 2a passada de 🎯 (la firma acabava a V8).
+        var FIRMA_211 = 'Wott_TNV_V1_10_01.43_CAMPANYA ELECTORAL ACCIDENT_668949_Firma_Eva Pelegrí Bobet_Marta Vila.00668992.mov';
+        ok('#WOTT/61 🐞 #211: la finestra NO-DUP de l\'ítem arriba al FINAL de l\'ítem (no a marcador+60 s)', 
+            (function () {
+                if (!chyMod) return false;
+                var res = [];
+                chyMod._placedGuard = [{
+                    k: chyMod._dupKey(FIRMA_211), start: 118.84, end: 123.80
+                }];
+                // 1. finestra ANTIGA (marcador 16.40 + 60 → 76.40 s) → el rètol quedava FORA (el bug)
+                res.push(chyMod._isAlreadyPlaced(FIRMA_211, { lo: 15.4, hi: 76.4 }) === false);
+                // 2. finestra NOVA (final de l'ítem, 131.68 s) → ja hi és → no es duplica
+                res.push(chyMod._isAlreadyPlaced(FIRMA_211, { lo: 15.4, hi: 131.68 }) === true);
+                // 3. sense final conegut la finestra és oberta (`Infinity`) → tampoc no es duplica
+                res.push(chyMod._isAlreadyPlaced(FIRMA_211, { lo: 15.4, hi: Infinity }) === true);
+                // 4. SOLAPAMENT: el clip existent comença ABANS de la finestra però la trepitja
+                chyMod._placedGuard = [{ k: chyMod._dupKey(FIRMA_211), start: 80.0, end: 85.0 }];
+                res.push(chyMod._isAlreadyPlaced(FIRMA_211, { lo: 84.0, hi: 90.0 }) === true);
+                // 5. el codi ja no tanca la finestra amb `mk.time + 60` i sí que pregunta el final
+                res.push(chySrcP.indexOf('mk.time + 60') === -1);
+                res.push(/hiWin = \(nm !== null\)/.test(chySrcP) &&
+                    chySrcP.indexOf('await this._itemEndTime(mk, markersFull)') !== -1);
+                chyMod._placedGuard = null;
+                chyMod._dupSkipped = 0;
+                return res.indexOf(false) === -1;
+            })(),
+            'finestra ' + (chyMod ? JSON.stringify(chyMod._placedGuard) : 'sense mòdul') +
+            ' +60=' + (chySrcP.indexOf('mk.time + 60') !== -1) +
+            ' itemEnd=' + (chySrcP.indexOf('await this._itemEndTime(mk, markersFull)') !== -1));
+
+        // ── P3. BUG #210 (2026-10-30): CONVERSA / XARXES-TEXT NO van al marcador ──
+        // El tuit va CREMAT dins del clip de V1: el TC del nom (`00.00`) i el marcador
+        // de l'ítem no diuen on va. Cas real TNV V1 29/10 i 30/10: el `[Resto]` el
+        // col·locava a l'inici de l'ítem (V7) i la passada de XARXES el comptava com
+        // a «ja col·locat» → mai no es rastrejava a la imatge.
+        var XARXES_210 = 'Wott_TNV_V1_10_00.00_CAMPANYA ELECTORAL ACCIDENT_668645_XARXES-TEXT_tp_Gabriel Rufián_ERC_.00668981.mov';
+        var CONVERSA_210 = 'Wott_TNV_V1_10_00.12_CAMPANYA_668650_CONVERSA_Oriol Junqueras.00668990.mov';
+        var NOM_210 = 'Wott_TNV_V1_10_00.23_CAMPANYA ELECTORAL ACCIDENT_668937_Nomcarrec_Pedro Sánchez_president.00668984.mov';
+        var FIRMA_210 = 'Wott_TNV_V1_10_01.43_CAMPANYA ELECTORAL ACCIDENT_668949_Firma_Eva Pelegrí Bobet_Marta Vila.00668992.mov';
+        ok('#WOTT/62 🐞 #210: CONVERSA/XARXES-TEXT fora del bucle genèric (els rastreja XARXES) i un NomCarrec/Firma NO',
+            !!chyMod && typeof chyMod._isOcrItemWott === 'function' &&
+            chyMod._isOcrItemWott({ name: XARXES_210 }) === true &&
+            chyMod._isOcrItemWott({ name: CONVERSA_210 }) === true &&
+            chyMod._isOcrItemWott({ name: 'wott x salvador illa.00666202.mov' }) === true &&
+            chyMod._isOcrItemWott({ name: NOM_210 }) === false &&
+            chyMod._isOcrItemWott({ name: FIRMA_210 }) === false &&
+            chyMod._isOcrItemWott({ name: 'Wott_MAT_v5_513_00.01_dona pas Barcelona_631037_Lloc_Elisabet Viladomiu.mov' }) === false &&
+            chyMod._isOcrItemWott(null) === false &&
+            chySrcP.indexOf('_isOcrItemWott: function (chy)') !== -1 &&
+            chySrcP.indexOf('this._isOcrItemWott(c)') !== -1 &&
+            chySrcP.indexOf('A LA IMATGE (CONVERSA/XARXES-TEXT) fora del bucle') !== -1,
+            'ocr=' + (chyMod && typeof chyMod._isOcrItemWott) +
+            ' xarxes=' + (chyMod && chyMod._isOcrItemWott({ name: XARXES_210 })) +
+            ' nom=' + (chyMod && chyMod._isOcrItemWott({ name: NOM_210 })));
 
         } finally {
             UI.Utils.readFolder = realReadFolder;
