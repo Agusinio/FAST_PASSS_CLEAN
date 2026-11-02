@@ -110,11 +110,182 @@
         _blockStartForce: null,
 
         // ═══════════════════════════════════════════════════════════════
+        // 🛡️ NO-DUPLICAR (2026-10-30 · petició d'usuari)
+        // ═══════════════════════════════════════════════════════════════
+        // REGLA PERMANENT —no hi ha mode ni interruptor—: ABANS d'inserir un rètol o un
+        // grafisme es mira si eixe wott JA ocupa eixe instant del timeline. Si hi és,
+        // s'omet; si no, es col·loca. El resultat és sempre el mateix: amb el timeline
+        // buit es col·loca tot i, si ja hi ha rètols, només s'afig el que faltava →
+        // clicar 🎯 dos voltes seguides no duplica ni mou res.
+        // La identitat és (NOM + INSTANT), no només el nom: el MATEIX wott s'ha de poder
+        // col·locar en blocs distints (el Conductor n'és el cas clar) i el 🔀 ha de poder
+        // tornar a col·locar l'inici del bloc, que abans ha esborrat.
+        _placedGuard: null,     // [{k,start,end,track}] del timeline · null = cal rellegir-lo
+        _dupSkipped: 0,         // quants rètols s'han omés des de l'últim `resetDupSkipped`
+        _dupEps: 0.25,          // tolerància (s) al voltant de l'instant de destí
+
+        /**
+         * _dupKey: identitat del wott per a la guarda NO-DUPLICAR.
+         * `_regenKey` lleva fora la versió de generació i l'extensió; si el clip del
+         * timeline s'ha quedat amb una extensió solta (`.mov`, `.png`…), també cau.
+         */
+        _dupKey: function (name) {
+            try {
+                return String(this._regenKey(name) || '').replace(/\.(mov|mp4|mxf|png|jpe?g|tif{1,2})$/i, '');
+            } catch (e) { return String(name || '').toLowerCase(); }
+        },
+
+        /**
+         * _invalidatePlacedGuard: el timeline pot haver canviat (operació nova o esborrat).
+         * (2026-10-30) Per no rellegir cinc pistes a cada fase de la mateixa passada, la
+         * invalidació només compta si el snapshot té més de 2 s (o si `force` = s'ha
+         * ESBORRAT material i cal veure-ho sí o sí).
+         * @param {boolean} [force]
+         */
+        _invalidatePlacedGuard: function (force) {
+            if (force) { this._placedGuard = null; return; }
+            if (!this._placedGuard) return;
+            if ((Date.now() - (this._guardAt || 0)) > 2000) this._placedGuard = null;
+        },
+
+        /** _ensurePlacedGuard: si encara no s'ha llegit el timeline, es llig ARA (una volta). */
+        _ensurePlacedGuard: async function () {
+            if (!this._placedGuard) await this._refreshPlacedGuard();
+            return this._placedGuard;
+        },
+
+        /** resetDupSkipped / getDupSkipped: comptador d'informe de la passada. */
+        resetDupSkipped: function () { this._dupSkipped = 0; return 0; },
+        getDupSkipped: function () { return this._dupSkipped || 0; },
+
+        /**
+         * _refreshPlacedGuard: llig QUÈ HI HA al timeline a les pistes per on van els rètols i
+         * els grafismes (V6 tema-títol, V7 chyrons, V8 lloc/data, V3 grafismes i V4 traduccions).
+         * De cada clip es guarda la clau (`_dupKey`, sense versió de generació ni extensió) i el
+         * seu RANG temporal: la guarda compara (nom + instant), no només el nom.
+         */
+        _refreshPlacedGuard: async function () {
+            const cfg = FASTPASS_UI.Config.get();
+            const v = (cfg && cfg.tracks && cfg.tracks.video) || {};
+            const tracks = [v.chyrons, v.tematitol, (v.lloc || v.llocdata), v.graficos, v.trad]
+                .map(t => parseInt(t, 10)).filter(t => t > 0);
+            const list = [];
+            for (const t of tracks) {
+                let clips = [];
+                try {
+                    clips = await getClipsLogic().getTrackClips(t, 'video');
+                } catch (e) {
+                    log(`   ⚠️ [NO-DUP] no s'ha pogut llegir la pista V${t}: ${e.message}`, 'WARN');
+                }
+                for (const c of (clips || [])) {
+                    if (!c || !c.name) continue;
+                    const k = this._dupKey(c.name);
+                    if (k) list.push({ k: k, start: Number(c.start), end: Number(c.end), track: t });
+                }
+            }
+            this._placedGuard = list;
+            this._guardAt = Date.now();
+            log(`🛡️ [NO-DUP] timeline: ${list.length} clip(s) de rètol/grafisme a ${tracks.length} pista(es) → només es col·locarà el que falta`);
+            return list;
+        },
+
+        /**
+         * _sameWottKey: dues claus són el MATEIX wott?
+         * Premiere pot tindre el clip del timeline amb el nom TRUNCAT (~93 caràcters) i el
+         * wott del NAS amb el nom sencer → es compara per PREFIX quan tots dos passen de 90
+         * caràcters. Per davall, dos rètols de la mateixa família (mateix començament de
+         * nom) es confondrien i se n'ometria un.
+         */
+        _sameWottKey: function (a, b) {
+            if (!a || !b) return false;
+            if (a === b) return true;
+            if (a.length > 90 && b.length > 90) return (a.indexOf(b) === 0 || b.indexOf(a) === 0);
+            return false;
+        },
+
+        /**
+         * _isAlreadyPlaced: este wott JA ocupa eixe instant del timeline?
+         * @param {string} name - nom del wott
+         * @param {number|{lo:number,hi:number}|null} [at] - instant (o finestra) de destí.
+         *   Sense `at` la pregunta és «és en qualsevol lloc del timeline?».
+         * @returns {boolean}
+         */
+        _isAlreadyPlaced: function (name, at) {
+            const g = this._placedGuard;
+            if (!g || g.length === 0) return false;
+            const q = this._dupKey(name);
+            if (!q) return false;
+            const eps = this._dupEps;
+            let lo = null, hi = null;
+            if (typeof at === 'number' && isFinite(at)) { lo = at - eps; hi = at + eps; }
+            else if (at && isFinite(Number(at.lo)) && isFinite(Number(at.hi))) { lo = Number(at.lo); hi = Number(at.hi); }
+            for (let i = 0; i < g.length; i++) {
+                const e = g[i];
+                if (!this._sameWottKey(e.k, q)) continue;
+                if (lo === null) return true;                                    // existeix en algun lloc
+                if (!isFinite(e.start)) continue;
+                // (2026-10-30 · BUG #211) SOLAPAMENT de rangs, no només el START: el mateix
+                // rètol pot haver-se desplaçat (col·lisió de pista) i el seu inici quedar fora
+                // de la finestra tot i ocupar-la. `hi` pot ser Infinity (últim ítem).
+                const eEnd = isFinite(e.end) ? Number(e.end) : Number(e.start);
+                if (e.start <= hi && eEnd >= lo) return true;
+            }
+            return false;
+        },
+
+        /**
+         * _markPlaced: reserva el wott en l'instant on s'acaba d'inserir.
+         * Serveix perquè dins d'una MATEIXA passada no es torne a inserir el que ja s'ha
+         * col·locat (dos ítems que llisten el mateix rètol) sense rellegir el timeline.
+         * @param {string} name
+         * @param {number} start - instant de l'insert (sense instant no es reserva)
+         * @param {number} [end]
+         */
+        _markPlaced: function (name, start, end) {
+            const k = this._dupKey(name);
+            const s = Number(start);
+            if (!k || !isFinite(s)) return;
+            if (!this._placedGuard) this._placedGuard = [];
+            const e = Number(end);
+            this._placedGuard.push({ k: k, start: s, end: (isFinite(e) && e > s) ? e : s + 1 });
+        },
+
+        /** _noteDup: compta quants rètols s'han omés per ja ser al timeline. */
+        _noteDup: function (n) { this._dupSkipped += (n || 1); },
+
+        /**
+         * _insertIfMissing: INSERT amb la guarda NO-DUPLICAR (nom + instant).
+         * És el camí que han de fer servir tots els inserts de rètols i grafismes: si eixe
+         * wott ja ocupa l'instant, no es duplica; si no, s'insereix i es reserva.
+         * @param {string} name - nom del wott (sense escapar)
+         * @param {number} track - pista de vídeo
+         * @param {number} start - instant de destí
+         * @param {number} [end] - final (per a la reserva)
+         * @param {string} [label] - per al log
+         * @returns {Promise<boolean>} true = inserit · false = ja hi era (omés)
+         */
+        _insertIfMissing: async function (name, track, start, end, label) {
+            await this._ensurePlacedGuard();
+            const t = Number(start);
+            if (this._isAlreadyPlaced(name, t)) {
+                this._noteDup(1);
+                log(`   🛡️ [${label || 'insert'}] «${String(name).substring(0, 40)}…» ja és al timeline a ${t.toFixed(2)}s → no es duplica`);
+                return false;
+            }
+            this._markPlaced(name, t, end);
+            await callJSX(`Clips.insert('${getUtils().escape(name)}', ${track}, ${t.toFixed(4)}, null, 'video')`);
+            return true;
+        },
+
+        // ═══════════════════════════════════════════════════════════════
         // ASSEMBLATGE AUTOMÀTIC (THE MAGIC)
         // ═══════════════════════════════════════════════════════════════
 
         runAutoPlacement: async function (mainTrack = 1) {
             log("🎬 Iniciant Assemblatge Automàtic (THE MAGIC)...");
+            // 🛡️ (2026-10-30) NO-DUPLICAR: es rellegeix el timeline abans de començar (els
+            // inserts d'este flux passen per `_insertIfMissing`/`_freezeTemaTitol`).
+            this._invalidatePlacedGuard();
             const state = FASTPASS_UI.State;
             const cfg = FASTPASS_UI.Config.get();
 
@@ -233,8 +404,17 @@
                 if (!conductorPlaced && conductorFile) {
                     try {
                         const targetTime = clips.length > 0 ? clips[0].start + 7.6 : 7.6;
-                        await window.Assembly.conductor(conductorFile, targetTime);
-                        log(`👤 Conductor inserit: ${conductorFile} a ${targetTime.toFixed(2)}s`);
+                        // 🛡️ (2026-10-30) NO-DUPLICAR: el mateix conductor al mateix instant no
+                        // es torna a inserir (l'assemblatge s'ha de poder repetir sense duplicar).
+                        await this._ensurePlacedGuard();
+                        if (this._isAlreadyPlaced(conductorFile, targetTime)) {
+                            this._noteDup(1);
+                            log(`🛡️ [Magic] Conductor «${conductorFile}» ja és al timeline a ${targetTime.toFixed(2)}s → no es duplica`);
+                        } else {
+                            this._markPlaced(conductorFile, targetTime, targetTime + 6);
+                            await window.Assembly.conductor(conductorFile, targetTime);
+                            log(`👤 Conductor inserit: ${conductorFile} a ${targetTime.toFixed(2)}s`);
+                        }
                     } catch (e) {
                         log(`⚠️ No s'ha pogut inserir el conductor: ${e.message}`);
                     }
@@ -248,11 +428,12 @@
             const tematitol = block.chyrons.find(c => c.name.includes("Tema-Titol") || c.name.includes("TITOL"));
             const conductor = block.chyrons.find(c => (c.rol || '').toUpperCase() === "CONDUCTOR");
             if (conductor) {
+                // 🛡️ (2026-10-30) NO-DUPLICAR: `_insertIfMissing` comprova (nom + instant).
                 if (tematitol) {
-                    await callJSX(`Clips.insert('${getUtils().escape(conductor.name)}', ${tracks.chyrons}, ${start + 6.3}, null, 'video')`);
-                    await callJSX(`Clips.insert('${getUtils().escape(tematitol.name)}', ${tracks.tematitol}, ${start}, null, 'video')`);
+                    await this._insertIfMissing(conductor.name, tracks.chyrons, start + 6.3, start + 6.3 + 6, 'Intro·Conductor');
+                    await this._insertIfMissing(tematitol.name, tracks.tematitol, start, start + 6.3, 'Intro·TemaTitol');
                 } else {
-                    await callJSX(`Clips.insert('${getUtils().escape(conductor.name)}', ${tracks.chyrons}, ${start}, null, 'video')`);
+                    await this._insertIfMissing(conductor.name, tracks.chyrons, start, start + 6, 'Intro·Conductor');
                 }
             }
         },
@@ -268,13 +449,15 @@
                 if (conductorChyron) conductorName = conductorChyron.name;
             }
             if (conductorName) {
-                await callJSX(`Clips.insert('${getUtils().escape(conductorName)}', ${conductorTrack}, ${conductorStart}, null, 'video')`);
+                // 🛡️ (2026-10-30) NO-DUPLICAR: nom + instant (el MATEIX conductor pot anar a
+                // cada bloc OFF; el que no pot és repetir-se al mateix instant).
+                await this._insertIfMissing(conductorName, conductorTrack, conductorStart, conductorStart + 4.1, 'OFF·Conductor');
                 const tematitol = block.chyrons.find(c => c.name.includes("Tema-Titol") || c.name.includes("TITOL"));
                 if (tematitol) {
                     const tematitolStart = conductorStart + 4.10;
                     const tematitolTrack = tracks.tematitol || tracks.chyrons;
                     log(`   🎬 OFF (${block.id}): inserint Tema‑Titol a ${tematitolStart.toFixed(2)}s`);
-                    await callJSX(`Clips.insert('${getUtils().escape(tematitol.name)}', ${tematitolTrack}, ${tematitolStart}, null, 'video')`);
+                    await this._insertIfMissing(tematitol.name, tematitolTrack, tematitolStart, tematitolStart + 6, 'OFF·TemaTitol');
                 }
                 return conductorStart;
             }
@@ -287,7 +470,7 @@
             const tematitolStart = conductorStart ? conductorStart + 4.10 : clip.start + 4.5;
             const tematitolTrack = tracks.tematitol || tracks.chyrons;
             log(`   🎬 OFF_VIDEO (${block.id}): inserint Tema‑Titol a ${tematitolStart.toFixed(2)}s`);
-            await callJSX(`Clips.insert('${getUtils().escape(tematitol.name)}', ${tematitolTrack}, ${tematitolStart}, null, 'video')`);
+            await this._insertIfMissing(tematitol.name, tematitolTrack, tematitolStart, tematitolStart + 6, 'OFF_VIDEO·TemaTitol');
         },
 
         _placeMagicChyrons: async function (block, headClip, tracks, allClips, markerMap, conductorTime) {
@@ -320,9 +503,9 @@
                 } else if (rol === "TEMA" || rol === "TEMATITOL") {
                     targetTrack = tracks.tematitol || tracks.chyrons;
                 }
-                const safeName = getUtils().escape(chyron.name);
                 log(`   🎯 [${block.id}] Chyron ${ci+1}/${numChyrons}: a track ${targetTrack} @ ${targetTime.toFixed(2)}s`);
-                await callJSX(`Clips.insert('${safeName}', ${targetTrack}, ${targetTime.toFixed(4)}, null, 'video')`);
+                // 🛡️ (2026-10-30) NO-DUPLICAR: nom + instant (vegeu `_insertIfMissing`).
+                await this._insertIfMissing(chyron.name, targetTrack, targetTime, targetTime + 2, 'Magic');
             }
         },
 
@@ -641,6 +824,18 @@
          */
         _freezeTemaTitol: async function (wottName, placeTime, stretchEnd, label, opts) {
             const o = opts || {};
+            // 🛡️ (2026-10-30) NO-DUPLICAR (regla permanent): si este wott ja ocupa eixe
+            // instant del timeline, no es torna a col·locar ni es torna a congelar. El 🔀
+            // esborra abans el clúster de l'inici del bloc, així que continua podent
+            // recol·locar-lo; el que no passa mai és tindre'l dues voltes al mateix lloc.
+            await this._ensurePlacedGuard();
+            if (this._isAlreadyPlaced(wottName, placeTime)) {
+                this._noteDup(1);
+                log(`   🛡️ [_freeze] «${String(wottName).substring(0, 40)}…» ja és al timeline a ${Number(placeTime).toFixed(2)}s → no es torna a col·locar`);
+                return { success: true, duration: 0, skipped: true };
+            }
+            this._markPlaced(wottName, placeTime, stretchEnd);
+
             const cfg = FASTPASS_UI.Config.get();
             const T_THEME = (parseInt(o.track, 10) > 0) ? parseInt(o.track, 10) : cfg.tracks.video.tematitol;
             const utils = getUtils();
@@ -1024,6 +1219,14 @@
             const media = (Number(p.mediaDur) > 0.1) ? Number(p.mediaDur) : 0;
             const minFreeze = (Number(TR.freezeMinSec) > 0) ? Number(TR.freezeMinSec) : 0.12;
             const short = String(name).substring(0, 34);
+            // 🛡️ (2026-10-30) NO-DUPLICAR (regla permanent): si la traducció ja ocupa este
+            // slot, no es torna a col·locar (abans el segon clic la duplicava a V7/V8).
+            await this._ensurePlacedGuard();
+            if (this._isAlreadyPlaced(name, { lo: start - 0.5, hi: start + 0.5 })) {
+                this._noteDup(1);
+                log(`      🛡️ [${tag}] «${short}…» ja és al timeline a ${start.toFixed(2)}s → no es torna a col·locar`);
+                return { ok: true, mode: 'dup', live: span, media: media, skipped: true };
+            }
             // (2026-10-08) `jsxName`: el JSX fa `decodeURIComponent` sobre el nom → un `%`
             // literal ha d'arribar com a `%25` o la inserció falla en silenci.
             const escapedName = utils.escape(utils.jsxName(name));
@@ -1032,7 +1235,10 @@
             // l'API) i final fixat amb `Clips.endCoherent` (retall COHERENT: el clip queda
             // ESTIRABLE amb el ratolí — vegeu js/logic/6_Clips_Logic.js · 2026-10-16 · #171).
             const insertLive = async () => {
+                // 🛡️ (2026-10-30) RESERVA NO-DUPLICAR abans de l'insert.
+                this._markPlaced(name, start, end);
                 const rIns = String(await callJSX(`Clips.insert('${escapedName}', ${track}, ${start.toFixed(4)}, null, 'video')`) || '');
+
                 if (isErrRes(rIns)) return rIns;
                 return String(await getClipsLogic().endCoherent(track, start, end, 'video', tag) || '');
             };
@@ -1817,6 +2023,41 @@
             if (/TRADUCCI[OÓ]/.test(String(chy.rol || '').toUpperCase())) return true;
             const toks = String(chy.name || '').toUpperCase().split('_');
             return toks.some(t => /^TRADUCCI[OÓ]/.test(t.trim()));
+        },
+
+        /**
+         * _isOcrItemWott: El grafisme s'ha de LOCALITZAR A LA IMATGE?
+         *
+         * 🐞 BUG #210 (2026-10-30 · cas real TNV V1 29/10 i 30/10). Els ítems amb
+         * el rol `CONVERSA` o `XARXES-TEXT` (i la família d'export manual
+         * `wott x <nom>`) són grafismes que van CREMATS dins de la imatge del clip
+         * de V1: el seu TC (`00.00`) NO diu on van, i el marcador de l'ítem tampoc
+         * (el tuit pot estar a qualsevol punt del clip). Qui els sap col·locar és
+         * `Twitts.runAuto` (OCR dels clips del timeline / rastreig de GRIS).
+         *
+         * Si el bucle genèric d'una fase (`_placeChyronsByType`) els col·loca al
+         * marcador, la passada de XARXES els veu després com a «ja col·locats»
+         * (`pendents` buit) i MAI no es busquen a la imatge → el tuit eixia a
+         * l'inici de l'ítem. És exactament el mateix tipus de xarxa que
+         * `_isTraduccioWott` (invariant de família), i el criteri viu en un SOL
+         * lloc: `Logic.TwittsOcr.esOcrItem` (D24).
+         * @param {Object} chy - {name, rol}
+         * @returns {boolean}
+         */
+        _isOcrItemWott: function (chy) {
+            if (!chy) return false;
+            const name = String(chy.name || '');
+            if (!name) return false;
+            try {
+                const T = FASTPASS_UI.Logic && FASTPASS_UI.Logic.TwittsOcr;
+                if (T && typeof T.esOcrItem === 'function') return !!T.esOcrItem(name);
+            } catch (eT) { /* cau al criteri local */ }
+            // Fallback local (si el mòdul no s'ha carregat): mateix criteri del ROL.
+            const p = name.replace(/\.(mov|mp4|mxf|png|jpe?g)$/i, '').split('_');
+            const rol = String(chy.rol || (p.length > 7 ? p[7] : '') || '');
+            if (/^(CONVERSA|XARXES-TEXT)(\+|$)/i.test(rol)) return true;
+            if (/^wott(?:[_ ]v\d+)?\s+x\s+\S/i.test(name)) return true;
+            return false;
         },
 
         /**
@@ -2821,6 +3062,9 @@
 
         _placeChyronsByType: async function (filterFn, trackResolver, label, onPlaced, opts) {
             if (!(await getUtils().validateActiveSequence())) return;
+            // 🛡️ (2026-10-30) NO-DUPLICAR: cada passada comença llegint QUÈ HI HA al timeline
+            // (l'usuari pot haver esborrat rètols a mà des de l'última volta).
+            this._invalidatePlacedGuard();
             const cfg = FASTPASS_UI.Config.get();
             const struct = FASTPASS_UI.State.structure;
             if (!struct || struct.length === 0) {
@@ -2839,9 +3083,14 @@
                 }
                 const markersFull = [];
                 for (const m of structuralMarkers) {
-                    const parts = (m.comments || "").split("-");
-                    if (parts.length > 0) {
-                        const rawId = parts[0].trim();
+                    // 🐞 BUG #216 (2026-11-02): el tall era `split("-")`, que PARTIA els IDs amb
+                    // GUIONET INTERN («25TE-2 - TE tort DADES CÀMPINGS OBERTS» → fullId «25TE»).
+                    // `structureById["25TE"]` no existia (l'ítem és «25TE-2»), així que els wotts
+                    // d'eixe ítem no s'avaluaven MAI ni deixaven cap rastre al log (TNM V3 02/11).
+                    // `_markerItemId` talla pel separador « - » (amb espais) i cau al tall antic
+                    // si el comentari no en porta.
+                    const rawId = this._markerItemId(m.comments);
+                    if (rawId) {
                         const numMatch = rawId.match(/^(\d+)/);
                         if (numMatch) {
                             // (2026-10-16 · BUG #167) `label` = comentari SENCER del marcador:
@@ -2991,6 +3240,18 @@
                             log(`   🛡️ [${label}] ${nTrad} traducció(ns) fora de família: les col·loca la fase TRADUCCIÓ`, "WARN");
                         }
                     }
+                    // ── INVARIANT DE FAMÍLIA · A LA IMATGE (2026-10-30 · BUG #210) ─
+                    // CONVERSA / XARXES-TEXT (i `wott x <nom>`) són grafismes CREMATS dins
+                    // del clip de V1: el seu TC (`00.00`) i el marcador de l'ítem NO diuen on
+                    // van. Els localitza `Twitts.runAuto` (OCR dels clips / rastreig de GRIS).
+                    // Si entraren ací, el tuit eixia a l'inici de l'ítem i, pitjor encara, la
+                    // passada de XARXES el comptava com a col·locat (`pendents` buit) i ja no
+                    // es buscava mai a la imatge.
+                    const nOcr = matching.filter(c => this._isOcrItemWott(c)).length;
+                    if (nOcr > 0) {
+                        matching = matching.filter(c => !this._isOcrItemWott(c));
+                        log(`   🛡️ [${label}] ${nOcr} grafisme(s) A LA IMATGE (CONVERSA/XARXES-TEXT) fora del bucle: els localitza la passada XARXES (OCR/gris)`, "INFO");
+                    }
                     if (matching.length === 0) continue;
                     // TITOLET: el sistema genera variants de posició i versions del
                     // mateix rètol; es deixa només la més recent de cada text.
@@ -3014,6 +3275,36 @@
                     // s'acaben col·locant (el segon, a una ALTRA capa). S'aplica a TOTES les
                     // fases perquè aquest bucle és comú a Conduct/Titol/Lloc/Nom/Resto.
                     matching = this._dedupeSameChyron(matching, label);
+                    // 🛡️ (2026-10-30) NO-DUPLICAR (regla permanent): els rètols que JA ocupen
+                    // ESTE ÍTEM del timeline no es tornen a col·locar. La finestra és l'ítem
+                    // sencer (des del marcador fins al següent), perquè un rètol pot haver-se
+                    // desplaçat per col·lisió de pista; el nom sol no basta: el MATEIX wott ha
+                    // de poder anar a dos ítems distints.
+                    // Va ABANS de la cadena de grafisme cremat perquè un cremat ja col·locat
+                    // tampoc no s'hi torne.
+                    if (matching.length > 0) {
+                        await this._ensurePlacedGuard();
+                        const nm = nextMarkerAfter(mk.time);
+                        // 🐞 BUG #211 (2026-10-30): la finestra de l'ÍTEM no pot acabar-se en un
+                        // «+60 s» arbitrari. En l'últim ítem (sense marcador següent) eixe topall
+                        // deixava FORA de la guarda tot el que s'havia col·locat més enllà del
+                        // minut: segona passada de 🎯 → el mateix nom-càrrec/firma es tornava a
+                        // inserir a V7 i, amb la pista ocupada, `_chooseSlot` el duia a una ALTRA
+                        // capa (V8) o el retallava a ~1,6 s darrere del primer. El final de l'ítem
+                        // el sap `_itemEndTime` (marcador següent → corxet OUT → duració → final
+                        // del programa). Sense dades, la finestra és oberta (`Infinity`).
+                        let hiWin = (nm !== null) ? nm - 0.5 : await this._itemEndTime(mk, markersFull);
+                        if (hiWin === null || !isFinite(Number(hiWin)) || Number(hiWin) <= mk.time) hiWin = Infinity;
+                        const win = { lo: mk.time - 1.0, hi: Number(hiWin) };
+                        const jaHi = matching.filter(c => this._isAlreadyPlaced(c.name, win));
+                        if (jaHi.length > 0) {
+                            matching = matching.filter(c => !this._isAlreadyPlaced(c.name, win));
+                            this._noteDup(jaHi.length);
+                            log(`   🛡️ [${label}] Marcador ${mk.fullId}: ${jaHi.length} rètol(s) JA al timeline → s'ometen: ` +
+                                jaHi.map(c => String(c.name).substring(0, 40)).join(' · '));
+                            if (matching.length === 0) continue;
+                        }
+                    }
                     matching.sort((a, b) => (a.tc || "").localeCompare(b.tc || ""));
                     log(`📌 [${label}] Marcador ${mk.fullId}: ${matching.length} chyron(s)`);
                     // ── CADENA DE GRAFISME CREMAT (2026-10-05 · rols ampliats 2026-10-08) ──
@@ -3184,7 +3475,12 @@
                         // pista (vegeu nota de sota) → l'insert cru ja perjudica un altre clip
                         // (a V6, el PNG estirat del Tema-Títol). El final es fixa tot seguit amb
                         // `Clips.endCoherent`, que cerca el clip pel seu start.
+                        // 🛡️ (2026-10-30) RESERVA NO-DUPLICAR: el wott queda apuntat amb el seu
+                        // instant ABANS de l'insert perquè, si la mateixa passada el torna a
+                        // vore (dos ítems que el llisten), no s'inserisca dues voltes.
+                        this._markPlaced(chy.name, slot.start, placeEnd);
                         await callJSX(`Clips.insert('${escapedName}', ${slot.track}, ${slot.start.toFixed(4)}, null, 'video')`);
+
                         // ── (2026-10-22 · #182c) WOTT SENCER = 1 FRAME MENYS ──────────
                         // Queixa de l'usuari: «quan es col·loca el clip SENCER (no l'acurta
                         // cap pla de V1) ix 1 frame més llarg que el mèdia real». La causa
@@ -3297,6 +3593,8 @@
          */
         placeChyronTitol: async function () {
             if (!(await getUtils().validateActiveSequence())) return;
+            // 🛡️ (2026-10-30) NO-DUPLICAR: es rellegeix el timeline a cada passada.
+            this._invalidatePlacedGuard();
             const cfg = FASTPASS_UI.Config.get();
             const struct = FASTPASS_UI.State.structure;
             const T_THEME = cfg.tracks.video.tematitol;
@@ -3442,6 +3740,24 @@
                 }
                 if (ttFinal.length < ttPos.length) {
                     log(`   🛡️ [Titol] ${ttPos.length - ttFinal.length} Tema-Títol(s) descartat(s) per col·lisió de posició`);
+                }
+
+                // 🛡️ (2026-10-30) NO-DUPLICAR (regla permanent): si TOTS els Tema-Títol grans
+                // que toca col·locar JA ocupen el SEU instant del timeline, no es fa RES — ni
+                // tan sols les transicions amb el titullet (§6) ni la cobertura (§7), que també
+                // s'inseririen damunt de les que ja hi ha. Si en falta algun, es fa el flux
+                // sencer i només s'ometen els que ja hi eren.
+                if (ttFinal.length > 0) {
+                    await this._ensurePlacedGuard();
+                    const faltants = ttFinal.filter(x => !this._isAlreadyPlaced(x.tt.name, { lo: x.time - 1.5, hi: x.time + 1.5 }));
+                    if (faltants.length === 0) {
+                        this._noteDup(ttFinal.length);
+                        log(`🛡️ [Titol] Els ${ttFinal.length} Tema-Títol(s) gran(s) del bloc JA són al timeline → no es torna a col·locar res (ni el titullet)`);
+                        return;
+                    }
+                    if (faltants.length < ttFinal.length) {
+                        log(`   🛡️ [Titol] ${ttFinal.length - faltants.length} de ${ttFinal.length} Tema-Títol(s) ja al timeline → es col·loquen els ${faltants.length} que falten`);
+                    }
                 }
 
                 // (2026-10-07) ORDRE DE COL·LOCACIÓ: el titulillo (§6/§7) s'ha de calcular i
@@ -3612,6 +3928,9 @@
                 // ── 3. Finestra de neteja: el clúster de l'inici del bloc ──
                 const span = (cur.condEnd !== null) ? Math.max(16, (cur.condEnd - clipStart) + 12) : 16;
                 const cl = await this._cleanCasoBloc(cfg, clipStart, span);
+                // 🛡️ (2026-10-30) NO-DUPLICAR: s'ha esborrat el clúster → el timeline ha canviat
+                // (force: no esperem els 2 s, la relectura és obligatòria ací).
+                this._invalidatePlacedGuard(true);
                 // ── 4. Re-col·loca l'inici del bloc amb l'ESTAT nou (Conductor → Tema-Títol,
                 //       com el 🎯) ancorat a l'inici del bloc sota el CABEZAL ──
                 this._blockStartForce = clipStart;
@@ -4473,7 +4792,16 @@
 
             // Insert + fixar el final (l'endSec de Clips.insert pot acabar al darrer clip de la pista)
             // (2026-10-16 · #171) amb `Clips.endCoherent`: retall COHERENT → clip ESTIRABLE.
+            // 🛡️ (2026-10-30) NO-DUPLICAR: la cobertura del titullet passa pel mateix guard
+            // (nom + instant): si eixa peça ja ocupa eixe punt, no es torna a inserir.
             const insEnd = async (name, start, end, label) => {
+                await this._ensurePlacedGuard();
+                if (this._isAlreadyPlaced(name, start)) {
+                    this._noteDup(1);
+                    log(`      🛡️ ${label} → ja és al timeline a ${start.toFixed(2)}s: no es duplica`);
+                    return;
+                }
+                this._markPlaced(name, start, end);
                 const ins = await callJSX(`Clips.insert('${utils.escape(name)}', ${T}, ${start.toFixed(4)}, null, 'video')`);
                 const e2 = await getClipsLogic().endCoherent(T, start, end, 'video', label);
                 log(`      ${label} → V${T} @ ${start.toFixed(2)}s→${end.toFixed(2)}s [ins=${ins} · retall=${e2}]`);
@@ -4631,6 +4959,31 @@
             var dash = c.indexOf(' - ');
             if (dash < 0) return c;
             return c.substring(dash + 3).trim();
+        },
+
+        /**
+         * _markerItemId: ID de l'ÍTEM d'un marcador estructural, SENSE trencar els IDs que
+         * porten GUIONET INTERN.
+         *
+         * 🐞 BUG #216 (2026-11-02). El codi feia `String(comment).split("-")[0]`, i un
+         * marcador com «25TE-2 - TE tort DADES CÀMPINGS OBERTS» es quedava en «25TE»:
+         * `structureById["25TE"]` no existia (l'ítem d'escaleta és «25TE-2») i els wotts
+         * de l'ítem NO s'avaluaven mai (ni tan sols eixien al log). El separador bo és
+         * « - » amb espais; si el comentari no el porta es manté el tall antic.
+         *
+         *   · "01i - LEAD PENSIONS"            → "01i"
+         *   · "01 PGi - PG Intro"              → "01 PGi"
+         *   · "25TE-2 - TE tort DADES"         → "25TE-2"
+         *   · "25TE-2-TE tort DADES" (sense espais) → "25TE" (xarxa de seguretat)
+         *
+         * @param {string} comment - comentari sencer del marcador
+         * @returns {string} ID de l'ítem ('' si no n'hi ha)
+         */
+        _markerItemId: function (comment) {
+            var c = String(comment || '');
+            var sep = c.search(/\s+-\s+/);
+            if (sep > 0) return c.substring(0, sep).trim();
+            return String(c.split('-')[0] || '').trim();
         },
 
         /**
@@ -4940,6 +5293,8 @@
 
         placeChyronConductor: async function () {
             if (!(await getUtils().validateActiveSequence())) return;
+            // 🛡️ (2026-10-30) NO-DUPLICAR: es rellegeix el timeline a cada passada.
+            this._invalidatePlacedGuard();
             const cfg = FASTPASS_UI.Config.get();
             const T_CHY = cfg.tracks.video.chyrons;
             const stateStruct = FASTPASS_UI.State.structure;
@@ -5175,6 +5530,17 @@
                 }
                 log(`📐 [Conductor] instant base per als chyrons següents: ${conductTime.toFixed(2)}s`);
 
+                // 🛡️ (2026-10-30) NO-DUPLICAR (regla permanent): si el Conductor ja ocupa eixe
+                // instant del timeline, no es torna a col·locar. El MATEIX conductor en un
+                // altre bloc sí que entra (la identitat és nom + instant).
+                await this._ensurePlacedGuard();
+                if (this._isAlreadyPlaced(conductorFile, conductTime)) {
+                    this._noteDup(1);
+                    log(`   🛡️ [Conductor] "${conductorFile}" ja és al timeline a ${conductTime.toFixed(2)}s → no es torna a col·locar`);
+                    getUtils().status("Conductor ja col·locat", "debug");
+                    return;
+                }
+                this._markPlaced(conductorFile, conductTime, conductTime + 8);
                 // Col·locar conductor
                 const escapedName = getUtils().escape(conductorFile);
                 const insertRes = await callJSX(`Clips.insert('${escapedName}', ${T_CHY}, ${conductTime}, null, 'video')`);
@@ -5235,6 +5601,8 @@
 
         placeChyronTraduccio: async function () {
             if (!(await getUtils().validateActiveSequence())) return;
+            // 🛡️ (2026-10-30) NO-DUPLICAR: es rellegeix el timeline a cada passada.
+            this._invalidatePlacedGuard();
             const cfg = FASTPASS_UI.Config.get();
             const struct = FASTPASS_UI.State.structure;
             const T_TRAD = cfg.tracks.video.lloc || cfg.tracks.video.llocdata || 7;
@@ -5254,9 +5622,10 @@
                 }
                 const markersFull = [];
                 for (const m of structuralMarkers) {
-                    const parts = (m.comments || "").split("-");
-                    if (parts.length > 0) {
-                        const rawId = parts[0].trim();
+                    // 🐞 BUG #216 (2026-11-02): mateix tall erroni que a `_placeChyronsByType`
+                    // (`split("-")` partia «25TE-2» en «25TE»); ara pel separador « - ».
+                    const rawId = this._markerItemId(m.comments);
+                    if (rawId) {
                         const numMatch = rawId.match(/^(\d+)/);
                         if (numMatch) {
                             markersFull.push({ fullId: rawId, blockNum: numMatch[1].padStart(2, "0"), time: m.time });
@@ -5432,6 +5801,210 @@
             } catch (e) { getUtils().handleError(e, "Traducció"); }
         },
 
+        // ═══════════════════════════════════════════════════════════════
+        // 🎯 TÒTEM (TE) → AL MARCADOR GROC DEL SEU TÍTOL (2026-11-02)
+        // ═══════════════════════════════════════════════════════════════
+        // MECÀNICA (petició d'usuari): els wotts amb sufix d'ítem TE (tòtem, p. ex. el
+        // GRAFICA_CIRCULAR de l'ítem 25TE-2) NO van ni a la cadena ni al rastreig de
+        // color: un cop col·locats els wotts genèrics, es busca el MARCADOR GROC el títol
+        // del qual és IGUAL o MOLT SEMBLANT al títol del wott i el wott es col·loca EN
+        // EIXE MARCADOR (pista de grafismes, V3) amb la seua durada pròpia.
+        // Dos casos que NO disparen res: (a) un marcador groc TOT SOL, sense wott TE amb
+        // eixe títol; (b) un wott TE SENSE cap marcador groc de títol semblant (no es
+        // col·loca i s'avisa al log). La semblança és la MATEIXA que fa servir el flux
+        // MAPA per a ancorar un grafisme al marcador del seu ítem (`Mapa._scoreNombre`
+        // amb `Mapa.MATCH_MIN` = 0,60: tolera accents, B/V, SS/S i plurals).
+
+        /**
+         * _isTeItemId: l'ID d'ítem és de la família TÒTEM (TE)?
+         * «25TE», «25TE-2», «12TE3», «07 te» → true · «25», «25P2-1», «25TELEFON» → false.
+         * @param {string} id
+         * @returns {boolean}
+         */
+        _isTeItemId: function (id) {
+            var clean = String(id || '').toLowerCase().replace(/[\s_\-]/g, '');
+            var m = clean.match(/^\d+(.*)$/);
+            return !!m && /^te\d*$/.test(m[1]);
+        },
+
+        /**
+         * _isTeWott: el wott pertany a un ítem TÒTEM (TE)?
+         * L'ítem viatja a `chy.lineaID` (`13_Parse.assign`) i, si no hi és, a la part 4
+         * del nom (`Wott_<PROG>_<vN>_<ID>_<tc>_<TEXT>_<wottId>_<ROL>_…`).
+         * @param {Object} c - chyron {name, rol, lineaID…}
+         * @returns {boolean}
+         */
+        _isTeWott: function (c) {
+            if (!c) return false;
+            var id = String(c.lineaID || (String(c.name || '').split('_')[3] || ''));
+            return this._isTeItemId(id);
+        },
+
+        /**
+         * _teWottTitle: TÍTOL del wott (la part del nom que es compara amb el marcador).
+         * Es fa servir `Logic.Parse.meta`, que és la font única del parseig de noms.
+         * @param {string} name - nom del wott
+         * @returns {string}
+         */
+        _teWottTitle: function (name) {
+            try {
+                var P = FASTPASS_UI.Logic && FASTPASS_UI.Logic.Parse;
+                var meta = (P && P.meta) ? P.meta(String(name || '')) : null;
+                if (meta && meta.nombre) return String(meta.nombre).trim();
+            } catch (e) { }
+            var parts = String(name || '').split('_');
+            return String(parts[5] || '').replace(/_/g, ' ').trim();
+        },
+
+        /**
+         * placeTeWotts: COL·LOCA ELS WOTTS DE TÒTEM (TE) AL MARCADOR GROC DEL SEU TÍTOL.
+         *
+         * S'executa DESPRÉS de la passada genèrica del Resto (`placeChyronResto`), quan els
+         * rètols ja estan col·locats. Per a cada wott d'un ítem TE de l'escaleta:
+         *   1) es puntua el seu TÍTOL contra el títol de cada marcador GROC (`_scoreNombre`);
+         *   2) si el millor ≥ `MATCH_MIN` (0,60) → s'inserix EN EIXE MARCADOR, a la pista
+         *      de grafismes (V3) i amb la durada pròpia del wott (retallada al marcador
+         *      següent: un tòtem no entra mai a l'ítem de darrere);
+         *   3) si no hi ha cap marcador semblant → NO es col·loca i s'avisa al log.
+         *
+         * NO fa rastreig de color ni cadena de targetes: el TC del wott (00.00) no diu res
+         * i la referència és el TÍTOL del marcador.
+         *
+         * @returns {Promise<number>} quants tòtems s'han col·locat
+         */
+        placeTeWotts: async function () {
+            const struct = FASTPASS_UI.State.structure || [];
+            const cand = [];
+            for (const e of struct) {
+                if (!e || !this._isTeItemId(e.id)) continue;
+                for (const c of (e.chyrons || [])) cand.push({ id: String(e.id || ''), chy: c });
+            }
+            if (cand.length === 0) {
+                log("➖ [TE] Cap wott de tòtem (sufix TE) a l'escaleta → res a fer.");
+                return 0;
+            }
+            const cfg = FASTPASS_UI.Config.get();
+            const V_GRAF = parseInt(cfg.tracks.video.graficos, 10) || 3;
+            let allMarkers = [];
+            try {
+                const raw = await callJSX('Markers.get()');
+                allMarkers = raw ? JSON.parse(raw) : [];
+            } catch (eM) {
+                log(`⚠️ [TE] No puc llegir els marcadors: ${eM.message}`, "WARN");
+                return 0;
+            }
+            // ── Marcadors GROCS amb «NN - Títol» ────────────────────────────────
+            // El GROC és el color 4. En esta versió de Premiere `Markers.get()` pot tornar
+            // -1 (color il·legible): s'accepta -1/desconegut, però mai un color CONEGUT que
+            // no siga el groc (mateix criteri que `flow_mapa._grafCandidates`).
+            const amarillos = [];
+            for (const m of allMarkers) {
+                const cmt = String(m.comments || '');
+                if (!isStructuralMarkerComment(cmt)) continue;
+                if (m.color !== 4 && m.color !== -1 && m.color !== undefined && m.color !== null) continue;
+                const t = Number(m.time);
+                if (!isFinite(t)) continue;
+                const titol = this._extractMarkerTitle(cmt);
+                if (!titol) continue;
+                amarillos.push({ time: t, id: this._markerItemId(cmt), titol: titol, comments: cmt });
+            }
+            if (amarillos.length === 0) {
+                log(`➖ [TE] ${cand.length} wott(s) de tòtem, però cap marcador GROC amb «NN - Títol» → no es col·loca res.`);
+                return 0;
+            }
+            log(`🎯 [TE] ${cand.length} wott(s) de tòtem · ${amarillos.length} marcador(s) groc(s): ` +
+                amarillos.map(a => a.id + '@' + a.time.toFixed(1)).join(', '));
+            // ── Semblança de títols (la MATEIXA que el flux MAPA) ───────────────
+            const Mapa = FASTPASS_UI.Workflows && FASTPASS_UI.Workflows.Mapa;
+            const MIN = (Mapa && isFinite(Mapa.MATCH_MIN)) ? Number(Mapa.MATCH_MIN) : 0.60;
+            const score = (a, b) => {
+                if (Mapa && typeof Mapa._scoreNombre === 'function') return Mapa._scoreNombre(a, b);
+                const na = this._normTitol(a), nb = this._normTitol(b);
+                if (!na || !nb) return 0;
+                if (na === nb) return 1;
+                return (na.indexOf(nb) !== -1 || nb.indexOf(na) !== -1) ? 0.8 : 0;
+            };
+            // Marcador SEGÜENT (de qualsevol tipus): el tòtem no ha d'invair l'ítem següent.
+            const times = allMarkers.map(x => Number(x.time)).filter(t => isFinite(t)).sort((a, b) => a - b);
+            const nextAfter = (t) => { for (const x of times) { if (x > t + 0.01) return x; } return null; };
+            this._invalidatePlacedGuard();
+            await this._ensurePlacedGuard();
+            const PL = FASTPASS_UI.Logic.Project;
+            let wottIdx = null;
+            try { wottIdx = await PL.getWottIndex(); } catch (eW) { }
+            const ctx = { busy: {}, placed: {} };
+            const placedRecs = [];
+            const gridNear = (v) => Math.round(Number(v) / REV_FRAME) * REV_FRAME;
+            const gridDown = (v) => Math.floor(Number(v) / REV_FRAME + 1e-6) * REV_FRAME;
+            let ok = 0;
+            for (const it of cand) {
+                const name = String((it.chy && it.chy.name) || '');
+                const shortName = name.substring(0, 40);
+                const title = this._teWottTitle(name);
+                let best = null;
+                for (const am of amarillos) {
+                    const sc = score(title, am.titol);
+                    if (!best || sc > best.score + 1e-9) best = { score: sc, mk: am };
+                }
+                if (!best || best.score < MIN) {
+                    log(`   ⏭️ [TE] «${shortName}…» («${title}»): cap marcador GROC de títol semblant` +
+                        (best ? ` — el millor és «${best.mk.id} - ${best.mk.titol}» ${best.score.toFixed(2)} < ${MIN}` : '') +
+                        ' → NO es col·loca', "WARN");
+                    continue;
+                }
+                const mk = best.mk;
+                if (this._isAlreadyPlaced(name, { lo: mk.time - 0.5, hi: mk.time + 0.5 })) {
+                    this._noteDup(1);
+                    log(`   🛡️ [TE] «${shortName}…» ja és al timeline @ ${mk.time.toFixed(2)}s → no es duplica`);
+                    continue;
+                }
+                // Durada PRÒPIA del wott, retallada al marcador següent. Sense durada
+                // coneguda al bin, 3 s de referència (el clip queda estirable).
+                let durInfo = {};
+                try { durInfo = (PL && PL._resolveWottDur) ? (PL._resolveWottDur(wottIdx, it.chy) || {}) : {}; } catch (eD) { }
+                const durOwn = (durInfo && durInfo.dur > 0) ? Number(durInfo.dur) : null;
+                const lim = nextAfter(mk.time);
+                let wantDur = (durOwn !== null) ? durOwn : 3.0;
+                if (lim !== null) wantDur = Math.min(wantDur, Math.max(0.5, lim - mk.time));
+                const slot = await this._chooseSlot([V_GRAF], mk.time, wantDur, ctx, lim);
+                if (!slot || !slot.track) {
+                    log(`   ⚠️ [TE] Sense pista per a «${shortName}…»`, "WARN");
+                    continue;
+                }
+                const start = gridNear(slot.start);
+                let end = start + wantDur;
+                if (lim !== null && end > lim) end = gridDown(lim);
+                if (!(end > start)) continue;
+                this._markPlaced(name, start, end);
+                await callJSX(`Clips.insert('${getUtils().escape(getUtils().jsxName(name))}', ${slot.track}, ${start.toFixed(4)}, null, 'video')`);
+                try {
+                    const rEnd = await getClipsLogic().endCoherent(slot.track, start, end, 'video', 'TE');
+                    if (String(rEnd).indexOf('OK') === -1) {
+                        log(`   ⚠️ [TE] retall V${slot.track} @ ${start.toFixed(2)}s → ${rEnd}`, "WARN");
+                    }
+                } catch (eE) {
+                    log(`   ⚠️ [TE] no s'ha pogut fixar el final del clip: ${eE.message}`, "WARN");
+                }
+                this._addPlaced(ctx, slot.track, start, end);
+                placedRecs.push({
+                    num: String(it.id || mk.id || ''), name: name, track: slot.track,
+                    startSec: start, endSec: end, tipus: 'GRF'
+                });
+                log(`   ✅ [TE] «${shortName}…» ≈ «${mk.id} - ${mk.titol}» (${best.score.toFixed(2)}) → V${slot.track} @ ${start.toFixed(2)}s → ${end.toFixed(2)}s` +
+                    (slot.moved ? ` ⟵ desplaçat per no trepitjar (ideal ${mk.time.toFixed(2)}s)` : '') +
+                    (durOwn === null ? ' (sense durada al bin: 3,0s de referència)' : ''));
+                ok++;
+            }
+            if (ok === 0) {
+                log("⚠️ [TE] Cap wott de tòtem col·locat.", "WARN");
+            } else {
+                log(`🎬 [TE] ${ok} tòtem(s) col·locat(s) al marcador groc del seu títol.`, "INFO");
+                getUtils().status(`Tòtem: ${ok}`, "exito");
+                await this._recordPlacedChyrons(placedRecs, 'TE');
+            }
+            return ok;
+        },
+
         placeChyronResto: async function () {
             // OJO: "TITOLET" conté "TITOL": si es filtra per includes("TITOL") els
             // TITOLET queden exclosos del Resto i no es col·loquen enlloc.
@@ -5448,8 +6021,13 @@
             // (2026-10-16) `_isTraduccioWott` és ACCENT-SAFE: el filtre antic
             // (`.includes("TRADUCCIO")`) no veia «_TRADUCCIÓ» amb accent.
             const isTraduccio = c => this._isTraduccioWott(c);
+            // (2026-11-02) TÒTEM (TE): els wotts dels ítems TE NO passen pel bucle genèric
+            // ni per la cadena de grafisme cremat (`GRAFICA_CIRCULAR` és a
+            // `titolet.detectRoles`: acabarien amb rastreig de color). Els col·loca la
+            // passada pròpia `placeTeWotts` DESPRÉS, al marcador groc del seu títol.
+            const isTe = c => this._isTeWott(c);
             await this._placeChyronsByType(
-                c => !isTitol(c) && !isConductor(c) && !isLloc(c) && !isNom(c) && !isTraduccio(c),
+                c => !isTitol(c) && !isConductor(c) && !isLloc(c) && !isNom(c) && !isTraduccio(c) && !isTe(c),
                 (c, cfg) => {
                     const rName = (c.name || '').toUpperCase();
                     const rRol = (c.rol || '').toUpperCase();
@@ -5483,6 +6061,16 @@
                 undefined,
                 { dedupeTitolet: true, chainTitolet: true }
             );
+            // ── TÒTEM (TE) → AL MARCADOR GROC DEL SEU TÍTOL (2026-11-02) ─────────────
+            // Sempre DESPRÉS dels wotts genèrics (petició d'usuari): primer es col·loca tot
+            // el que és text i, quan el timeline ja els té, els wotts TE (tòtem) van al
+            // marcador GROC que coincidix amb el seu TÍTOL (pista V3). Un marcador groc tot
+            // sol no dispara res i un wott TE sense marcador semblant no es col·loca.
+            try {
+                await this.placeTeWotts();
+            } catch (eTe) {
+                log(`⚠️ [TE] la passada de tòtems ha llançat: ${eTe.message}`, "WARN");
+            }
         },
 
         /**
@@ -5627,6 +6215,10 @@
                     if (String(r).indexOf('OK') === 0) removed++;
                 }
                 log(`   🧹 [Repartir] ${removed}/${selectedV3.length} traducció(ns) seleccionades retirades de V${T_TRAD} (la resta de la pista NO es toca)`);
+                // 🛡️ (2026-10-30) NO-DUPLICAR: el timeline HA CANVIAT (s'han retirat clips) →
+                // es torna a llegir abans de recol·locar-les (force), o la guarda les veuria
+                // «ja hi eren» i es quedarien fora del timeline.
+                this._invalidatePlacedGuard(true);
 
                 // Instantània dels clips NO seleccionats de V7: serveix per REPARAR qualsevol
                 // clip que un insert hagi retallat, desplaçat o esborrat. Com que les

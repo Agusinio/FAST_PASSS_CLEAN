@@ -119,6 +119,10 @@ $files = @(
 # (2026-10-29 - TWITTS) Tuites cremats: pistes @handle/titular, filtre per data,
 # cache de la tria manual i col·locacio cobrint el clip de V1.
 (Resolve-Harness 'fp_probe_twitts.js'),
+    # (2026-11-02 - BUG #216 + TOTEM TE) Wotts TE (totem) -> marcador GROC del seu
+    # titol a V3 (ni cadena ni rastreig) + ID de marcador amb guionet intern
+    # («25TE-2 - ...» no es pot partir en «25TE»).
+    (Resolve-Harness 'fp_probe_te_totem.js'),
     (Resolve-Harness 'fp_smoke_runner.js')
 )
 
