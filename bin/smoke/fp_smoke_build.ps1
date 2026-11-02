@@ -123,6 +123,16 @@ $files = @(
     # titol a V3 (ni cadena ni rastreig) + ID de marcador amb guionet intern
     # («25TE-2 - ...» no es pot partir en «25TE»).
     (Resolve-Harness 'fp_probe_te_totem.js'),
+    # (2026-11-02 - BUG #220) DATA DE SESSIO: el ctx dels escriptors del manifest
+    # (marcadors, grafics, retols), la portada, les rutes d'exportacio i OBRIR/GO
+    # s'ancora al .prproj obert en lloc de la data d'AVUI de checkContext (que
+    # creava un directori del dia amb un .fastpass.json fantastic dins).
+    (Resolve-Harness 'fp_probe_datedir.js'),
+    # (2026-11-02 - BUG #221) INGESTA DE WOTTS: la finestra modal «Import Files»
+    # de Premiere es queda quieta i nomes s'hi pot dir que cal «Cancel·lar» (avis
+    # proactive + watchdog de 20 s); si el motor torna a contestar i els retols
+    # ja han entrat, el flux continua en lloc d'avortar.
+    (Resolve-Harness 'fp_probe_ingest.js'),
     (Resolve-Harness 'fp_smoke_runner.js')
 )
 

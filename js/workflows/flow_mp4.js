@@ -132,7 +132,9 @@
             if (!(await getUtils().validateActiveSequence())) return;
             log("📍 [INOUT Crudo] Capturant WorkArea del timeline...");
             try {
-                const ctx = await FASTPASS_UI.Workflows.MainButton._setupContext();
+                // (2026-11-02 · BUG #220) Context de SESSIÓ (data del projecte obert):
+                // la fase 'crudo' viu al manifest del PROJECTE, no al d'HOY.
+                const ctx = await FASTPASS_UI.Workflows.MainButton._sessionCtx();
                 // 🛡️ (2026-10-14) `Timeline.getWorkAreaIn/Out()` NO EXISTEIXEN al bridge: les
                 // crides tornaven "[]" → parseFloat = NaN i la fase 'crudo' quedava amb NaN
                 // (i el Cocinado hi tornava a ensopegar). Es llegeix el IN/OUT real.
@@ -160,7 +162,9 @@
             if (!(await getUtils().validateActiveSequence())) return;
             log("📍 [MARKS Crudos] Col·locant marcadors en posició ideal...");
             try {
-                const ctx = await FASTPASS_UI.Workflows.MainButton._setupContext();
+                // (2026-11-02 · BUG #220) Context de SESSIÓ: l'escaleta i el manifest
+                // que es llegeixen ací són els del PROJECTE OBERT.
+                const ctx = await FASTPASS_UI.Workflows.MainButton._sessionCtx();
                 const reader = window.EscaletaReader || window.FASTPASS_UI.EscaletaReader;
                 if (!reader) { log("⚠️ EscaletaReader no disponible."); return; }
 

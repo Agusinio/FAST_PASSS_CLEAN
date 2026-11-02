@@ -256,6 +256,45 @@
     FASTPASS_UI.Workflows.Render = {
 
         /**
+         * (2026-11-02 · BUG #220) Data de treball ANCORADA al projecte obert.
+         * `_rutaExport` és SÍNCRONA (la criden `runVideo`, `_publishVideo` i
+         * `runPortada`), així que la data es resol UNA vegada a l'inici del flux
+         * i es desa ací: si no, amb un projecte d'AHIR obert, `State.dateDir`
+         * (HOY) datava malament les rutes d'exportació i la cerca de portades.
+         * @type {string} 'YYYY_MM_DD' ('' = no resolta → es mira `State.dateDir`)
+         */
+        _dateDirSessio: '',
+
+        /**
+         * _anclaDataSessio: resol i memoritza la data del PROJECTE OBERT
+         * (`MainButton._sessionDateDir()`, BUG #220). Si no es pot resoldre, es
+         * queda `State.dateDir` (HOY o el dia del projecte en mode correcció).
+         * @returns {Promise<string>} 'YYYY_MM_DD'
+         */
+        _anclaDataSessio: async function () {
+            try {
+                const MB = FASTPASS_UI.Workflows && FASTPASS_UI.Workflows.MainButton;
+                if (MB && typeof MB._sessionDateDir === 'function') {
+                    const d = await MB._sessionDateDir();
+                    if (d) {
+                        if (this._dateDirSessio !== d) {
+                            log('🗓️ [Render] Data de treball = ' + d + ' (projecte obert)');
+                        }
+                        this._dateDirSessio = d;
+                        return d;
+                    }
+                }
+            } catch (e) {
+                log('⚠️ [Render] No puc resoldre la data del projecte obert: ' + e.message, 'WARN');
+            }
+            const st = window.FASTPASS_UI.State || {};
+            // Sense projecte resoluble mana la data de checkContext (HOY/AHIR); la
+            // memoritzada només val si l'estat encara no en té cap.
+            this._dateDirSessio = st.dateDir || this._dateDirSessio || '';
+            return this._dateDirSessio;
+        },
+
+        /**
          * _rutaExport: resol una ruta d'EXPORTACIÓ (render1 / render2 / portadas) amb
          * els {tokens} del bloc actual (Config.resolvePath → Logic.Rutas).
          * (2026-10-23) Les tres rutes d'exportació accepten `{project}` (el nom del
@@ -278,7 +317,7 @@
                     autor: all.autor,
                     progData: progData || {},
                     bloque: bloque,
-                    dateDir: st.dateDir || '',
+                    dateDir: this._dateDirSessio || st.dateDir || '',
                     tema: st.detectedTheme || st.masterTheme || '',
                     base: (all.rutas && all.rutas.destino_base) || ''
                 });
@@ -298,6 +337,9 @@
          */
         runVideo: async function () {
             if (!(await getUtils().validateActiveSequence())) return;
+            // (2026-11-02 · BUG #220) La data de les rutes d'exportació ha de ser la
+            // del PROJECTE OBERT, no la de checkContext → `_rutaExport` la llig d'ací.
+            await this._anclaDataSessio();
             log("🚀 Preparant enviament a AME...");
             const config = FASTPASS_UI.Config.get();
 
@@ -818,6 +860,9 @@
         _runPortadaBody: async function () {
             if (!(await getUtils().validateActiveSequence())) return;
             log("📸 [Portada] Inici (còpia a zona neta + captura de frame)...");
+            // (2026-11-02 · BUG #220) Data del PROJECTE OBERT per a la cerca de
+            // portades (`Scan.portades`) i per a les rutes d'exportació.
+            await this._anclaDataSessio();
 
             const utils = getUtils();
             const T_V1 = 1;
@@ -953,7 +998,7 @@
                 // ── 2. PORTADA: la PRIMERA del tema ──────────────────────────────
                 // La data de treball es passa explícitament perquè Scan.portades
                 // filtri els PNG per la data del projecte actual (no només mtime).
-                const stateDateDir = state.dateDir || utils.getFormattedDate().replace(/["\s]/g, "").trim();
+                const stateDateDir = this._dateDirSessio || state.dateDir || utils.getFormattedDate().replace(/["\s]/g, "").trim();
                 const ctx = { config, progData: state.progData, bloque: state.bloque, dateDir: stateDateDir };
                 // (2026-10-16 · BUG #172) LECTURES INDEPENDENTS EN PARAL·LEL: la portada
                 // (BIN PORTADES o, si el projecte no en té, el NAS), la foto de les pistes de

@@ -44,19 +44,19 @@ git merge fix/047-descripcio-del-bug
 ### 4. ⚠️ Git en esta màquina (27/10/2026)
 
 - **`git` NO està al `PATH`.** L'executable és el portable:
-  `%LOCALAPPDATA%\PortableGit\cmd\git.exe` (instal·lat el 27/10 per poder fer commit/push).
+  `E:\PortableGit\cmd\git.exe` (git 2.49 · abans vivia a `%LOCALAPPDATA%\PortableGit`, ara a `E:`).
 - El repo viu a `…\Adobe\CEP\extensions\FAST_PASSS` i **no** és del mateix usuari que executa
   l'agent → cal passar-hi `-c safe.directory=*` (si no: `dubious ownership`).
 - **Credential helper = `wincred`** (la credencial `git:https://Agusinio@github.com` ja està al
   Administrador de credencials de Windows). El `CredentialHelperSelector` de PortableGit s'obri si
   el system config diu `helper = helper-selector` → ja corregit a
-  `%LOCALAPPDATA%\PortableGit\etc\gitconfig`.
+  `E:\PortableGit\etc\gitconfig`.
 - El repo té **proxy** a `.git/config` (`http://172.20.0.152:8088`); si el push es penja, eixe és el
   primer sospitós (provar `-c http.proxy=`).
 - Ordre tipus (1 línia, sense pager):
 
 ```powershell
-$git="$env:LOCALAPPDATA\PortableGit\cmd\git.exe"; $env:GIT_PAGER='cat'; $env:GIT_TERMINAL_PROMPT='0'
+$git='E:\PortableGit\cmd\git.exe'; $env:GIT_PAGER='cat'; $env:GIT_TERMINAL_PROMPT='0'
 & $git -c safe.directory=* add -A
 & $git -c safe.directory=* -c i18n.commitEncoding=UTF-8 commit -F <missatge.txt>
 & $git -c safe.directory=* -c credential.helper= -c credential.helper=wincred push origin main

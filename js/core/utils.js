@@ -792,6 +792,24 @@
         },
 
         /**
+         * _engineAlive: sonda CURTA del motor ExtendScript (`FASTPASS.version()`, no
+         * toca el projecte ni el timeline). Servix per a distinguir «Premiere està
+         * bloquejat dins d'una altra crida» de «la crida ha fallat» sense esperar el
+         * temps límit llarg (180 s) una segona volta.
+         * @param {number} [timeoutMs=8000]
+         * @returns {Promise<boolean>} true = el motor contesta
+         */
+        _engineAlive: async function(timeoutMs) {
+            const t = (Number(timeoutMs) > 0) ? Number(timeoutMs) : 8000;
+            let r = '';
+            try {
+                r = String(await this.callJSX('FASTPASS.version()', { timeoutMs: t }) || '');
+            } catch (e) { return false; }
+            if (!r || r === '__TIMEOUT__') return false;
+            return (r.indexOf('ERR') !== 0);
+        },
+
+        /**
          * Ingesta de fitxers a Premiere Pro, EN BLOCS i amb reintent.
          *
          * (2026-11-02 · BUG #215) PER QUÈ EN BLOCS: `FASTPASS.IO.importFiles` fa un
@@ -801,19 +819,32 @@
          * l'usuari el va cancel·lar i el flux va continuar com si s'haguera
          * importat → **projecte creat sense cap rètol**, en silenci.
          * Amb blocs: (a) cada crida és curta, (b) si un bloc no contesta se sap
-         * QUINS fitxers han sigut, (c) es reintenta automàticament (el reintent és
-         * el que sempre ha funcionat a mà) i (d) es retorna un resum perquè el
-         * cridador puga verificar-ho abans de construir el projecte.
+         * QUINS fitxers han sigut, (c) es reintenta automàticament QUAN el bloc ha
+         * contestat amb error (el reintent és el que sempre ha funcionat a mà) i
+         * (d) es retorna un resum perquè el cridador puga verificar-ho abans de
+         * construir el projecte.
+         *
+         * (2026-11-02 · BUG #217) Un `__TIMEOUT__` NO es reintenta: el motor seguix
+         * dins de la crida anterior, així que reenviar el bloc n'encua una segona i,
+         * quan Premiere es desbloqueja, importa els mateixos fitxers dos pics.
+         *
+         * (2026-11-02 · BUG #221) Mentres un bloc espera, un watchdog de 20 s escriu
+         * al log i a la barra d'estat què cal fer si la finestra «Import Files» de
+         * Premiere es queda quieta: **prem Cancel·lar** (el que ja ha entrat es
+         * conserva). El fil del panell seguix viu encara que el motor estiga bloquejat
+         * dins d'`importFiles`, així que l'avís sí que arriba.
          *
          * @param {Array} pathList - Llista de rutes (UNC o locals) o objectes { path }.
          * @param {string} binName - Nom del Bin de destí (o "root").
          * @param {Object} [opts] - { chunkSize = 5, timeoutMs = 180000 }
-         * @returns {Promise<{ok:boolean, sent:number, chunks:number, failed:number, timeout:boolean}>}
+         * @returns {Promise<{ok:boolean, sent:number, chunks:number, failed:number, timeout:boolean, blocked:boolean}>}
          *   `timeout:true` = Premiere ha deixat de contestar; les rutes que queden NO
          *   s'han intentat (el cridador ha d'avortar, no de reintentar-ho tot).
+         *   `blocked:true` = la sonda curta (`FASTPASS.version()`, 8 s) tampoc no ha
+         *   contestat → el motor està dins d'una altra crida (diàleg modal obert).
          */
         importList: async function(pathList, binName, opts) {
-            const out = { ok: true, sent: 0, chunks: 0, failed: 0, timeout: false };
+            const out = { ok: true, sent: 0, chunks: 0, failed: 0, timeout: false, blocked: false };
             if (!pathList || !pathList.length) return out;
 
             // Extraemos solo el path si es un objeto
@@ -825,15 +856,62 @@
             const total = Math.ceil(rawPaths.length / chunkSize);
             let n = 0;
 
+            // ── (2026-11-02 · BUG #221) AVÍS PROACTIU DE LA FINESTRA MODAL ────────
+            // Premiere obri la finestra de progrés «Import Files» mentre importa
+            // (el `suppressUI` de `importFiles` NO la lleva) i, amb rètols ProRes
+            // per xarxa, sovint NO es tanca sola quan ja ha acabat. Mentre està
+            // oberta el motor ExtendScript està bloquejat (`importFiles` és
+            // síncron): ni logs, ni sonda, ni cap altra crida. El fil del panell,
+            // en canvi, seguix viu, així que es pot dir QUÈ fer ABANS que el bloc
+            // caduque (abans l'usuari havia d'endevinar que calia «Cancel·lar»).
+            const self = this;
+            const _avisModal = 'si la finestra «Import Files» de Premiere es queda quieta, ' +
+                'prem Cancel·lar: no es perd res del que ja ha entrat al projecte';
+            this.log(`📥 [INGEST] ${rawPaths.length} fitxer(s) → ${binName} en ${total} bloc(s) de ${chunkSize} · ` +
+                _avisModal, 'INFO');
+            this.status(`📥 INGEST: carregant ${rawPaths.length} fitxer(s) a Premiere… ` +
+                '(«Import Files» quieta → Cancel·lar)', 'debug');
+
             try {
                 for (let i = 0; i < rawPaths.length; i += chunkSize) {
                     const chunk = rawPaths.slice(i, i + chunkSize);
                     n++;
                     out.chunks++;
-                    this.log(`📥 [INGEST] Bloc ${n}/${total} (${chunk.length} fitxer(s)) → ${binName}`, 'DEBUG');
+                    const _bloc = n;
+                    this.log(`📥 [INGEST] Bloc ${_bloc}/${total} (${chunk.length} fitxer(s)) → ${binName}`, 'DEBUG');
 
-                    let res = await this._importChunk(chunk, binName, timeoutMs);
-                    if (res !== "OK") {
+                    // Vigilància de la finestra modal (BUG #221): cada 20 s, un avís
+                    // amb els segons que porta el bloc. El fil del panell seguix viu
+                    // encara que el motor estiga bloquejat dins d'`importFiles`.
+                    const _tBloc = Date.now();
+                    let _wd = null;
+                    if (typeof setInterval === 'function') {
+                        _wd = setInterval(function () {
+                            const s = Math.round((Date.now() - _tBloc) / 1000);
+                            self.log(`⏳ [INGEST] bloc ${_bloc}/${total} sense resposta des de fa ${s} s · ` +
+                                _avisModal, 'WARN');
+                            self.status(`⏳ INGEST: esperant Premiere (${s} s)… ` +
+                                'si «Import Files» no avança, prem Cancel·lar', 'warn');
+                        }, 20000);
+                    }
+                    let res;
+                    try {
+                        res = await this._importChunk(chunk, binName, timeoutMs);
+                    } finally {
+                        if (_wd) clearInterval(_wd);
+                    }
+                    if (res === "OK") {
+                        this.status(`📥 INGEST: bloc ${_bloc}/${total} importat (${out.sent + chunk.length} fitxer(s))`, 'debug');
+                    }
+                    // ⛔ (2026-11-02 · BUG #217) UN `__TIMEOUT__` NO ES REINTENTA.
+                    // El motor ExtendScript continua DINS de la crida anterior (no ha
+                    // tornat mai), així que reenviar el bloc només encua una SEGONA
+                    // `importFiles` damunt del mateix motor bloquejat: es paga el temps
+                    // límit dos voltes i, quan Premiere es desbloqueja, els mateixos
+                    // fitxers entren dos pics. Cas real (TNV V2, 02/11 13:44): bloc de
+                    // 5 wotts → 180 s + reintent → altres 180 s, i tres crides mortes
+                    // a la cua (importFiles ×2 + scanDirectory).
+                    if (res !== "OK" && res !== "__TIMEOUT__") {
                         // Reintent (una vegada): és el que s'ha fet sempre a mà.
                         this.log(`⚠️ [INGEST] Bloc ${n}/${total} no ha importat (${res}) → reintent en 1,5 s…`, 'WARN');
                         await this.delay(1500);
@@ -850,8 +928,18 @@
                         // també esperarien el temps límit (n × timeout). S'atura ací.
                         if (res === '__TIMEOUT__') {
                             out.timeout = true;
+                            // Sonda CURTA (8 s): distinguix «motor bloquejat» de «ha
+                            // tornat però la importació no ha contestat».
+                            out.blocked = !(await this._engineAlive(8000));
+                            this.log(out.blocked
+                                ? '⛔ [INGEST] El motor de Premiere està BLOQUEJAT: no contesta ni la sonda. ' +
+                                  'Si hi ha un diàleg obert («Import Files»), tanca\'l o cancel·la\'l.'
+                                : '⚠️ [INGEST] El motor ha tornat a contestar (sonda OK) però la importació ' +
+                                  'del bloc no ha respost: bloc massa gran o diàleg tancat massa tard.',
+                                out.blocked ? 'ERROR' : 'WARN');
                             this.log(`⛔ [INGEST] S'atura la resta (${total - n} bloc(s) pendent(s)): ` +
-                                'el motor de Premiere no respon.', 'ERROR');
+                                (out.blocked ? 'no es reintenta sobre un motor bloquejat.'
+                                             : 'el bloc no ha contestat dins del temps límit.'), out.blocked ? 'ERROR' : 'WARN');
                             break;
                         }
                     }
@@ -860,6 +948,12 @@
                 out.ok = false;
                 this.log(`🔴 Error Ingesta: ${e.message}`, "ERROR");
             }
+            // (2026-11-02 · BUG #221) Resum a la barra d'estat: si el bloc s'ha
+            // desbloquejat cancel·lant la finestra, es veu de seguida què ha entrat.
+            this.status(out.timeout
+                ? `⏳ INGEST: aturada per falta de resposta (${out.sent}/${rawPaths.length} fitxer(s) enviats)`
+                : `📥 INGEST: ${out.sent}/${rawPaths.length} fitxer(s) importat(s) a Premiere`,
+                out.timeout ? 'warn' : (out.ok ? 'debug' : 'error'));
             return out;
         },
 

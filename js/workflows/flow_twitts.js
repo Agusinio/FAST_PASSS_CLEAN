@@ -798,6 +798,14 @@
                 return this._scanTimeline(lliures, cands, paths, a);
             }
             var grisos = [], senseRuta = 0;
+            // ⏳ (2026-11-02 · #219) TESTIMONI DEL RASTREIG: `GrafZonaGris.detect` és UNA
+            // crida de ffmpeg per clip i pot dur desenes de segons; el detall de cada clip
+            // va a nivell DEBUG, així que a ull d'usuari el panell semblava penjat. Es diu
+            // QUÈ s'està fent i quants clips falten, i el rellotge d'arena del 🎯
+            // (`markBtnBusy`, js/main.js) seguix girant mentres dura.
+            log('⏳ [XARXES] rastreig de gris amb ffmpeg: ' + lliures.length + ' clip(s) de V' +
+                trackV1() + ' → 1 mesura per clip (pot tardar; no cal tocar res)', 'INFO');
+            status('XARXES: rastrejant el gris (' + lliures.length + ' clip(s))…', 'warn');
             for (var i = 0; i < lliures.length; i++) {
                 var cl = lliures[i];
                 var ruta = T.pathOf(paths, cl.name);

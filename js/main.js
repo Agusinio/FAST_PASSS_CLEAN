@@ -1043,12 +1043,27 @@ if (btnMarksC1) btnMarksC1.addEventListener('click', () => callWorkflow('Markers
         // el grafisme i col·locar-lo damunt d'eixe clip. Un clic normal continua
         // fent el de sempre: col·locar TOTS els chyrons (i, al final, la passada
         // automàtica dels grafismes OCR: `runAuto`).
-        if (btnChyronColocar) btnChyronColocar.addEventListener('click', (e) => {
+        // ⏳ (2026-11-02 · #219) RELLOTGE D'ARENA A LA DIANA 🎯: `runPlaceAllChyrons` NO
+        // passa per `callWorkflow` (és ella qui crida una fase darrere l'altra), així que
+        // el clic normal no rebia CAP senyal d'espera. I la part final de la passada
+        // (`Twitts.runAuto` → `_rastreigBloc`) rastreja la placa grisa CLIP A CLIP amb
+        // ffmpeg: són desenes de segons en què el panell no diu res (el detall per clip
+        // va a nivell DEBUG) i l'usuari no sabia si el flux seguia viu. El botó queda amb
+        // el rellotge d'arena (l'etiqueta pròpia s'amaga pel CSS `.btn-busy`) fins que el
+        // flux acaba del tot; el `finally` l'allibera també si una fase llança.
+        // El Ctrl+clic (rastreig de gris manual, `Twitts.runGris`) ja el rebia perquè
+        // crida `callWorkflow` → `markBtnBusy`; ací es fa igual per als dos camins.
+        if (btnChyronColocar) btnChyronColocar.addEventListener('click', async (e) => {
             if (e && (e.ctrlKey || e.metaKey)) {
                 callWorkflow('Twitts', 'runGris');
                 return;
             }
-            runPlaceAllChyrons();
+            markBtnBusy(btnChyronColocar);
+            try {
+                await runPlaceAllChyrons();
+            } finally {
+                clearBtnBusy(btnChyronColocar);
+            }
         });
 
         // --- BOTONS GRÀFICS (IPD, IPD+, Doble Pantalla, MAPA, TOTEM, GRÀFICA/MAPA-GRAF) ---

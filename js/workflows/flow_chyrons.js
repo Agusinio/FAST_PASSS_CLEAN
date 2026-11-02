@@ -30,11 +30,31 @@
     // entrava aquests 15 frames TARD → s'avancen amb aquest offset.
     const CONDUCTOR_TAIL = 15 * REV_FRAME;   // 0,60 s
 
+    // ✂️ (2026-11-02 · BUG #218) CUA DE SEGURETAT DE TOTS ELS WOTTS: el mèdia dels wotts
+    // arriba ~8 FRAMES més llarg que la imatge real (l'últim tros del movie és NEGRE) i,
+    // com que l'`outPoint` del project item és INCLUSIU (Premiere hi afig el frame del
+    // outPoint), un clip que acabe al final del mèdia ensenya eixe negre al timeline.
+    // Petició de l'usuari (02/11): de les dos solucions possibles, la MÉS SIMPLE —
+    // «reduir per defecte tots els wotts 20 frames per a assegurar que no es cole cap
+    // negre». 20 frames (0,80 s a 25 fps) cobrixen amb marge els 8 frames mesurats.
+    // ÀMBIT: només els wotts (rètols i grafismes de `_placeChyronsByType` + tòtems de
+    // `placeTeWotts`, via `_wottTailEnd`). Els clips de duració FIXA (Conductor,
+    // Tema-Títol, congelats, PNG de fons) NO es toquen, i la TRADUCCIÓ i els TUITS
+    // tenen regla pròpia (mesuren el mèdia real o fan congelat de la cua).
+    const WOTT_TAIL_FRAMES = 20;
+
     // (2026-10-16 · BUG #170) CAS del bloc (intro LLARGA vs intro CURTA): constants compartides
     // per `placeChyronConductor` i `_blockStartTime` (abans eren literals duplicats dins de
     // `placeChyronConductor`) i pel planificador del cas forçat (`_casForceTimes`).
     const CAS_MARGEN_INICIO = 0.40;     // 0:10 · marge d'inici del bloc (el conductor obre el bloc)
     const CAS_DUR_TEMA_TITOL = 6.24;    // 6:06 · durada de la part VIVA del Tema-Títol gran
+
+    // 🖼️ (2026-11-02) FONS dels WOTTS GRÀFICS (família TE / tòtem). Petició de l'usuari:
+    // el wott gràfic va a V4 i, JUST DAVALL (V3), un PNG de fons del MATEIX projecte que
+    // cobrix exactament el mateix rang. El nom és el de l'ITEM del projecte (el busca
+    // `Clips.insert` → `Project.find`, que recorre l'arbre i els bins: pot viure a qualsevol
+    // bin). Si no hi és, el wott es col·loca igualment i el log ho diu ben clar.
+    const TE_FONS_PNG = '3CatInfo_VERTICALITZACIO_Fons-per-videos.png';
 
     // (2026-10-16 · BUG #170) ESTAT del cas de la intro (botó 🔀 de la fila CHY):
     //   'A' = intro LLARGA (l'inici del bloc l'obre el Tema-Títol; el Conductor va després)
@@ -252,6 +272,26 @@
 
         /** _noteDup: compta quants rètols s'han omés per ja ser al timeline. */
         _noteDup: function (n) { this._dupSkipped += (n || 1); },
+
+        /**
+         * _wottTailEnd: FINAL del wott amb la CUA DE SEGURETAT descomptada.
+         * (2026-11-02 · BUG #218) El mèdia dels wotts és ~8 frames més llarg que la
+         * imatge real (l'últim tros és negre) i l'`outPoint` del source és INCLUSIU
+         * → si el clip acaba just al final del mèdia, eixe negre es veu al timeline.
+         * Es descompten sempre `WOTT_TAIL_FRAMES` frames, arredonits CAP AVALL a la
+         * graella de 25 fps (Premiere arredonix cap amunt) i mai per davall d'1 frame
+         * de clip, perquè un clip de 0 frames no existix.
+         * @param {number} startSec - inici del clip al timeline
+         * @param {number} endSec - final volgut (durada del mèdia o límit de l'ítem)
+         * @returns {number} final retallat (o `endSec` si no es pot calcular)
+         */
+        _wottTailEnd: function (startSec, endSec) {
+            const st = Number(startSec);
+            const en = Number(endSec);
+            if (!isFinite(st) || !isFinite(en)) return endSec;
+            const cut = Math.floor((en - WOTT_TAIL_FRAMES * REV_FRAME) / REV_FRAME + 1e-6) * REV_FRAME;
+            return Math.max(st + REV_FRAME, cut);
+        },
 
         /**
          * _insertIfMissing: INSERT amb la guarda NO-DUPLICAR (nom + instant).
@@ -1356,8 +1396,9 @@
          * FANTASMA i el de debò quedava sense `chyrons.placed`.
          *
          * Ordre de resolució:
-         *   1) `MainButton._setupContext()` → { config, progData, programa, bloque, dateDir }
-         *      (el MATEIX ctx que la resta d'escriptors del manifest).
+         *   1) `MainButton._sessionCtx()` → { config, progData, programa, bloque, dateDir }
+         *      amb la DATA del PROJECTE OBERT (BUG #220); si el mòdul encara no el té,
+         *      `MainButton._setupContext()` (el MATEIX ctx que la resta d'escriptors).
          *   2) `_wfCtx()` (State) amb la data completada des de
          *      `Core.Context._targetDateDir()` (data del projecte obert / HOY-AHIR) mentre
          *      el panell no estigui llest.
@@ -1366,8 +1407,13 @@
         _manifestCtx: async function () {
             try {
                 const MB = FASTPASS_UI.Workflows && FASTPASS_UI.Workflows.MainButton;
-                if (MB && typeof MB._setupContext === 'function') {
-                    const ctx = await MB._setupContext();
+                // (2026-11-02 · BUG #220) `_sessionCtx()` ancla la data al .prproj obert:
+                // amb `_setupContext()` (HOY) els rètols d'un projecte d'AHIR acabaven
+                // en un `.fastpass.json` del dia d'avui.
+                const fCtx = (MB && typeof MB._sessionCtx === 'function') ? MB._sessionCtx
+                    : ((MB && typeof MB._setupContext === 'function') ? MB._setupContext : null);
+                if (fCtx) {
+                    const ctx = await fCtx.call(MB);
                     if (ctx && ctx.progData && ctx.progData.wott && ctx.bloque && ctx.dateDir) return ctx;
                 }
             } catch (eSC) { /* panell no llest → State */ }
@@ -3481,16 +3527,18 @@
                         this._markPlaced(chy.name, slot.start, placeEnd);
                         await callJSX(`Clips.insert('${escapedName}', ${slot.track}, ${slot.start.toFixed(4)}, null, 'video')`);
 
-                        // ── (2026-10-22 · #182c) WOTT SENCER = 1 FRAME MENYS ──────────
+                        // ── (2026-10-22 · #182c · ampliat 2026-11-02 #218) WOTT SENCER = CUA FORA ─
                         // Queixa de l'usuari: «quan es col·loca el clip SENCER (no l'acurta
-                        // cap pla de V1) ix 1 frame més llarg que el mèdia real». La causa
-                        // no és l'estimació de la durada sinó l'INSERT: el rang in/out del
-                        // project item és INCLUSIU i Premiere hi afig el frame del outPoint
+                        // cap pla de V1) ix més llarg que el mèdia real». La causa no és
+                        // l'estimació de la durada sinó l'INSERT: el rang in/out del project
+                        // item és INCLUSIU i Premiere hi afig el frame del outPoint
                         // → el clip del timeline queda `end − start = out − in + 1 frame`.
-                        // Per això ací NO es fa servir `durInfo.dur` (estimada per mida, i
-                        // pot errar 2-3 frames): es LLIG el clip que ha deixat Premiere i es
-                        // fixa el final 1 FRAME abans, a la graella. Es VERIFICA amb el clip
-                        // real i, si `endCoherent` encara hi torna a afegir el frame
+                        // A més (BUG #218, 02/11) el mèdia dels wotts és ~8 frames més llarg
+                        // que la imatge REAL: els últims frames són NEGRE. Per això ací NO es
+                        // fa servir `durInfo.dur` (estimada per mida, i pot errar 2-3 frames):
+                        // es LLIG el clip que ha deixat Premiere i es fixa el final
+                        // `WOTT_TAIL_FRAMES` frames (20) abans, a la graella. Es VERIFICA amb
+                        // el clip real i, si `endCoherent` encara hi torna a afegir el frame
                         // inclusiu, es baixa una 2a volta. Mai per davall d'1 frame de clip.
                         // Només mana el pla de l'ítem quan el rètol ve ACURTAT (eixe cas ja
                         // el resol `placeEnd` i no s'hi toca).
@@ -3508,7 +3556,7 @@
                             const dIns = cIns ? (Number(cIns.end) - Number(cIns.start)) : 0;
                             if (dIns > 2 * REV_FRAME) {
                                 const stReal = Number(cIns.start);
-                                const dWant = Math.max(REV_FRAME, dIns - REV_FRAME);   // 1 frame menys
+                                const dWant = Math.max(REV_FRAME, dIns - WOTT_TAIL_FRAMES * REV_FRAME);
                                 let dFin = dIns, rCy = '';
                                 for (let pas = 0; pas < 2 && dFin > dWant + 0.5 * REV_FRAME; pas++) {
                                     // pas 0: el final desitjat · pas 1: 1 frame més avall (si
@@ -3540,9 +3588,16 @@
                         // COHERENT: in/out del source ↔ end del timeline) perquè el rètol quede
                         // ESTIRABLE amb el ratolí; cerca el clip pel seu start.
                         if (placeEnd !== null && !sencerFet) {
-                            const rEndAt = await getClipsLogic().endCoherent(slot.track, slot.start, placeEnd, 'video', label);
+                            // ✂️ (2026-11-02 · BUG #218) CUA DE SEGURETAT: ací el final ve de la
+                            // durada del mèdia (o del límit de l'ítem) i el mèdia dels wotts és
+                            // ~8 frames més llarg que la imatge real → eixe tros ix NEGRE. Es
+                            // retalla sempre `WOTT_TAIL_FRAMES` frames (mai per davall d'1 frame).
+                            const endCut = this._wottTailEnd(slot.start, placeEnd);
+                            const rEndAt = await getClipsLogic().endCoherent(slot.track, slot.start, endCut, 'video', label);
                             if (String(rEndAt).indexOf('OK') === -1) {
                                 log(`   ⚠️ [${label}] retall V${slot.track} @ ${slot.start.toFixed(2)}s → ${rEndAt}`, "WARN");
+                            } else {
+                                placeEnd = endCut;
                             }
                         }
                         const endRec = (placeEnd !== null) ? placeEnd : slot.start + Math.max(durInfo.dur, 0.5);
@@ -5856,6 +5911,70 @@
             return String(parts[5] || '').replace(/_/g, ' ').trim();
         },
 
+        // 🖼️ (2026-11-02) Nom de l'ITEM del projecte que fa de FONS als wotts gràfics
+        // (vegeu `placeTeWotts` i `_placeTeFons`). Exposat perquè el smoke el puga
+        // comprovar, igual que `Mapa.MATCH_MIN`.
+        TE_FONS_PNG: TE_FONS_PNG,
+
+        /**
+         * _placeTeFons: POSA EL PNG DE FONS (V3) DAVALL D'UN WOTT GRÀFIC.
+         *
+         * El PNG és un STILL del MATEIX projecte. `Clips.insert` fa un `overwriteClip` que
+         * escriu la DURADA PER DEFECTE del still (~5 s) i, per tant, esborraria els clips
+         * veïns de la pista si s'inserira directament al rang volgut (la mateixa trampa que
+         * va obligar a fer-ho així al congelat del Titullet, 2026-10-01 · #129). Per això:
+         *   1) es comprova que la pista estiga LLIURE en tot el rang (si no, no s'hi posa res);
+         *   2) s'inserix en una ZONA TEMPORAL lliure (`_v6FreeTC`, la mateixa del congelat);
+         *   3) es porta al rang exacte amb `Clips.moveToRange` (només mou start/end);
+         *   4) `endCoherent` deixa el source coherent (imatge FIXA: s'estira sense límit).
+         *
+         * @param {string} fonsName - Nom de l'item del projecte (PNG de fons)
+         * @param {number} track - Pista del fons (V3)
+         * @param {number} start - Inici (s), ja a la reixa de frames
+         * @param {number} end - Final (s)
+         * @param {Object} ctx - Context de col·locació (busy/placed)
+         * @returns {Promise<{res:string, track:number, coherent?:string, clash?:string}>}
+         *   res: 'OK' | 'SENSE_NOM' | 'BUSY' | 'NO_ITEM' | 'NO_TEMP' | 'MOVE:…' | 'ERR:…'
+         */
+        _placeTeFons: async function (fonsName, track, start, end, ctx) {
+            if (!fonsName) return { res: 'SENSE_NOM', track: track };
+            const CL = getClipsLogic();
+            // 1) PISTA LLIURE en tot el rang: el fons no ha de menjar-se cap altre grafisme.
+            let clips = [];
+            try { clips = (await CL.getTrackClips(track, 'video')) || []; } catch (eT) { clips = []; }
+            const clash = clips.find(c => isFinite(c.start) && isFinite(c.end) &&
+                start < (c.end - 0.05) && end > (c.start + 0.05));
+            if (clash) return { res: 'BUSY', track: track, clash: String(clash.name || '') };
+            // 2) Inserció en una zona temporal lliure (el still ocupa ~5 s de projecte).
+            const temp = await this._v6FreeTC(track, 10);
+            const ins = String(await callJSX(
+                `Clips.insert('${getUtils().escape(fonsName)}', ${track}, ${temp.toFixed(4)}, null, 'video')`) || '');
+            if (ins.indexOf('OK') === -1) {
+                return { res: (ins.indexOf('ITEM_NOT_FOUND') !== -1 ? 'NO_ITEM' : 'ERR:' + ins), track: track };
+            }
+            // 3) Índex del clip temporal (el necessita `moveToRange`) i neteja si falla.
+            let idx = -1;
+            try {
+                const now = (await CL.getTrackClips(track, 'video')) || [];
+                for (let i = 0; i < now.length; i++) {
+                    if (Math.abs(Number(now[i].start) - temp) < 0.5) { idx = i; break; }
+                }
+            } catch (eI) { idx = -1; }
+            const _net = async () => {
+                try { await callJSX(`Clips.removeAt(${track}, ${temp.toFixed(4)}, 'video')`); } catch (eN) { }
+            };
+            if (idx < 0) { await _net(); return { res: 'NO_TEMP', track: track }; }
+            const mv = String(await callJSX(
+                `Clips.moveToRange(${track}, ${idx}, ${start.toFixed(4)}, ${end.toFixed(4)}, 'video')`) || '');
+            if (mv.indexOf('OK') !== 0) { await _net(); return { res: 'MOVE:' + mv, track: track }; }
+            // 4) Source coherent: la imatge fixa queda estirable fins al final demanat.
+            let rCoh = '';
+            try { rCoh = String(await CL.endCoherent(track, start, end, 'video', 'TE·fons') || ''); }
+            catch (eC) { rCoh = 'ERR:' + eC.message; }
+            this._addPlaced(ctx, track, start, end);
+            return { res: 'OK', track: track, coherent: rCoh };
+        },
+
         /**
          * placeTeWotts: COL·LOCA ELS WOTTS DE TÒTEM (TE) AL MARCADOR GROC DEL SEU TÍTOL.
          *
@@ -5863,9 +5982,12 @@
          * rètols ja estan col·locats. Per a cada wott d'un ítem TE de l'escaleta:
          *   1) es puntua el seu TÍTOL contra el títol de cada marcador GROC (`_scoreNombre`);
          *   2) si el millor ≥ `MATCH_MIN` (0,60) → s'inserix EN EIXE MARCADOR, a la pista
-         *      de grafismes (V3) i amb la durada pròpia del wott (retallada al marcador
-         *      següent: un tòtem no entra mai a l'ítem de darrere);
-         *   3) si no hi ha cap marcador semblant → NO es col·loca i s'avisa al log.
+         *      DEL WOTT (V4 = `graficos` + 1) i amb la durada pròpia del wott (retallada al
+         *      marcador següent: un tòtem no entra mai a l'ítem de darrere);
+         *   3) DAVALL d'ell, a la pista de grafismes (V3), es col·loca el PNG de FONS
+         *      `TE_FONS_PNG` (item del MATEIX projecte) cobrint EXACTAMENT eixe rang
+         *      (`_placeTeFons`). És el mecanisme GENÈRIC per als wotts gràfics d'este sistema;
+         *   4) si no hi ha cap marcador semblant → NO es col·loca i s'avisa al log.
          *
          * NO fa rastreig de color ni cadena de targetes: el TC del wott (00.00) no diu res
          * i la referència és el TÍTOL del marcador.
@@ -5884,7 +6006,11 @@
                 return 0;
             }
             const cfg = FASTPASS_UI.Config.get();
-            const V_GRAF = parseInt(cfg.tracks.video.graficos, 10) || 3;
+            // 🖼️ (2026-11-02) DOS PISTES (petició d'usuari, i GENÈRIC per a tots els wotts
+            // gràfics d'este sistema): el PNG de FONS va a `graficos` (V3) i el WOTT gràfic
+            // damunt, a V4. El fons cobrix EXACTAMENT el rang del wott.
+            const V_FONS = parseInt(cfg.tracks.video.graficos, 10) || 3;
+            const V_WOTT = V_FONS + 1;
             let allMarkers = [];
             try {
                 const raw = await callJSX('Markers.get()');
@@ -5936,6 +6062,18 @@
             const placedRecs = [];
             const gridNear = (v) => Math.round(Number(v) / REV_FRAME) * REV_FRAME;
             const gridDown = (v) => Math.floor(Number(v) / REV_FRAME + 1e-6) * REV_FRAME;
+            // Text del resultat del FONS per al log (una sola font de missatges).
+            const fonsTxt = (f) => {
+                if (!f) return 'sense resposta';
+                switch (f.res) {
+                    case 'OK': return '✓';
+                    case 'SENSE_NOM': return 'no hi ha PNG de fons configurat';
+                    case 'BUSY': return `pista OCUPADA per «${f.clash || '?'}» → no s\'hi posa`;
+                    case 'NO_ITEM': return `el PNG «${TE_FONS_PNG}» NO és al projecte → sense fons`;
+                    case 'NO_TEMP': return 'no s\'ha localitzat el clip temporal del PNG';
+                    default: return String(f.res);
+                }
+            };
             let ok = 0;
             for (const it of cand) {
                 const name = String((it.chy && it.chy.name) || '');
@@ -5966,17 +6104,36 @@
                 const lim = nextAfter(mk.time);
                 let wantDur = (durOwn !== null) ? durOwn : 3.0;
                 if (lim !== null) wantDur = Math.min(wantDur, Math.max(0.5, lim - mk.time));
-                const slot = await this._chooseSlot([V_GRAF], mk.time, wantDur, ctx, lim);
+                const slot = await this._chooseSlot([V_WOTT], mk.time, wantDur, ctx, lim);
                 if (!slot || !slot.track) {
                     log(`   ⚠️ [TE] Sense pista per a «${shortName}…»`, "WARN");
                     continue;
                 }
+                // 🚫 V4 OCUPADA en tot l'ítem: `_chooseSlot` no ha trobat forat i, si
+                // s'inserira igualment, l'`overwriteClip` s'enduguera el clip que hi haja
+                // (a V4 hi viuen les TRADUCCIONS). Millor no tocar res i avisar.
+                if (slot.overlap) {
+                    log(`   ⛔ [TE] «${shortName}…»: V${V_WOTT} OCUPADA en tot l'ítem (marcador @ ${mk.time.toFixed(2)}s) → NO es col·loca`, "WARN");
+                    continue;
+                }
+                let useDur = wantDur;
+                if (slot.shrunk && slot.maxDur > 0) useDur = Math.min(useDur, slot.maxDur);
                 const start = gridNear(slot.start);
-                let end = start + wantDur;
+                let end = start + useDur;
                 if (lim !== null && end > lim) end = gridDown(lim);
+                // ✂️ (2026-11-02 · BUG #218) CUA DE SEGURETAT: el mèdia del wott és ~8 frames
+                // més llarg que la imatge real (l'últim tros és NEGRE) → es descompten
+                // `WOTT_TAIL_FRAMES` frames. El fons PNG va al MATEIX rang ja retallat.
+                end = this._wottTailEnd(start, end);
                 if (!(end > start)) continue;
+                // 1) El WOTT GRÀFIC, a V4 (damunt del fons).
+                const insW = String(await callJSX(
+                    `Clips.insert('${getUtils().escape(getUtils().jsxName(name))}', ${slot.track}, ${start.toFixed(4)}, null, 'video')`) || '');
+                if (insW.indexOf('OK') === -1) {
+                    log(`   ⚠️ [TE] «${shortName}…»: insert V${slot.track} @ ${start.toFixed(2)}s → ${insW}`, "WARN");
+                    continue;
+                }
                 this._markPlaced(name, start, end);
-                await callJSX(`Clips.insert('${getUtils().escape(getUtils().jsxName(name))}', ${slot.track}, ${start.toFixed(4)}, null, 'video')`);
                 try {
                     const rEnd = await getClipsLogic().endCoherent(slot.track, start, end, 'video', 'TE');
                     if (String(rEnd).indexOf('OK') === -1) {
@@ -5986,19 +6143,27 @@
                     log(`   ⚠️ [TE] no s'ha pogut fixar el final del clip: ${eE.message}`, "WARN");
                 }
                 this._addPlaced(ctx, slot.track, start, end);
+                // 2) El FONS del wott gràfic (PNG del MATEIX projecte), a V3 i amb eixe
+                //    MATEIX rang. Si no es pot, el wott ja està col·locat i s'avisa.
+                const fons = await this._placeTeFons(TE_FONS_PNG, V_FONS, start, end, ctx);
+                if (fons && fons.res !== 'OK') {
+                    log(`   ⚠️ [TE] fons V${V_FONS} de «${shortName}…»: ${fonsTxt(fons)}`, "WARN");
+                }
                 placedRecs.push({
                     num: String(it.id || mk.id || ''), name: name, track: slot.track,
                     startSec: start, endSec: end, tipus: 'GRF'
                 });
                 log(`   ✅ [TE] «${shortName}…» ≈ «${mk.id} - ${mk.titol}» (${best.score.toFixed(2)}) → V${slot.track} @ ${start.toFixed(2)}s → ${end.toFixed(2)}s` +
                     (slot.moved ? ` ⟵ desplaçat per no trepitjar (ideal ${mk.time.toFixed(2)}s)` : '') +
-                    (durOwn === null ? ' (sense durada al bin: 3,0s de referència)' : ''));
+                    (durOwn === null ? ' (sense durada al bin: 3,0s de referència)' : '') +
+                    ` · cua −${WOTT_TAIL_FRAMES}f · fons V${V_FONS}: ${fonsTxt(fons)}`);
                 ok++;
             }
             if (ok === 0) {
                 log("⚠️ [TE] Cap wott de tòtem col·locat.", "WARN");
             } else {
-                log(`🎬 [TE] ${ok} tòtem(s) col·locat(s) al marcador groc del seu títol.`, "INFO");
+                log(`🎬 [TE] ${ok} tòtem(s) col·locat(s) al marcador groc del seu títol` +
+                    ` (wott a V${V_WOTT}, fons «${TE_FONS_PNG}» a V${V_FONS}).`, "INFO");
                 getUtils().status(`Tòtem: ${ok}`, "exito");
                 await this._recordPlacedChyrons(placedRecs, 'TE');
             }

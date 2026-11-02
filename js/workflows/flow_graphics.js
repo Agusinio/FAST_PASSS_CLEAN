@@ -124,7 +124,13 @@
                     log(`   ⚠️ [${label}] AnalysisCenter.writeGraphics no disponible → ${records.length} gràfic(s) NO registrats al manifest`, "WARN");
                     return;
                 }
-                const ctx = await FASTPASS_UI.Workflows.MainButton._setupContext();
+                // (2026-11-02 · BUG #220) Context de SESSIÓ (data del PROJECTE OBERT):
+                // `_setupContext()` donava HOY i els gràfics anaven al directori del
+                // dia d'avui encara que damunt hi haguera el projecte d'AHIR.
+                const MB = FASTPASS_UI.Workflows.MainButton;
+                const ctx = (MB && typeof MB._sessionCtx === 'function')
+                    ? await MB._sessionCtx()
+                    : await MB._setupContext();
                 if (!ctx || !ctx.progData) {
                     log(`   ⚠️ [${label}] sense progData → ${records.length} gràfic(s) NO registrats al manifest`, "WARN");
                     return;
@@ -200,7 +206,9 @@
                 if (clips.length === 0) { log("⚠️ No hi ha clips a V1."); return; }
                 const clipCuts = clips.map(function(c) { return c.start; });
 
-                const ctx = await FASTPASS_UI.Workflows.MainButton._setupContext();
+                // (2026-11-02 · BUG #220) Context de SESSIÓ (data del projecte obert):
+                // la fase 'crudo' viu al manifest del PROJECTE, no al d'HOY.
+                const ctx = await FASTPASS_UI.Workflows.MainButton._sessionCtx();
                 const analysis = await FASTPASS_UI.Logic.Analysis._load(ctx);
                 const waCrudo = analysis.crudo || {};
 

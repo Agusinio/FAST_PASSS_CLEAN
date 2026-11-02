@@ -481,6 +481,46 @@
             /_mediaDur\(name,\s*cand\.full\)/.test(srcTW),
             srcTW ? ('font ' + srcTW.length + ' B') : 'font NO llegida');
 
+        // ── A3-e. 02/11: RELLOTGE D'ARENA A LA DIANA 🎯 (#219) ──────────────────
+        // Petició d'usuari: el rastreig de gris amb ffmpeg (`GrafZonaGris.detect`,
+        // 1 crida per clip) pot dur desenes de segons i el panell callava. El clic
+        // normal del 🎯 no passava per `callWorkflow` i, per tant, no rebia mai
+        // `markBtnBusy`. Ara el handler embolcalla `runPlaceAllChyrons` amb el
+        // rellotge (try/finally) i `_rastreigBloc` anuncia què està fent.
+        var srcMAIN = '';
+        try {
+            var repM = String(window.__REPO || '');
+            if (repM && !/^file:/i.test(repM)) repM = 'file:///' + repM.replace(/^\/+/, '');
+            var resM = await fetch(repM.replace(/\/+$/, '') + '/js/main.js');
+            srcMAIN = String(await resM.text());
+        } catch (eReadM) { srcMAIN = ''; }
+        ok('#TW/83 main.js: el 🎯 embolcalla `runPlaceAllChyrons` amb rellotge d\'arena (markBtnBusy + finally → clearBtnBusy)',
+            /btnChyronColocar\.addEventListener\('click',\s*async\s*\(e\)\s*=>\s*\{/.test(srcMAIN) &&
+            /markBtnBusy\(btnChyronColocar\)/.test(srcMAIN) &&
+            /await runPlaceAllChyrons\(\)/.test(srcMAIN) &&
+            /finally\s*\{\s*clearBtnBusy\(btnChyronColocar\);\s*\}/.test(srcMAIN),
+            srcMAIN ? ('font ' + srcMAIN.length + ' B') : 'font NO llegida');
+        ok('#TW/84 flow_twitts: `_rastreigBloc` anuncia el rastreig de gris (⏳ al log INFO + status) abans del bucle de ffmpeg',
+            /⏳ \[XARXES\] rastreig de gris amb ffmpeg: ' \+ lliures\.length/.test(srcTW) &&
+            /status\('XARXES: rastrejant el gris \(' \+ lliures\.length/.test(srcTW) &&
+            /for \(var i = 0; i < lliures\.length; i\+\+\)/.test(srcTW),
+            'log=' + /⏳ \[XARXES\] rastreig de gris/.test(srcTW) +
+            ' status=' + /rastrejant el gris/.test(srcTW));
+        var srcHTML = '';
+        try {
+            var repH = String(window.__REPO || '');
+            if (repH && !/^file:/i.test(repH)) repH = 'file:///' + repH.replace(/^\/+/, '');
+            var resH = await fetch(repH.replace(/\/+$/, '') + '/index.html');
+            srcHTML = String(await resH.text());
+        } catch (eReadH) { srcHTML = ''; }
+        var verTW = function (rel) {
+            var m = new RegExp(rel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\?v=(\\d+)').exec(srcHTML);
+            return m ? parseInt(m[1], 10) : -1;
+        };
+        ok('#TW/85 index.html: cache-bust del #219 (main ' + verTW('js/main.js') +
+            ', flow_twitts ' + verTW('js/workflows/flow_twitts.js') + ')',
+            verTW('js/main.js') >= 104 && verTW('js/workflows/flow_twitts.js') >= 11);
+
         // ── A3-e. 30/10: cap PNG temporal que es quede al disc ─────────────────
         // En viu (TNV V1 30/10, 12:47) `C:\temp` tenia **14 `fp_twitts_<n>.png`**
         // (0,5-0,9 MB cada un, ≈8 MB) per a un sol bloc i un sol tuit: el nom del

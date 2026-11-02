@@ -404,10 +404,10 @@
 
             var idx = await readRepo('index.html');
             ok('#175/20 index.html carrega `19_Fs_Wipe.js` i ha pujat els cache-busts',
-                /19_Fs_Wipe\.js\?v=2/.test(idx) && /utils\.js\?v=30/.test(idx) &&
-                /flow_mainButton\.js\?v=41/.test(idx) && /srt_editor\.js\?v=87/.test(idx),
-                'modul=' + /19_Fs_Wipe\.js\?v=2/.test(idx) + ' * utils=' + /utils\.js\?v=30/.test(idx) +
-                ' * main=' + /flow_mainButton\.js\?v=41/.test(idx) + ' * srt=' + /srt_editor\.js\?v=87/.test(idx));
+                /19_Fs_Wipe\.js\?v=2/.test(idx) && /utils\.js\?v=32/.test(idx) &&
+                /flow_mainButton\.js\?v=42/.test(idx) && /srt_editor\.js\?v=88/.test(idx),
+                'modul=' + /19_Fs_Wipe\.js\?v=2/.test(idx) + ' * utils=' + /utils\.js\?v=32/.test(idx) +
+                ' * main=' + /flow_mainButton\.js\?v=42/.test(idx) + ' * srt=' + /srt_editor\.js\?v=88/.test(idx));
 
             // ── 5a-bis) #213 · LLANÇADOR OCULT (2026-11-02) ─────────────────────
             // `cep.process.createProcess` NO busca al PATH: amb 'wscript.exe' a
@@ -778,11 +778,11 @@
                 ok('#196 la prova de comportament de `_resolveDateDir` no ha llancat', false, eRD && eRD.message);
             }
 
-            ok('cache-busts 28/10: flow_render 38 · flow_mapa 31 · srt_editor 87',
-                /flow_render\.js\?v=39/.test(idx) && /flow_mapa\.js\?v=32/.test(idx) &&
-                /srt_editor\.js\?v=87/.test(idx),
-                'render=' + /flow_render\.js\?v=39/.test(idx) + ' * mapa=' + /flow_mapa\.js\?v=32/.test(idx) +
-                ' * srt=' + /srt_editor\.js\?v=87/.test(idx));
+            ok('cache-busts 28/10: flow_render 40 · flow_mapa 32 · srt_editor 88',
+                /flow_render\.js\?v=40/.test(idx) && /flow_mapa\.js\?v=32/.test(idx) &&
+                /srt_editor\.js\?v=88/.test(idx),
+                'render=' + /flow_render\.js\?v=40/.test(idx) + ' * mapa=' + /flow_mapa\.js\?v=32/.test(idx) +
+                ' * srt=' + /srt_editor\.js\?v=88/.test(idx));
 
         } catch (e) {
             ok('#175 la prova no ha llancat cap excepcio', false, e && (e.message + ' | ' + e.stack));

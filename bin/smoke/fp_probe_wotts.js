@@ -247,7 +247,7 @@
                 /placeEnd = gridDown\(placeEnd - REV_FRAME\);/.test(chySrc));
             var idxW = await readRepo('index.html');
             ok('#WOTT/24 cache-bust al dia (4_Context, flow_chyrons, Scanner)',
-                /4_Context\.js\?v=33/.test(idxW) && /flow_chyrons\.js\?v=91/.test(idxW) &&
+                /4_Context\.js\?v=33/.test(idxW) && /flow_chyrons\.js\?v=94/.test(idxW) &&
                 /Scanner\.js\?v=26/.test(idxW),
                 (idxW.match(/4_Context\.js\?v=\d+/) || '') + ' ' +
                 (idxW.match(/flow_chyrons\.js\?v=\d+/) || '') + ' ' +
@@ -516,10 +516,10 @@
             // 2-3 frames): es LLIG el clip que ha deixat l'INSERT i es fixa el final
             // 1 frame abans, amb verificació i 2a passada si `endCoherent` hi torna
             // a afegir el frame inclusiu.
-            ok('#WOTT/41 flow_chyrons: el wott SENCER es MESURA al timeline i es retalla 1 frame',
+            ok('#WOTT/41 flow_chyrons: el wott SENCER es MESURA al timeline i es retalla la CUA',
                 /vaSencer = \(placeEnd === null\)/.test(chySrc) &&
                 /getClipsLogic\(\)\._clipAtTime\(slot\.track, st, 'video'\)/.test(chySrc) &&
-                /dWant = Math\.max\(REV_FRAME, dIns - REV_FRAME\)/.test(chySrc) &&
+                /dWant = Math\.max\(REV_FRAME, dIns - WOTT_TAIL_FRAMES \* REV_FRAME\)/.test(chySrc) &&
                 /sencerFet = true/.test(chySrc) &&
                 /if \(placeEnd !== null && !sencerFet\)/.test(chySrc),
                 'vaSencer=' + /vaSencer = \(placeEnd === null\)/.test(chySrc) +
@@ -530,9 +530,11 @@
             var fN = function (s) { return Math.round(Number(s) / FR); };
             // Rèplica EXACTA del bloc de flow_chyrons (`afig` = 1 frame que hi afig
             // Premiere en fixar el final: és el pitjor cas, el que abans es colava).
+            // (2026-11-02 · #218) La cua és `WOTT_TAIL_FRAMES` = 20 frames.
+            var TAIL_F = 20;
             var retallSencer = function (start, dIns, afig) {
                 if (!(dIns > 2 * FR)) return null;
-                var dWant = Math.max(FR, dIns - FR), dFin = dIns;
+                var dWant = Math.max(FR, dIns - TAIL_F * FR), dFin = dIns;
                 for (var pas = 0; pas < 2 && dFin > dWant + 0.5 * FR; pas++) {
                     var wantE = gDown(start + dWant - pas * FR);
                     if (!(wantE > start + 0.5 * FR)) break;
@@ -542,18 +544,49 @@
             };
             var rA = retallSencer(100.00, 156 * FR, false);
             var rB = retallSencer(100.00, 156 * FR, true);
-            ok('#WOTT/42 retall del clip sencer: 156 → 155 frames (amb i sense el frame inclusiu)',
-                rA !== null && fN(rA) === 155 && rB !== null && fN(rB) === 155,
+            ok('#WOTT/42 retall del clip sencer: 156 → 136 frames (20 de cua, amb i sense el frame inclusiu)',
+                rA !== null && fN(rA) === 136 && rB !== null && fN(rB) === 136,
                 'sense=' + (rA === null ? 'n/d' : fN(rA)) + ' amb=' + (rB === null ? 'n/d' : fN(rB)));
             var rC = retallSencer(100.00, 2 * FR, false);
             var rD = retallSencer(100.00, 3 * FR, false);
-            ok('#WOTT/43 retall del clip sencer: 3 → 2 frames i un de 2 frames NO es toca (mai <1)',
-                rC === null && rD !== null && fN(rD) === 2,
+            ok('#WOTT/43 retall del clip sencer: 3 → 1 frame i un de 2 frames NO es toca (mai <1)',
+                rC === null && rD !== null && fN(rD) === 1,
                 '2f=' + (rC === null ? 'intacte' : fN(rC)) + ' 3f=' + (rD === null ? 'n/d' : fN(rD)));
-            ok('#WOTT/44 el retall del sencer deixa traça (✂️ CLIP SENCER) i cache-bust flow_chyrons 91',
+            ok('#WOTT/44 el retall del sencer deixa traça (✂️ CLIP SENCER) i cache-bust flow_chyrons 94',
                 chySrc.indexOf('✂️ [') > 0 && chySrc.indexOf('CLIP SENCER') > 0 &&
-                /flow_chyrons\.js\?v=91/.test(idxW),
+                /flow_chyrons\.js\?v=94/.test(idxW),
                 (idxW.match(/flow_chyrons\.js\?v=\d+/) || ''));
+
+            // ── N2. CUA DE SEGURETAT DE TOTS ELS WOTTS (2026-11-02 · #218) ──────
+            // Queixa: «el wott que s'inserix és 8 frames més llarg que la imatge
+            // real» → l'últim tros del mèdia és NEGRE. Petició d'usuari: la solució
+            // MÉS SIMPLE — retallar SEMPRE 20 frames la cua de tots els wotts
+            // (`WOTT_TAIL_FRAMES`) en els punts on es fixa el final; res d'endevinar
+            // la longitud real de cada mèdia.
+            ok('#WOTT/63 flow_chyrons: constant WOTT_TAIL_FRAMES = 20 i helper _wottTailEnd',
+                /const WOTT_TAIL_FRAMES = 20;/.test(chySrc) &&
+                /_wottTailEnd: function \(startSec, endSec\)/.test(chySrc) &&
+                /Math\.floor\(\(en - WOTT_TAIL_FRAMES \* REV_FRAME\) \/ REV_FRAME \+ 1e-6\) \* REV_FRAME/.test(chySrc) &&
+                /return Math\.max\(st \+ REV_FRAME, cut\);/.test(chySrc),
+                'const=' + /const WOTT_TAIL_FRAMES = 20;/.test(chySrc) +
+                ' helper=' + /_wottTailEnd: function/.test(chySrc));
+            ok('#WOTT/64 la cua es descompta en els DOS camins: rètol/grafisme i tòtem (TE)',
+                /const endCut = this\._wottTailEnd\(slot\.start, placeEnd\);/.test(chySrc) &&
+                /endCoherent\(slot\.track, slot\.start, endCut, 'video', label\)/.test(chySrc) &&
+                /end = this\._wottTailEnd\(start, end\);/.test(chySrc),
+                'generic=' + /_wottTailEnd\(slot\.start, placeEnd\)/.test(chySrc) +
+                ' te=' + /_wottTailEnd\(start, end\)/.test(chySrc));
+            // Rèplica de la funció: 20 frames de cua, graella cap avall, mai <1 frame.
+            var tail = function (st, en) {
+                if (!isFinite(st) || !isFinite(en)) return en;
+                var cut = gDown(en - TAIL_F * FR);
+                return Math.max(st + FR, cut);
+            };
+            ok("#WOTT/65 _wottTailEnd: 6,24s de mèdia → 5,44s de clip i mai per davall d'un frame",
+                Math.abs((tail(100, 100 + 6.24) - 100) - 5.44) < 1e-6 &&
+                Math.abs((tail(100, 100.2) - 100) - 0.04) < 1e-6,
+                'viu=' + (tail(100, 106.24) - 100).toFixed(2) +
+                ' curt=' + (tail(100, 100.2) - 100).toFixed(2));
 
             // ── O. CONGELAT DEL TITOLET: MAI CAPTURAR SOBRE EL VÍDEO (2026-10-22 · #183) ──
             // Queixa: «el congelat del titullet ha congelat el clip de V1». El PNG del
@@ -642,11 +675,11 @@
                     /const LIMIT_PROGRAMA = 400 \* 1024/.test(stillSrc) &&
                     /const pngSospitos = cap\.ok && Number\(cap\.bytes\) > LIMIT_PROGRAMA/.test(stillSrc) &&
                     /if \(cap\.ok && !pngSospitos\)/.test(stillSrc) &&
-                    /flow_chyrons\.js\?v=91/.test(idxW),
+                    /flow_chyrons\.js\?v=94/.test(idxW),
                     'still=' + stillSrc.length +
                     ' zoneAvansCaptura=' + (stillSrc.indexOf('_freezeZone(needZone)') > -1 && stillSrc.indexOf('_freezeZone(needZone)') < stillSrc.indexOf('_capturePng(capBase')) +
                     ' v6=' + (stillSrc.indexOf('const TEMP_TC = await this._v6FreeTC') === -1 ? 'fora' : 'DINS') +
-                    ' v91=' + /flow_chyrons\.js\?v=91/.test(idxW));
+                    ' v94=' + /flow_chyrons\.js\?v=94/.test(idxW));
             } finally {
                 UI.Utils.callJSX = savedCJZ;
             }

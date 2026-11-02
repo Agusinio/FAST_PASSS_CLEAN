@@ -1478,7 +1478,9 @@
             }
             
             // Sincronizar assets (igual que antes)
-            const ctx = await this._setupContext();
+            // (2026-11-02 · BUG #220) Context de SESSIÓ: la data ha de ser la del
+            // .prproj que s'acaba d'obrir, no la de checkContext (HOY).
+            const ctx = await this._sessionCtx();
             const assets = await this._fullScan(ctx);
             await this._completeSyncUI(ctx, assets);
             
@@ -1545,7 +1547,10 @@
             }
             
             // Sincronizar assets (importar solo los faltantes)
-            const ctx = await this._setupContext();
+            // (2026-11-02 · BUG #220) Context de SESSIÓ: obrir el projecte d'AHIR
+            // ha de reconstruir el manifest a la carpeta del PROJECTE, no a la
+            // del dia d'avui (`_setupContext` donava `State.dateDir` = HOY).
+            const ctx = await this._sessionCtx();
             const assets = await this._fullScan(ctx);
             await this._completeSyncUI(ctx, assets);
 
@@ -1839,6 +1844,84 @@
                 log(`⚠️ [Manifest] Error reconstruint manifest: ${e.message}`);
                 return null;
             }
+        },
+
+        /** Memòria curta de la data del projecte obert (vegeu `_sessionDateDir`). */
+        _sessionDateCache: { at: 0, dir: '' },
+
+        /**
+         * _sessionDateDir: (2026-11-02 · BUG #220) DATA DE TREBALL DE SESSIÓ
+         * (YYYY_MM_DD) ancorada al PROJECTE OBERT, no al rellotge.
+         *
+         * PER QUÈ EXISTEIX: `Context.checkContext()` fixa `State.dateDir` a la data
+         * d'AVUI en clic normal (#177) encara que damunt hi haja obert el `.prproj`
+         * d'AHIR. Els escriptors de SESSIÓ (marcadors, gràfics, rètols, portada,
+         * OBRIR/GO) heretaven eixa data i, com que `SessionManifest._writeRaw` fa
+         * `cep.fs.makedir` (i el respatller JSX, `f.parent.create()`), **s'inventava
+         * el directori del dia d'avui amb un `.fastpass.json` fantasma dins**
+         * mentre el manifest del projecte de debò es quedava sense
+         * `markers`/`graphics`/`chyrons`.
+         *
+         * Ordre de resolució:
+         *   1) path REAL del `.prproj` obert (`Context._resolveProjectDateDir`)
+         *   2) `State.dateDir` (HOY, o la data del projecte en mode correcció)
+         *   3) rellotge (últim recurs)
+         * El resultat del path real es memoritza 2 s: els fluxos de col·locació
+         * demanen el ctx una vegada per fase i no cal un `Project.path()` cada volta.
+         * @returns {Promise<string>} 'YYYY_MM_DD'
+         */
+        _sessionDateDir: async function () {
+            const utils = getUtils();
+            let dirEstat = '';
+            try {
+                const St = window.FASTPASS_UI.State;
+                dirEstat = (St && St.dateDir) ? String(St.dateDir) : '';
+            } catch (eSt) { dirEstat = ''; }
+            if (!dirEstat) dirEstat = utils.getFormattedDate().replace(/["\s]/g, '').trim();
+            // 1) La data del .prproj obert és la VERITAT (memòria curta de 2 s).
+            const now = Date.now();
+            if (this._sessionDateCache.dir && (now - this._sessionDateCache.at) < 2000) {
+                return this._sessionDateCache.dir;
+            }
+            try {
+                const Ctx = window.FASTPASS_UI.Core && window.FASTPASS_UI.Core.Context;
+                if (Ctx && typeof Ctx._resolveProjectDateDir === 'function') {
+                    const dProj = await Ctx._resolveProjectDateDir();
+                    if (dProj) {
+                        this._sessionDateCache = { at: now, dir: dProj };
+                        if (dProj !== dirEstat) {
+                            utils.log('🗓️ [dateDir] Data de SESSIÓ ancorada al PROJECTE OBERT: ' +
+                                dirEstat + ' → ' + dProj, 'WARN');
+                        }
+                        return dProj;
+                    }
+                }
+            } catch (eD) {
+                utils.log('⚠️ [dateDir] No puc llegir la data del projecte obert: ' + eD.message, 'DEBUG');
+            }
+            return dirEstat;
+        },
+
+        /**
+         * _sessionCtx: el ctx de SESSIÓ (`_setupContext()`) amb la DATA ancorada al
+         * projecte obert (`_sessionDateDir()`, BUG #220).
+         *
+         * És el ctx que han de fer servir els escriptors del manifest (marcadors,
+         * gràfics, rètols) i OBRIR/GO. CREAR i ACTUALITZAR continuen amb
+         * `_setupContext()`: treballen el bloc del DIA (HOY, o AHIR en mode correcció).
+         * @returns {Promise<Object>} { config, progData, programa, bloque, dateDir }
+         */
+        _sessionCtx: async function () {
+            const ctx = await this._setupContext();
+            try {
+                const dSessio = await this._sessionDateDir();
+                if (dSessio && dSessio !== ctx.dateDir) {
+                    log('🗓️ [dateDir] ctx de sessió: ' + ctx.dateDir + ' → ' + dSessio +
+                        ' (data del projecte obert)');
+                    ctx.dateDir = dSessio;
+                }
+            } catch (eS) { /* es queda amb la data de checkContext */ }
+            return ctx;
         },
 
         _setupContext: async function () {

@@ -587,16 +587,31 @@
                         utils.log(`🔁 [INGEST] Reintent de la ingesta de rètols d'un en un (${safeWotts.length})…`, 'WARN');
                         impW = await utils.importList(safeWotts, "root", { chunkSize: 1 });
                     }
-                    // ── CORTACIRCUITS (2026-11-02 · BUG #215) ──────────────────────
+                    // ── CORTACIRCUITS (2026-11-02 · BUG #215 + #221) ────────────────
                     // Si el motor de Premiere no respon (diàleg modal obert), no es
                     // reintenta res més ni es mou ítem a ítem: cada crida tornaria a
                     // esperar el seu temps límit (26 × 15 min). S'avorta ja, amb el
-                    // motiu, i NO es crea cap projecte sense rètols.
-                    if (impW.timeout) {
+                    // motiu, i NO es crea cap projecte sense rètols. Per contra, si la
+                    // sonda SÍ que contesta (l'usuari ha cancel·lat la finestra i la
+                    // importació ja s'havia fet), es continua: ho decidix la
+                    // verificació del bin CHY del final.
+                    if (impW.timeout && impW.blocked) {
                         throw new Error('Premiere no respon: la importació dels rètols ha ' +
                             'quedat bloquejada (' + impW.chunks + ' bloc(s), ' + impW.failed +
-                            ' sense resposta). Tanca el diàleg que tinga obert Premiere i ' +
-                            'torna-ho a provar amb MAIN. Projecte NO creat.');
+                            ' sense resposta). El motor està BLOQUEJAT (la sonda tampoc no ' +
+                            'contesta): cancel·la el diàleg «Import Files» de Premiere i, si no ' +
+                            'respon, tanca Premiere SENSE guardar la plantilla. ' +
+                            'Torna-ho a provar amb MAIN. Projecte NO creat.');
+                    }
+                    if (impW.timeout) {
+                        // (2026-11-02 · BUG #221) El motor HA tornat a contestar (sonda OK): el
+                        // cas real és l'usuari cancel·lant una finestra «Import Files» que ja
+                        // havia importat TOT però no es tancava sola. Abans s'avortava ací i
+                        // calia repetir el flux sencer; ara es continua amb el que haja arribat
+                        // i ho decidix la verificació del bin CHY del final (si no hi ha arribat
+                        // res, allà sí que s'avorta).
+                        utils.log('⏳ [INGEST] La importació ha caducat esperant Premiere, però el motor ' +
+                            'respon: es continua amb el que haja arribat i es verifica al final al bin CHY.', 'WARN');
                     }
                     // L'índex de durades del bin CHY ha canviat: invalidem la caché
                     // perquè el proper Tema‑Titol llegeixi els nous wotts.
@@ -646,8 +661,9 @@
                     if (arribats <= 0) {
                         throw new Error('Ingesta de rètols fallida: cap dels ' + newWotts.length +
                             ' rètols ha arribat al bin CHY (Premiere ha deixat la importació a ' +
-                            'mitges o hi havia un diàleg obert). Projecte NO creat. Torna-ho a ' +
-                            'provar amb MAIN.');
+                            'mitges o hi havia un diàleg obert). Si tens la finestra «Import ' +
+                            'Files» oberta, prem Cancel·lar i torna-ho a provar amb MAIN. ' +
+                            'Projecte NO creat.');
                     }
                 }
             }

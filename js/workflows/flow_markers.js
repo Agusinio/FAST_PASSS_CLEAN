@@ -4035,7 +4035,14 @@
                 // (2026-10-15) CENTRALITZACIÓ: el snapshot viu al manifest; els fitxers
                 // derivats (.txt/.json) ja no són font de res.
                 var AC = window.FASTPASS_UI.Core && window.FASTPASS_UI.Core.AnalysisCenter;
-                var ctx = await FASTPASS_UI.Workflows.MainButton._setupContext();
+                // (2026-11-02 · BUG #220) Context de SESSIÓ (data del PROJECTE OBERT):
+                // amb `_setupContext()` el snapshot s'escrivia al directori del dia
+                // d'AVUI quan damunt hi havia obert el projecte d'AHIR, i creava un
+                // `.fastpass.json` fantasma que el projecte de debò no veia.
+                var MB = FASTPASS_UI.Workflows.MainButton;
+                var ctx = (MB && typeof MB._sessionCtx === 'function')
+                    ? await MB._sessionCtx()
+                    : await MB._setupContext();
                 if (AC && AC.writeMarkers) {
                     await AC.writeMarkers(ctx, list, { source: 'Markers.get (snapshot)', reason: 'markers' });
                 } else {
@@ -4078,7 +4085,9 @@
                 await FASTPASS_UI.Workflows.Markers.placeDeducedOnAirMarkers();
                 await FASTPASS_UI.Workflows.Markers.placeScheduledMarkers();
 
-                const ctx = await FASTPASS_UI.Workflows.MainButton._setupContext();
+                // (2026-11-02 · BUG #220) Context de SESSIÓ (data del projecte obert):
+                // les fases d'anàlisi viuen al manifest del PROJECTE, no al d'HOY.
+                const ctx = await FASTPASS_UI.Workflows.MainButton._sessionCtx();
                 // (2026-10-15) Les fases d'anàlisi es llegeixen del MANIFEST (FONT ÚNICA)
                 const analysis = await FASTPASS_UI.Logic.Analysis._load(ctx);
                 const marksCrudo = analysis.crudo || { markers: [] };
@@ -4122,7 +4131,8 @@
             if (!(await getUtils().validateActiveSequence())) return;
             log("📍 [CAPTURA INOUT] Llegint VALID_IN/VALID_OUT del timeline...");
             try {
-                const ctx = await FASTPASS_UI.Workflows.MainButton._setupContext();
+                // (2026-11-02 · BUG #220) Context de SESSIÓ (data del projecte obert).
+                const ctx = await FASTPASS_UI.Workflows.MainButton._sessionCtx();
                 const analysis = await FASTPASS_UI.Logic.Analysis._load(ctx);
                 const inoutCocinado = analysis.cocinado || {};
                 const markersRaw = await callJSX("Markers.get()");
@@ -4157,7 +4167,8 @@
             if (!(await getUtils().validateActiveSequence())) return;
             log("📍 [CAPTURA MARKS] Llegint marcadors del timeline...");
             try {
-                const ctx = await FASTPASS_UI.Workflows.MainButton._setupContext();
+                // (2026-11-02 · BUG #220) Context de SESSIÓ (data del projecte obert).
+                const ctx = await FASTPASS_UI.Workflows.MainButton._sessionCtx();
                 const analysis = await FASTPASS_UI.Logic.Analysis._load(ctx);
                 const marksCrudo = analysis.crudo || { markers: [] };
                 const marksCocinado = analysis.cocinado || { markers: [] };

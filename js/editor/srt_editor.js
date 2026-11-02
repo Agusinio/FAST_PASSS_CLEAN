@@ -555,7 +555,17 @@
                     return;
                 }
                 const bloque = (document.getElementById('bloc') || {}).value;
-                const stateDateDir = (FASTPASS_UI.State && FASTPASS_UI.State.dateDir);
+                // (2026-11-02 · BUG #220) El manifest es busca amb la data del PROJECTE
+                // OBERT: amb `State.dateDir` (HOY) un projecte d'AHIR quedava orfe i
+                // només el reintent de davall (576-598) el salvava.
+                let stateDateDir = (FASTPASS_UI.State && FASTPASS_UI.State.dateDir);
+                try {
+                    const MB = FASTPASS_UI.Workflows && FASTPASS_UI.Workflows.MainButton;
+                    if (MB && typeof MB._sessionDateDir === 'function') {
+                        const dS = await MB._sessionDateDir();
+                        if (dS) stateDateDir = dS;
+                    }
+                } catch (eSes) { /* es queda amb la data de checkContext */ }
                 const dateDir = stateDateDir || u.getFormattedDate().replace(/["\s]/g, "").trim();
                 const ctx = { config: config, progData: progData, programa: idProg, bloque: bloque, dateDir: dateDir };
 
