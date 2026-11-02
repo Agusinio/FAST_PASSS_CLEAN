@@ -48,3 +48,6 @@ __pycache__/
 *.pyc
 # Mostres SDK Adobe mogudes fora del repo (veure docs/reference/SAMPLES_ADOBE.md)
 docs/SAMPLES/
+
+# Audios de referencia locals (proves A1) - 17 MB de WAV, no es versionen
+Audios/

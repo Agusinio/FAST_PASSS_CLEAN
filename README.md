@@ -53,7 +53,7 @@ i [`docs/guides/MASTER_FUNCIONALITATS.md`](docs/guides/MASTER_FUNCIONALITATS.md)
 | `presets/` | Presets d'exportació `.epr` (H264 vertical 2 passades). |
 | `bin/` | Scripts de suport (validació de sintaxi, anàlisi d'escaletes, OCR, utilitats). |
 | `docs/guides/` | Arquitectura, propietat del codi, guia d'usuari, botonera, desenvolupament, Git. |
-| `docs/specs/` | Especificacions: escaleta JSON, classificació d'ítems, colors de marcador, NNEWS. |
+| `docs/specs/` | Especificacions: escaleta JSON, classificació d'ítems, colors de marcador, NNEWS, tuits (OCR), **opcions d'A1 (música) i «echo off» + rellotge d'arena** (`OPCIONS_A1_I_ECHO_OFF.md`). |
 | `docs/reference/` | Material de referència: keyframes, parser, temps OnAir, TITOLET, mostres Adobe. |
 | `BUGS.md` | **Catàleg únic de bugs** (5 pendents + 125 resolts, amb número i descripció). |
 | `FEATURES.md` | **Catàleg únic d'implementacions** (validades, pendents de validar i en cua). |
