@@ -144,6 +144,96 @@
     }
 
     /**
+     * grafFields: (PURA) camps del NOM d'un wott/grafisme tal com els genera el
+     * sistema. El nom és `Wott_<PROG>_<BLOC>_<LÍNIA>_<TC>_<tema>_<id>_<ROL>_…`:
+     *
+     *   `Wott_TNM_V3_082_00.35_INSERTS …_Lloc_…`
+     *     → { bloc:'V3', lini:'082', tc:'00.35', rol:'Lloc', flotant:false, teBloc:true }
+     *   `Wott_TNM_V_00_00.00_LUCYS …_XARXES-TEXT_tp_Oriol Junqueras_…`
+     *     → { bloc:'V',  lini:'00',  tc:'00.00', rol:'XARXES-TEXT', flotant:true, teBloc:false }
+     *
+     * `flotant` fa servir el MATEIX criteri que `Parse._esFlotant` (BUG #191):
+     * bloc d'una sola paraula de lletres + línia `00` = el generador no l'ha
+     * lligat a cap línia d'escaleta («és V»).
+     *
+     * @param {string} name
+     * @returns {{bloc:string, lini:string, tc:string, rol:string, flotant:boolean, teBloc:boolean}}
+     */
+    function grafFields(name) {
+        var base = String(name == null ? '' : name).replace(/\.(mov|mp4|mxf|png|jpe?g)$/i, '');
+        var p = base.split('_');
+        var bloc = (p.length > 2) ? String(p[2] || '') : '';
+        var lini = (p.length > 3) ? String(p[3] || '') : '';
+        var tc = (p.length > 4) ? String(p[4] || '') : '';
+        var rol = (p.length > 7) ? String(p[7] || '') : '';
+        var flotant = /^[A-Za-z]+$/.test(bloc) && /^\d+$/.test(lini) && Number(lini) === 0;
+        return {
+            bloc: bloc,
+            lini: lini,
+            tc: tc,
+            rol: rol.split('.')[0],
+            flotant: flotant,
+            teBloc: !flotant && /^[A-Za-z]+\d+[A-Za-z]*$/.test(bloc)
+        };
+    }
+
+    /**
+     * tcFiable: (PURA) el TC del nom servix per a col·locar?
+     * (2026-10-30 · D24) Un wott de bloc porta el TC del seu ítem (`00.35`); un
+     * flotant porta `00.00`/`00.00.00`. El TC és DE FIAR sempre **excepte si és
+     * tot zeros**: ahí vol dir «sense TC», no «al principi del bloc».
+     */
+    function tcFiable(tc) {
+        var s = String(tc == null ? '' : tc).replace(/[:\s]/g, '.');
+        if (!/\d/.test(s)) return false;
+        var p = s.split('.');
+        for (var i = 0; i < p.length; i++) {
+            if (Number(p[i]) > 0) return true;
+        }
+        return false;
+    }
+
+    /**
+     * tcToSec: (PURA) TC del nom → segons del timeline.
+     * Format del generador: `MM.SS` (el corrent) o `HH.MM.SS` (amb hora).
+     *   '00.35' → 35 · '01.02.15' → 3735 · '00.00' → 0
+     */
+    function tcToSec(tc) {
+        var s = String(tc == null ? '' : tc).replace(/[:\s]/g, '.');
+        var p = s.split('.');
+        var vals = [];
+        for (var i = 0; i < p.length; i++) {
+            if (/\d/.test(p[i])) vals.push(Number(p[i]) || 0);
+        }
+        var sec = 0;
+        for (var k = 0; k < vals.length; k++) sec = sec * 60 + vals[k];
+        return sec;
+    }
+
+    /**
+     * esOcrItem: (PURA) este ítem del BIN s'ha de col·locar BUSCANT-LO A LA
+     * IMATGE (OCR del tuit cremat)?
+     *
+     * (2026-10-30 · D24 · petició d'usuari) El criteri és el **ROL** del nom, no
+     * la família: només `CONVERSA` i `XARXES-TEXT` (amb sufixos: `+FOTO`…) són
+     * grafismes que es col·loquen per OCR. `LUCYS … Tema-Titol`, `LUCYS …
+     * Directe`, `LUCYS … Enviat`… NO entren: abans `esXarxes` ho acceptava tot i
+     * la passada es posava a fer OCR de coses que no toca.
+     *
+     * Es manté la família d'export manual `wott x <nom>` (D22 · BUG #208): no
+     * porta rol, però és el mateix tuit.
+     */
+    function esOcrItem(name) {
+        var n = String(name == null ? '' : name);
+        if (!n) return false;
+        var rol = grafFields(n).rol;
+        if (/^(CONVERSA|XARXES-TEXT)(\+|$)/i.test(rol)) return true;
+        if (/CONVERSA/i.test(rol)) return true;
+        if (/^wott(?:[_ ]v\d+)?\s+x\s+\S/i.test(n)) return true;
+        return false;
+    }
+
+    /**
      * similitud: proporció (0..1) de paraules del NOM del titular (≥3 lletres)
      * que apareixen al text OCR. `ORIOL JUNQUERAS` dins del text → 1.
      * És el que mesura D5 (la franja naranja amb el nom del titular).
@@ -189,6 +279,30 @@
         var sim = similitud(textOcr, f.nom);
         if (sim >= 0.60) score += 50;
         else if (sim >= 0.40) score += 20;
+        // (2026-10-30 · BUG #210-b) El movie NO sempre duu el `@handle`: el
+        // generador l'omet quan el nom ja és prou explícit
+        // (`…_XARXES-TEXT_tp_Gabriel Rufián_ERC_.00668981.mov` → handle `''`).
+        // El handle del tuit és eixe MATEIX nom PEGAT (sense espais), i sense
+        // esta pista el candidat bo es quedava en 50 punts (només el titular) i
+        // no arribava a l'umbral de 80: al TNV V1 del 30/10 el tuit es va
+        // DETECTAR a la imatge (`TUIT @gabrielrufian`, 00:01:36:19) i va quedar
+        // PENDENT per sempre («millor 50»).
+        if (!hHit) {
+            var nomPegat = normTxt(f.nom).replace(/\s+/g, '').toLowerCase();
+            if (nomPegat.length >= 3) {
+                for (var j = 0; j < ocrH.length; j++) {
+                    var hj = ocrH[j];
+                    if (hj === nomPegat) { score += 100; hHit = hj; break; }
+                    var preN = (nomPegat.length < hj.length) ? nomPegat : hj;
+                    // El prefix només val si és prou llarg: «Ana» no ha de fer
+                    // casar qualsevol `@anabel…`.
+                    if (preN.length >= 5 &&
+                        (hj.indexOf(nomPegat) === 0 || nomPegat.indexOf(hj) === 0)) {
+                        score += 100; hHit = hj; break;
+                    }
+                }
+            }
+        }
         var hasPartit = false;
         if (f.partit && f.partit.length >= 2) {
             hasPartit = (' ' + normTxt(textOcr) + ' ').indexOf(' ' + normTxt(f.partit)) !== -1;
@@ -362,23 +476,38 @@
     }
 
     /**
+     * mateixNom: (PURA) dos noms són el MATEIX ítem?
+     * Premiere trunca el nom del clip a ~90 caràcters, i els noms de tuit passen
+     * d'eixa llargària → si un dels dos és llarg, es compara pel PREFIX.
+     */
+    function mateixNom(a, b) {
+        var x = String(a == null ? '' : a).toLowerCase();
+        var y = String(b == null ? '' : b).toLowerCase();
+        if (!x || !y) return false;
+        if (x === y) return true;
+        if (x.length < 60 || y.length < 60) return false;
+        var n = Math.min(x.length, y.length);
+        return x.substring(0, n) === y.substring(0, n);
+    }
+
+    /**
      * pendents: (PURA) movies que encara NO són a la timeline.
      * `placed` és la llista de NOMS ja col·locats (qualsevol pista de vídeo):
-     * així una segona passada no torna a inserir el mateix movie.
+     * així una segona passada no torna a inserir el mateix movie. La comparació
+     * tolera el nom TRUNCAT de Premiere (`mateixNom`).
      */
     function pendents(files, placed) {
         var list = Array.isArray(files) ? files : [];
         var names = Array.isArray(placed) ? placed : [];
-        var set = {};
-        for (var j = 0; j < names.length; j++) {
-            var nm = String(names[j] == null ? '' : names[j]);
-            if (nm) set[nm] = true;
-        }
         var out = [];
         for (var i = 0; i < list.length; i++) {
             var f = list[i];
             if (!f || !f.name) continue;
-            if (set[String(f.name)]) continue;
+            var hi = false;
+            for (var j = 0; j < names.length; j++) {
+                if (mateixNom(f.name, names[j])) { hi = true; break; }
+            }
+            if (hi) continue;
             out.push(f);
         }
         return out;
@@ -702,6 +831,49 @@
 
 
     /**
+     * ocrItems: els ítems del PROJECTE que s'han de col·locar BUSCANT-LOS A LA
+     * IMATGE (`esOcrItem` = rol `CONVERSA` / `XARXES-TEXT`), amb els camps del
+     * nom ja parsejats (`grafFields`) i el TC ja qualificat (`tcFiable`).
+     *
+     * (2026-10-30 · D24/D25 · petició d'usuari) És el pòsit NOU de la passada
+     * del 🎯: abans mirava tota la família XARXES/LUCYS (`esXarxes`) i ara mira
+     * només el que s'ha de localitzar per OCR.
+     *
+     * @param {Object} [o] - { placed: [noms ja col·locats] }
+     * @returns {Promise<{ok:boolean, files:Array, pendents:Array, paths:Object, why:string}>}
+     *   files:    [{ name, full, dur, info:{bloc,lini,tc,rol,flotant,teBloc,tcFiable} }]
+     *   pendents: els que NO són a la timeline (per nom, amb tolerància al truncat)
+     *   paths:    nom → ruta del media (per a ffmpeg)
+     */
+    async function ocrItems(o) {
+        var pi = await projectItems();
+        if (!pi.ok) return { ok: false, files: [], pendents: [], paths: {}, why: pi.why };
+        var items = pi.items;
+        var files = [], paths = {};
+        for (var i = 0; i < items.length; i++) {
+            var it = items[i];
+            if (!it || !it.name) continue;
+            if (it.mediaPath) paths[String(it.name)] = String(it.mediaPath);
+            if (!esOcrItem(it.name)) continue;
+            var info = grafFields(it.name);
+            info.tcFiable = tcFiable(info.tc);
+            files.push({
+                name: String(it.name),
+                full: String(it.mediaPath || ''),
+                size: Number(it.size) || 0,
+                dur: Number(it.duration) || 0,
+                info: info
+            });
+        }
+        var placed = Array.isArray(o && o.placed) ? o.placed : [];
+        var queden = pendents(files, placed);
+        log('🐦 [XARXES] ' + items.length + ' ítem(s) al projecte (' + pi.bins.length +
+            ' bin(s): ' + (pi.bins.join(', ') || '—') + ') · CONVERSA/XARXES-TEXT: ' +
+            files.length + ' · sense col·locar: ' + queden.length, 'INFO');
+        return { ok: true, files: files, pendents: queden, paths: paths, why: '' };
+    }
+
+    /**
      * pathOf: (PURA) ruta del media d'un clip dins del mapa `paths` (nom→ruta).
      *
      * El nom del clip i el de l'ítem del projecte solen coincidir, però no sempre
@@ -727,16 +899,32 @@
         return '';
     }
 
-    /** pngPathOf: ruta del PNG de mostra d'un clip (a C:\temp). */
+    /**
+     * pngPathOf: ruta del PNG de mostra d'un clip (a C:\temp).
+     *
+     * ⚠️ (2026-10-30) UN SOL FITXER PER A TOTS els clips (`fp_twitts.png`), no un
+     * per índex. Abans el nom portava el número del clip (`fp_twitts_<n>.png`) i,
+     * com que `samplePng` només borra el seu ABANS de capturar-lo, cada clip
+     * deixava el SEU PNG a `C:\temp` per sempre: mesurat en viu (TNV V1 30/10,
+     * 12:47) **14 PNG de 0,5-0,9 MB (≈8 MB) per a un sol bloc i un sol tuit**.
+     * Amb nom fix el residu és com a molt 1 fitxer, i `ocrClip` encara el
+     * suprimeix tot seguit (el PNG només servix per a eixa lectura d'OCR).
+     * `scanClips` recorre els clips UN A UN (`await ocrClip`), així que no hi ha
+     * dos OCR demanant el mateix fitxer alhora.
+     *
+     * @param {number} [n] - índex del clip (es conserva per compatibilitat)
+     * @returns {string} ruta del PNG temporal
+     */
     function pngPathOf(n) {
         var u = utils();
+        var nom = 'fp_twitts.png';
         if (u && typeof u.tempPath === 'function') {
             try {
-                var p = u.tempPath('fp_twitts_' + n + '.png');
+                var p = u.tempPath(nom);
                 if (p) return p;
             } catch (e) { }
         }
-        return 'C:\\temp\\fp_twitts_' + n + '.png';
+        return 'C:\\temp\\' + nom;
     }
 
     /**
@@ -858,6 +1046,30 @@
     }
 
     /**
+     * _netejaPng: suprimix del disc el PNG de mostra (és TEMPORAL).
+     *
+     * (2026-10-30 · BUG #212-b) La passada només ha d'exportar els frames que
+     * NO poden eixir del gris, i cap d'ells s'ha de quedar al disc: el PNG es
+     * borra tot seguit d'haver-lo OCR-ejat. Es prova amb i sense `.png` perquè el
+     * QE pot escriure la ruta sense extensió (`_frameFromTimeline`). Silenciós:
+     * si no es pot borrar, la passada continua.
+     *
+     * @param {string} png - ruta del PNG de mostra
+     * @returns {Promise<void>}
+     */
+    async function _netejaPng(png) {
+        var u = utils();
+        var p = String(png || '');
+        if (!p) return;
+        var base = p.replace(/\.png$/i, '');
+        var vies = [p];
+        if (base && base !== p) vies.push(base);
+        for (var i = 0; i < vies.length; i++) {
+            try { await u.callJSX('IO.remove(' + JSON.stringify(vies[i]) + ')'); } catch (e) { }
+        }
+    }
+
+    /**
      * _waitForPath: espera (sense bloquejar) que un fitxer existisca. Mateix
      * patró que `17_TitoletDetect_Logic.js:841` (polling: no hi ha watchers).
      */
@@ -914,7 +1126,9 @@
         out.t = sp.t;
         var txt = '';
         try { txt = await td.ocrText(sp.png, { ocrLangs: c.ocrLangs }); }
-        catch (e) { out.why = 'OCR: ' + e.message; return out; }
+        catch (e) { out.why = 'OCR: ' + e.message; await _netejaPng(sp.png); return out; }
+        // El frame ja està llegit: el PNG temporal no s'ha de quedar al disc.
+        await _netejaPng(sp.png);
         out.text = String(txt == null ? '' : txt);
         out.handle = handleOf(out.text);
         out.ranked = rankCandidates(out.text, (o && o.files) || []);
@@ -1016,6 +1230,11 @@
         rankCandidates: rankCandidates,
         isTuit: isTuit,
         esXarxes: esXarxes,
+        grafFields: grafFields,
+        tcFiable: tcFiable,
+        tcToSec: tcToSec,
+        esOcrItem: esOcrItem,
+        mateixNom: mateixNom,
         pendents: pendents,
         binsDe: binsDe,
         uniqItems: uniqItems,
@@ -1030,6 +1249,7 @@
         folder: folder,
         placedNames: placedNames,
         flotants: flotants,
+        ocrItems: ocrItems,
         pngPathOf: pngPathOf,
         pathOf: pathOf,
         samplePng: samplePng,

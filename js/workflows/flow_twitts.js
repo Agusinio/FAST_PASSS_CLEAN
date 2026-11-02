@@ -69,6 +69,19 @@
         var t = cfg().tracks || {};
         return (t.video && t.video.graficos) ? Number(t.video.graficos) : 3;
     }
+    // BUG #206: helpers de reparació de la pista de grafismes, compartits per
+    // `_fixPlacement` i `_restaura` (abans vivien DINS de `_fixPlacement`).
+    function key(n) { return String(n || '').toLowerCase().replace(/\.[^.]+$/, ''); }
+    function findIn(list, n, s) {
+        var k = key(n), best = null, bd = 0.061;
+        for (var i = 0; i < (list || []).length; i++) {
+            var c = list[i];
+            if (!c || key(c.name) !== k) continue;
+            var d = Math.abs((Number(c.start) || 0) - (Number(s) || 0));
+            if (d <= bd) { bd = d; best = c; }
+        }
+        return best;
+    }
 
     W.Twitts = {
         /** _grafClips: clips que JA hi ha a la pista de grafismes (idempotència). */
@@ -109,10 +122,13 @@
         _isPlaced: function (grafClips, name, start, end) {
             var list = Array.isArray(grafClips) ? grafClips : [];
             if (!name) return false;
-            var ref = String(name).toLowerCase();
+            var T = L().TwittsOcr;
+            var iguals = (T && typeof T.mateixNom === 'function')
+                ? function (a, b) { return T.mateixNom(a, b); }
+                : function (a, b) { return String(a || '').toLowerCase() === String(b || '').toLowerCase(); };
             for (var i = 0; i < list.length; i++) {
                 var c = list[i];
-                if (!c || String(c.name || '').toLowerCase() !== ref) continue;
+                if (!c || !iguals(c.name, name)) continue;
                 var a = Math.max(Number(c.start) || 0, Number(start) || 0);
                 var b = Math.min(Number(c.end) || 0, Number(end) || 0);
                 var dur = Math.max(0.001, Number(end) - Number(start));
@@ -136,9 +152,25 @@
             var dur = end - start;
             if (!cand || !cand.name) return { ok: false, why: 'sense fitxer' };
             var name = String(cand.name);
-            var mediaDur = 0;
-            try { mediaDur = Number(await u.callJSX('Project.itemDuration(' + JSON.stringify(name) + ')')) || 0; }
-            catch (eD) { mediaDur = 0; }
+            // (2026-10-30) Durada REAL del movie: ffprobe del FICHERO (exacta) i, si no
+            // es pot, el DOM del projecte i l'estimació per mida (avisada). Abans es
+            // preguntava només al DOM (0 en estos projectes) i s'acabava estirant el
+            // tuit més enllà del mèdia (mesurat en viu: 16 frames de més).
+            var mediaDur = await this._mediaDur(name, cand.full);
+            // 🧊 (2026-10-30 · petició d'usuari) Si el clip de V1 és MÉS LLARG que el
+            // movie del tuit, la part viva va a la seua durada REAL i la cua es
+            // CONGELA (últim frame estirat) fins al final del clip de V1 — abans es
+            // col·locava estirat (Premiere repetia/estirava la imatge sense control).
+            var minFreeze = 0.12;
+            if (mediaDur > 0.1 && (dur - mediaDur) >= minFreeze) {
+                var fz = await this._placeAmbCongelat(cand, clip, mediaDur);
+                if (fz.ok) return fz;
+                log('⚠️ [TWITTS] «' + String(name).substring(0, 40) + '…» sense congelat: ' +
+                    fz.why, 'WARN');
+                // Si `_freezeTemaTitol` ja ha inserit el clip viu, NO es torna a
+                // inserir (quedaria duplicat): es dóna per col·locat i s'avisa.
+                if (fz.placed) return { ok: true, why: '' };
+            }
             var endIns = end;
             if (mediaDur > 0 && mediaDur < dur) {
                 endIns = start + mediaDur;
@@ -179,6 +211,266 @@
         },
 
         /**
+         * _snapDur: alinea una durada a la REJILLA DE FRAMES (25 fps, convenció del
+         * repo: `TwittsOcr.opts().frameSec = 0.04`), al frame més pròxim.
+         *
+         * Premiere col·loca el clip a frames sencers: passar-li una durada amb
+         * decimals fa que `Clips.endCoherent` arredonisca a un altre frame i el
+         * clip viu queda 1 frame estirat o escurçat. Amb la durada ja alineada, el
+         * final del clip viu coincidix amb el final del mèdia (ni estira ni talla).
+         *
+         * @param {number} sec
+         * @returns {number} segons alineats a frame
+         */
+        _snapDur: function (sec) {
+            var T = L().TwittsOcr;
+            var fr = 0.04;
+            try { fr = Number(T.opts({}).frameSec) || 0.04; } catch (eF) { fr = 0.04; }
+            var n = Math.round((Number(sec) || 0) / fr);
+            if (!(n > 0)) n = 1;
+            return Math.round(n * fr * 10000) / 10000;
+        },
+
+        /**
+         * _mediaDur: durada REAL (s) del movie del tuit — 0 si no es pot resoldre.
+         *
+         * ── PER QUÈ (2026-10-30 · petició d'usuari) ───────────────────────────────
+         * `Project.itemDuration` pot tornar 0 (en estos projectes el DOM no dóna
+         * durades de footage: «Bin CHY: N fitxers, 0 amb durada del DOM»), i la 2a
+         * xarxa era l'ESTIMACIÓ per mida de fitxer de la TRADUCCIÓ
+         * (`Chyrons._tradMediaDur`, calibrada a 45,56 MB/s: els ProRes 422 HQ
+         * OPACS del canal). Els movies de tuit són ProRes **amb ALPHA** i una
+         * altra taxa → l'estimació sobreestimava ~9 %: mesurat per l'usuari
+         * (30/10), la part viva quedava **16 frames més llarga** que el mèdia.
+         *
+         * ── ORDE DE FONTS (de exacta a aproximada) ────────────────────────────────
+         *   1. **ffprobe del FICHERO** (`Logic.FFmpeg.getMediaDuration`, la mateixa
+         *      dada que usa `Titol·Petit` per al revers): EXACTA, ±1 frame. És el
+         *      que fa servir Premiere al inserir sense `endSec`.
+         *   2. `Project.itemDuration` (DOM del projecte).
+         *   3. Estimació per mida (`Chyrons._tradMediaDur`) — ÚLTIM recurs, i
+         *      s'AVISA al log que és estimada.
+         *
+         * @param {string} name - Nom del movie al projecte
+         * @param {string} [full] - Ruta del fichero (ffprobe). Si falta, s'estima.
+         * @returns {Promise<number>} segons alineats a frame, o 0 si no se sap
+         */
+        _mediaDur: async function (name, full) {
+            var short = String(name || '').substring(0, 42);
+            var LG = (window.FASTPASS_UI && window.FASTPASS_UI.Logic) ? window.FASTPASS_UI.Logic : null;
+            // 1) ffprobe del fitxer: EXACTE.
+            var path = String(full || '');
+            var ff = (LG && LG.FFmpeg) ? LG.FFmpeg : null;
+            if (path && ff && typeof ff.getMediaDuration === 'function') {
+                try {
+                    var rp = await ff.getMediaDuration(path);
+                    if (rp && rp.ok && Number(rp.duration) > 0.05) {
+                        var dReal = this._snapDur(Number(rp.duration));
+                        log('📏 [XARXES] durada REAL (ffprobe) de «' + short + '…» = ' +
+                            Number(rp.duration).toFixed(3) + 's → ' + dReal.toFixed(2) + 's', 'INFO');
+                        return dReal;
+                    }
+                    log('⚠️ [XARXES] ffprobe sense durada de «' + short + '…» (' +
+                        String((rp && rp.error) || '?').substring(0, 60) + ')', 'WARN');
+                } catch (eP) { /* es prova la resta de xarxes */ }
+            } else if (!path) {
+                log('⚠️ [XARXES] «' + short + '…» sense ruta de fitxer → la durada s\'haurà d\'estimar',
+                    'WARN');
+            }
+            // 2) DOM del projecte.
+            var d = 0;
+            try {
+                d = Number(await U().callJSX('Project.itemDuration(' + JSON.stringify(name) + ')')) || 0;
+            } catch (e1) { d = 0; }
+            if (d > 0.1) return this._snapDur(d);
+            // 3) Estimació per mida (ÚLTIM recurs, avisada).
+            var WF = window.FASTPASS_UI ? window.FASTPASS_UI.Workflows : null;
+            var CF = (WF && WF.Chyrons) ? WF.Chyrons : null;
+            if (CF && typeof CF._tradMediaDur === 'function') {
+                try { d = Number(await CF._tradMediaDur({ name: String(name) }, null)) || 0; }
+                catch (e2) { d = 0; }
+            }
+            if (d > 0.1) {
+                var dEst = this._snapDur(d);
+                log('📏 [XARXES] durada ESTIMADA per mida de fitxer de «' + short + '…» = ' +
+                    dEst.toFixed(2) + 's (ni ffprobe ni el DOM no la donen; pot desviar-se uns ' +
+                    'frames)', 'WARN');
+                return dEst;
+            }
+            return 0;
+        },
+
+        /**
+         * _cobert: fracció [0..1] del tram `start→end` coberta pels clips del nom
+         * donat (SUMA de tots: el tuit pot ser part viva + congelat).
+         * @param {Array} grafClips - `_grafClips()`
+         * @param {string} name
+         * @param {number} start
+         * @param {number} end
+         * @returns {number}
+         */
+        _cobert: function (grafClips, name, start, end) {
+            var list = Array.isArray(grafClips) ? grafClips : [];
+            if (!name) return 0;
+            var T = L().TwittsOcr;
+            var iguals = (T && typeof T.mateixNom === 'function')
+                ? function (a, b) { return T.mateixNom(a, b); }
+                : function (a, b) { return String(a || '').toLowerCase() === String(b || '').toLowerCase(); };
+            var a0 = Number(start) || 0;
+            var b0 = Number(end) || 0;
+            var dur = Math.max(0.001, b0 - a0);
+            var cob = 0;
+            for (var i = 0; i < list.length; i++) {
+                var c = list[i];
+                if (!c || !iguals(c.name, name)) continue;
+                var a = Math.max(Number(c.start) || 0, a0);
+                var b = Math.min(Number(c.end) || 0, b0);
+                if (b > a) cob += (b - a);
+            }
+            return Math.min(1, cob / dur);
+        },
+
+        /**
+         * _placeAmbCongelat: col·loca el tuit a la seua durada REAL i CONGELA el
+         * seu últim frame fins al final del clip de V1 (petició d'usuari 30/10).
+         *
+         * Reutilitza la mecànica verificada del Tema-Títol/Traducció
+         * (`Chyrons._freezeZone` + `Chyrons._freezeTemaTitol`): zona de programa
+         * BUIDA validada (per a l'ALPHA del grafisme) + clip temporal + captura del
+         * frame + PNG importat al bin CHY estirat fins a `end`. Zero JSX nou.
+         *
+         * @param {Object} cand - { name, full? }
+         * @param {Object} clip - { start, end, name }
+         * @param {number} mediaDur - durada real del movie (s)
+         * @returns {Promise<{ok:boolean, placed?:boolean, why:string}>}
+         *   · `ok:true` → col·locat i cobrix el clip.
+         *   · `ok:false, placed:true` → col·locat (clip viu) però el congelat no ha
+         *     cobert el tram: NO s'ha de tornar a inserir.
+         *   · `ok:false` sense `placed` → no s'ha inserit res: el cridador pot fer
+         *     l'insert de sempre.
+         */
+        _placeAmbCongelat: async function (cand, clip, mediaDur) {
+            var T = L().TwittsOcr;
+            var name = String(cand && cand.name);
+            var start = Number(clip.start);
+            var end = Number(clip.end);
+            var freezeSec = Math.max(0, end - start - mediaDur);
+            var short = name.substring(0, 42);
+            var WF = window.FASTPASS_UI ? window.FASTPASS_UI.Workflows : null;
+            var CF = (WF && WF.Chyrons) ? WF.Chyrons : null;
+            if (!CF || typeof CF._freezeTemaTitol !== 'function' || typeof CF._freezeZone !== 'function') {
+                return { ok: false, why: 'el flux de chyrons no és carregat (no es pot congelar)' };
+            }
+            var zone = null;
+            try { zone = await CF._freezeZone(Math.max(2, mediaDur + 1)); } catch (eZ) { zone = null; }
+            if (!zone || !zone.ok) {
+                return { ok: false, why: 'no hi ha cap zona de programa BUIDA per capturar el congelat' };
+            }
+            log('🧊 [XARXES] «' + short + '…» dura ' + mediaDur.toFixed(2) + 's i el clip ' +
+                (end - start).toFixed(2) + 's → congelat del final (' + freezeSec.toFixed(2) + 's)', 'INFO');
+            // BUG #206: el congelat fa VARIS `Clips.insert` (temporal, clip viu i
+            // PNG) i el JSX retalla l'ÚLTIM clip de la pista en cada un → es
+            // fotografia la pista abans i es restauren els finals després.
+            var before = await this._grafClips();
+            var fr = null;
+            try {
+                fr = await CF._freezeTemaTitol(name, start, end, 'XARXES', {
+                    track: trackGraf(),
+                    animSec: mediaDur,
+                    tempTC: zone.tc,
+                    freezeSec: freezeSec,
+                    frameMid: true,
+                    alpha: true,
+                    zoneOk: true
+                });
+            } catch (eF) { fr = null; }
+            if (!fr || !fr.success) return { ok: false, why: 'el clip viu no s\'ha pogut inserir' };
+            // 🧷 GUARDA (2026-10-30): la part VIVA no pot passar-se del seu mèdia. Abans
+            // eixa comprovació no existia i, amb una durada ESTIMADA (mida de fitxer),
+            // la part viva quedava 16 frames més llarga que el movie. Ara la durada és
+            // exacta (ffprobe) i ací es MESURA el que ha quedat a la pista per a deixar
+            // constància (no es retalla: el PNG del congelat ja arrenca on acaba el clip
+            // viu; retallar-lo deixaria un forat sense imatge).
+            try {
+                var viu = findIn(await this._grafClips(), name, start);
+                if (viu) {
+                    var endViu = Number(viu.end) || 0;
+                    var endTeoric = start + mediaDur;
+                    var desvF = Math.round((endViu - endTeoric) / 0.04);
+                    if (Math.abs(endViu - endTeoric) > 0.041) {
+                        log('🧷 [XARXES] part viva «' + short + '…» acaba a ' + endViu.toFixed(2) +
+                            's i el mèdia a ' + endTeoric.toFixed(2) + 's (' + (desvF > 0 ? '+' : '') +
+                            desvF + ' frame/s → el congelat ho absorbix)', 'WARN');
+                    } else {
+                        log('🧷 [XARXES] part viva «' + short + '…» exacta: ' + mediaDur.toFixed(2) +
+                            's (final al mèdia, ' + (desvF > 0 ? '+' : '') + desvF + ' frame/s)', 'INFO');
+                    }
+                }
+            } catch (eViu) { }
+            var notes = [];
+            var rest = await this._restaura(before, name, start, notes);
+            if (rest) {
+                log('↩️ [XARXES] ' + rest + ' clip(s) de V' + trackGraf() +
+                    ' restaurat(s) al final que tenien', 'INFO');
+            }
+            if (notes.length) log('⚠️ [XARXES] reparació de V' + trackGraf() + ': ' + notes.join(' · '), 'WARN');
+            var cob = this._cobert(await this._grafClips(), name, start, end);
+            if (cob < 0.95) {
+                log('⚠️ [XARXES] «' + short + '…» col·locat però només cobrix el ' +
+                    (cob * 100).toFixed(0) + ' % del clip de V' + trackV1() + ' (' +
+                    T.tcStr(start) + '→' + T.tcStr(end) + ')', 'WARN');
+                return { ok: false, placed: true, why: 'el congelat no cobrix tot el clip' };
+            }
+            log('✅ [XARXES] col·locat «' + short + '…» a V' + trackGraf() + ' ' +
+                T.tcStr(start) + '→' + T.tcStr(end) + ' (viu ' + mediaDur.toFixed(2) +
+                's + congelat ' + freezeSec.toFixed(2) + 's)', 'INFO');
+            return { ok: true, why: '' };
+        },
+
+        /**
+         * _restaura: torna al FINAL que tenien els clips de la pista de grafismes
+         * que `Clips.insert` (JSX) haja pogut retallar.
+         *
+         * BUG #206: l'insert retalla `clips[numItems-1]`, és a dir l'ÚLTIM clip de
+         * la pista i NO el que s'acaba d'inserir. Es fotografia la pista ABANS i
+         * ací es repararen els finals.
+         *
+         * @param {Array} before - `_grafClips()` llegit ABANS de la inserció
+         * @param {string} name - nom inserit (se salten els clips propis a `s0`)
+         * @param {number} s0 - inici on s'ha inserit (s)
+         * @param {Array} notes - acumulador de notes per al log del cridador
+         * @returns {Promise<number>} quants clips s'han restaurat
+         */
+        _restaura: async function (before, name, s0, notes) {
+            var u = U();
+            var t = trackGraf();
+            var now = await this._grafClips();
+            var rest = 0;
+            for (var i = 0; i < (before || []).length; i++) {
+                var b = before[i];
+                if (!b) continue;
+                if (key(b.name) === key(name) && Math.abs((Number(b.start) || 0) - s0) <= 0.061) continue;
+                var bc = findIn(now, b.name, b.start);
+                if (!bc) {
+                    notes.push('ha desaparegut «' + String(b.name || '').substring(0, 26) + '» @' +
+                        (Number(b.start) || 0).toFixed(2) + 's');
+                    continue;
+                }
+                if (Math.abs((Number(bc.end) || 0) - (Number(b.end) || 0)) <= 0.06) continue;
+                var rin = (isFinite(Number(bc.inPoint)) && Number(bc.inPoint) >= 0) ? Number(bc.inPoint) : 0;
+                var rout = rin + Math.max(0.04, (Number(b.end) || 0) - (Number(bc.start) || 0));
+                try {
+                    await u.callJSX('Clips.retrim(' + t + ', ' + bc.index + ', ' + rin.toFixed(4) + ', ' +
+                        rout.toFixed(4) + ', ' + (Number(b.end) || 0).toFixed(4) + ", 'video')");
+                    rest++;
+                } catch (e3) {
+                    notes.push('restauració «' + String(b.name || '').substring(0, 26) + '»: ' + e3.message);
+                }
+            }
+            return rest;
+        },
+
+        /**
          * _fixPlacement: deixa el tuit inserit amb el FINAL demanat i torna els clips
          * que JA hi havia a la pista al seu estat previ.
          *
@@ -207,17 +499,6 @@
             var u = U();
             var t = trackGraf();
             var s0 = Number(start) || 0;
-            var key = function (n) { return String(n || '').toLowerCase().replace(/\.[^.]+$/, ''); };
-            var findIn = function (list, n, s) {
-                var k = key(n), best = null, bd = 0.061;
-                for (var i = 0; i < (list || []).length; i++) {
-                    var c = list[i];
-                    if (!c || key(c.name) !== k) continue;
-                    var d = Math.abs((Number(c.start) || 0) - (Number(s) || 0));
-                    if (d <= bd) { bd = d; best = c; }
-                }
-                return best;
-            };
             var notes = [];
             var c = findIn(await this._grafClips(), name, s0);
             if (!c) {
@@ -246,29 +527,7 @@
                 }
             }
             // 2. Restaurar els clips que ja hi eren i que el JSX haja pogut retallar.
-            var now = await this._grafClips();
-            var rest = 0;
-            for (var i = 0; i < (before || []).length; i++) {
-                var b = before[i];
-                if (!b) continue;
-                if (key(b.name) === key(name) && Math.abs((Number(b.start) || 0) - s0) <= 0.061) continue;
-                var bc = findIn(now, b.name, b.start);
-                if (!bc) {
-                    notes.push('ha desaparegut «' + String(b.name || '').substring(0, 26) + '» @' +
-                        (Number(b.start) || 0).toFixed(2) + 's');
-                    continue;
-                }
-                if (Math.abs((Number(bc.end) || 0) - (Number(b.end) || 0)) <= 0.06) continue;
-                var rin = (isFinite(Number(bc.inPoint)) && Number(bc.inPoint) >= 0) ? Number(bc.inPoint) : 0;
-                var rout = rin + Math.max(0.04, (Number(b.end) || 0) - (Number(bc.start) || 0));
-                try {
-                    await u.callJSX('Clips.retrim(' + t + ', ' + bc.index + ', ' + rin.toFixed(4) + ', ' +
-                        rout.toFixed(4) + ', ' + (Number(b.end) || 0).toFixed(4) + ", 'video')");
-                    rest++;
-                } catch (e3) {
-                    notes.push('restauració «' + String(b.name || '').substring(0, 26) + '»: ' + e3.message);
-                }
-            }
+            var rest = await this._restaura(before, name, s0, notes);
             if (rest) log('↩️ [TWITTS] ' + rest + ' clip(s) de V' + t + ' restaurat(s) al final que tenien', 'INFO');
             if (notes.length) log('⚠️ [TWITTS] reparació de V' + t + ': ' + notes.join(' · '), 'WARN');
 
@@ -286,114 +545,377 @@
         },
 
         /**
-         * runAuto: PASSADA AUTOMÀTICA (sense cap finestra ni botó).
+         * runAuto: PASSADA AUTOMÀTICA dels grafismes que es localitzen a la
+         * IMATGE. Es dispara al final de la col·locació de chyrons (🎯 COLOCAR,
+         * `runPlaceAllChyrons` a `js/main.js`).
          *
-         * S'ha de disparar NOMÉS des del final de la col·locació automàtica de
-         * chyrons (`runPlaceAllChyrons` a `js/main.js`): si la importació ha
-         * portat movies de tuit i algun no ha entrat al timeline, eixe és el
-         * senyal que el generador no els ha lligat a cap ítem (BUG #191).
+         * ── ÀRBRE (petició d'usuari, 30/10/2026 · D24/D25) ─────────────────
+         *   Hi ha cap CONVERSA / XARXES-TEXT al BIN?
+         *     NO → res a fer.
+         *     SÍ → per a cada ítem que NO és al timeline:
+         *       · amb bloc i TC de fiar → es col·loca pel TC, com qualsevol
+         *                                 wott (`_placeByTc`)
+         *       · amb bloc, sense TC    → OCR dels clips del timeline
+         *                                 (`_scanTimeline`)
+         *       · sense bloc (és V)     → rastreig de GRIS del bloc amb ffmpeg
+         *                                 → OCR dels clips amb la placa
+         *                                 → emparellament pel nom (`_rastreigBloc`)
+         *   El que no casa queda PENDENT (log + `status` groc) i es resol amb
+         *   Ctrl+clic 🎯 (`runGris`).
          *
          * @returns {Promise<{ok:boolean, placed:number, pendents:number, why:string}>}
          */
         runAuto: async function () {
             var res = { ok: false, placed: 0, pendents: 0, why: '' };
-            if (_running) { log('⏭️ [TWITTS] ja hi ha una passada en marxa', 'WARN'); res.why = 'ocupat'; return res; }
+            if (_running) { log('⏭️ [XARXES] ja hi ha una passada en marxa', 'WARN'); res.why = 'ocupat'; return res; }
             _running = true;
-            log('▶️ [TWITTS] passada automàtica (final de la col·locació de chyrons)', 'INFO');
+            log('▶️ [XARXES] passada automàtica (final de la col·locació de chyrons)', 'INFO');
             try {
                 var T = L().TwittsOcr;
-                var CL = L().Clips;
                 var c = T.opts({});
 
-                // 1. Movies de tuit: els que la IMPORTACIÓ ha deixat al projecte.
+                // ── 1. CONVERSA / XARXES-TEXT al BIN? ────────────────────────
                 var placedNames = await T.placedNames();
-                var fl = await T.flotants({ placed: placedNames });
-                if (!fl.ok) {
-                    res.why = fl.why;
-                    log('⚠️ [TWITTS] no s\'han pogut llegir els movies del projecte: ' + fl.why, 'WARN');
+                var it = await T.ocrItems({ placed: placedNames });
+                if (!it.ok) {
+                    res.why = it.why;
+                    log('⚠️ [XARXES] no s\'ha pogut llegir el BIN del projecte: ' + it.why, 'WARN');
                     return res;
                 }
-                if (!fl.files.length) {
-                    log('➖ [TWITTS] cap movie de tuit al projecte → res a fer', 'INFO');
+                if (!it.files.length) {
+                    log('➖ [XARXES] cap ítem CONVERSA/XARXES-TEXT al BIN → res a fer', 'INFO');
                     res.ok = true; return res;
                 }
-                var falten = fl.pendents.slice();
-                if (!falten.length) {
-                    log('➖ [TWITTS] els ' + fl.files.length + ' movie(s) de tuit ja són al timeline', 'INFO');
+                if (!it.pendents.length) {
+                    log('➖ [XARXES] els ' + it.files.length +
+                        ' ítem(s) CONVERSA/XARXES-TEXT ja són al timeline', 'INFO');
                     res.ok = true; return res;
                 }
-                log('🐦 [TWITTS] ' + falten.length + '/' + fl.files.length +
-                    ' movie(s) de tuit SENSE col·locar → es busquen els clips de V' + trackV1(), 'INFO');
-                status('TWITTS: ' + falten.length + ' tuit(s) per casar', 'warn');
-
-                // 2. Clips de V1 que no tenen cap grafisme damunt.
-                var v1 = [];
-                try { v1 = await CL.getTrackClips(trackV1(), 'video'); } catch (eV) { v1 = []; }
-                var graf = await this._grafClips();
-                var lliures = [];
-                for (var i = 0; i < (v1 || []).length; i++) {
-                    var cl = v1[i];
-                    if (!cl) continue;
-                    if ((Number(cl.end) - Number(cl.start)) < c.minDur) continue;
-                    if (this._covered(graf, cl)) continue;
-                    lliures.push(cl);
+                // ── 2. Classificar pel nom: TC de fiar / bloc sense TC / és V ──
+                var directes = [], ambBloc = [], esV = [];
+                for (var i = 0; i < it.pendents.length; i++) {
+                    var f = it.pendents[i];
+                    var inf = f.info || {};
+                    if (inf.teBloc && inf.tcFiable) directes.push(f);
+                    else if (inf.teBloc) ambBloc.push(f);
+                    else esV.push(f);
                 }
-                if (!lliures.length) {
-                    log('➖ [TWITTS] cap clip de V' + trackV1() + ' lliure per casar (tots ja tenen tuit o són curts)', 'INFO');
-                    res.ok = true; return res;
+                log('🧭 [XARXES] ' + it.pendents.length + '/' + it.files.length +
+                    ' per col·locar · ' + directes.length + ' amb TC (directe) · ' +
+                    ambBloc.length + ' amb bloc sense TC (gris+OCR) · ' +
+                    esV.length + ' sense bloc «V» (gris+OCR)', 'INFO');
+                status('XARXES: ' + it.pendents.length + ' per col·locar', 'warn');
+
+                var fet = { placed: 0, pendents: 0 };
+
+                // ── 3. Amb TC → igual que qualsevol wott ─────────────────────
+                if (directes.length) await this._placeByTc(directes, fet);
+
+                // ── 4. Amb bloc sense TC i sense bloc «V» → GRIS primer (ffmpeg) ─────
+                // (2026-10-30 · petició d'usuari) ABANS, els «amb bloc» anaven directes
+                // a l'OCR de TOTS els clips lliures: un PNG exportat + un OCR per clip
+                // (17 clips → 17 PNG + 17 tesseract) per a un sol tuit. Ara es mesura
+                // PRIMER la placa grisa amb ffmpeg (`GrafZonaGris`: 1 crida per clip,
+                // 3 frames de 64x64, cap PNG) i només s'exporta el frame dels clips que
+                // la tenen → cas real TNV V1 30/10: **1 PNG en compte de 17**. Si el
+                // gris no decidix, `_rastreigBloc` fa l'OCR de reserva de la resta
+                // (comportament antic: mai es perd un tuit per no vore la placa).
+                var perRastrejar = ambBloc.concat(esV);
+                if (perRastrejar.length) {
+                    await this._rastreigBloc(perRastrejar, it.paths, c, fet, true);
                 }
-                log('🔎 [TWITTS] clips de V' + trackV1() + ': ' + (v1 || []).length +
-                    ' · sense tuit damunt i ≥' + c.minDur + 's: ' + lliures.length, 'INFO');
 
-                // 3. UN frame per clip; el que casa es col·loca i ix del pòsit.
-                var self = this;
-                var col = 0, pend = 0;
-                await T.scanClips(lliures, falten, c, {
-                    // D19: el frame ix del MEDIA del clip (ffmpeg), no de la timeline.
-                    paths: fl.paths,
-                    onHit: async function (e) {
-                        if (!e.tria) {
-                            pend++;
-                            log('⚠️ [TWITTS] ' + T.tcStr(e.clip.start) + ' tuit @' + (e.handle || '—') +
-                                ' SENSE movie clar (millor ' + e.score + ') → queda PENDENT', 'WARN');
-                            return true;
-                        }
-                        var r = await self._place(e.tria, e.clip);
-                        if (!r.ok) {
-                            pend++;
-                            log('❌ [TWITTS] ' + T.tcStr(e.clip.start) + ': ' + r.why, 'ERROR');
-                            return true;
-                        }
-                        col++;
-                        // D10: la tria que ha funcionat es memoritza (si no venia
-                        // ja de la caché) → la pròxima volta casa sense puntuar.
-                        if (!e.apres) { try { T.learn(e.text, e.tria); } catch (eL) { } }
-                        for (var k = 0; k < falten.length; k++) {
-                            if (falten[k].name === e.tria.name) { falten.splice(k, 1); break; }
-                        }
-                        // Sense movies per col·locar, no es gasta cap OCR més.
-                        return falten.length > 0;
-                    }
-                });
-
+                var col = fet.placed, pend = fet.pendents;
                 res.ok = true; res.placed = col; res.pendents = pend;
-                log('🏁 [TWITTS] ' + col + ' col·locat(s) · ' + pend + ' pendent(s) · ' +
-                    falten.length + ' movie(s) sense ús', col ? 'INFO' : 'WARN');
-                status('TWITTS: ' + col + ' tuit(s) col·locat(s)' + (pend ? ' · ' + pend + ' pendent(s)' : ''),
+                log('🏁 [XARXES] ' + col + ' col·locat(s) · ' + pend + ' pendent(s) · ' +
+                    (it.pendents.length - col) + ' ítem(s) sense col·locar', col ? 'INFO' : 'WARN');
+                status('XARXES: ' + col + ' col·locat(s)' + (pend ? ' · ' + pend + ' pendent(s)' : ''),
                     col ? 'exito' : 'warn');
-                if (pend || falten.length) {
-                    log('ℹ️ [TWITTS] per als que queden: Ctrl+clic a la DIANA 🎯 ' +
-                        '(primer prova OCR; si no, llista dels tuit del dia del projecte)', 'INFO');
+                if (pend || col < it.pendents.length) {
+                    log('ℹ️ [XARXES] per als que queden: Ctrl+clic a la DIANA 🎯 ' +
+                        '(rastreig de gris; si no, finestra de selecció del grafisme)', 'INFO');
                 }
                 return res;
             } catch (e) {
                 res.why = e.message;
-                log('💥 [TWITTS] runAuto: ' + e.message, 'ERROR');
+                log('💥 [XARXES] runAuto: ' + e.message, 'ERROR');
                 return res;
             } finally {
                 _running = false;
             }
         },
+
+        /**
+         * _clipsLliures: clips de V1 que poden portar un tuit cremat: durada
+         * mínima (`minDur`, D14) i CAP grafisme de tuit damunt (`_covered`).
+         * @param {Object} [c] - recepta de TwittsOcr (`opts`)
+         * @returns {Promise<Array>} clips de `Clips.getTrackClips`
+         */
+        _clipsLliures: async function (c) {
+            var T = L().TwittsOcr;
+            var cfg = c || T.opts({});
+            var v1 = [];
+            try { v1 = await L().Clips.getTrackClips(trackV1(), 'video'); } catch (eV) { v1 = []; }
+            var graf = await this._grafClips();
+            var out = [];
+            for (var i = 0; i < (v1 || []).length; i++) {
+                var cl = v1[i];
+                if (!cl) continue;
+                if ((Number(cl.end) - Number(cl.start)) < cfg.minDur) continue;
+                if (this._covered(graf, cl)) continue;
+                out.push(cl);
+            }
+            log('🔎 [XARXES] clips de V' + trackV1() + ': ' + (v1 || []).length +
+                ' · lliures (≥' + cfg.minDur + 's i sense grafisme): ' + out.length, 'INFO');
+            return out;
+        },
+
+        /**
+         * _placeByTc: col·loca els ítems que porten TC de fiar (D24) pel TC del
+         * nom, **igual que qualsevol wott**: de l'instant del TC fins al final
+         * natural del mèdia, a la pista de grafismes.
+         * @param {Array}  cands - de `ocrItems().pendents` amb `info.tc`
+         * @param {Object} acc   - comptadors { placed, pendents }
+         */
+        _placeByTc: async function (cands, acc) {
+            var T = L().TwittsOcr;
+            var a = acc || { placed: 0, pendents: 0 };
+            var list = Array.isArray(cands) ? cands : [];
+            var graf = await this._grafClips();
+            for (var i = 0; i < list.length; i++) {
+                var f = list[i];
+                if (!f || !f.name) continue;
+                var tc = String((f.info || {}).tc || '');
+                var sec = T.tcToSec(tc);
+                var dur = Number(f.dur) || 0;
+                if (!(dur > 0)) {
+                    // (2026-10-30) Si el DOM no dóna durada, s'usa la del MEDI (ffprobe):
+                    // abans es deixava en 1 s i el tuit es col·locava tallat a 1 s.
+                    try { dur = await this._mediaDur(f.name, f.full); } catch (eD) { dur = 0; }
+                }
+                if (!(dur > 0)) dur = 1;
+                if (this._isPlaced(graf, f.name, sec, sec + dur)) {
+                    a.pendents = (a.pendents || 0) + 1;
+                    log('🛡️ [XARXES] «' + String(f.name).substring(0, 50) +
+                        '…» ja és a V' + trackGraf() + ' al TC ' + tc + ' → no es duplica', 'INFO');
+                    continue;
+                }
+                var r = await this._place(f, { start: sec, end: sec + dur, name: 'TC ' + tc });
+                if (!r.ok) {
+                    a.pendents = (a.pendents || 0) + 1;
+                    log('❌ [XARXES] TC ' + tc + ': ' + r.why, 'ERROR');
+                    continue;
+                }
+                a.placed = (a.placed || 0) + 1;
+            }
+            return a;
+        },
+
+        /**
+         * _scanTimeline: UN frame per clip (D1/D2) → OCR → emparellament pel
+         * nom amb els movies que falten (D13) → col·locació sobre el clip on ha
+         * casat (D15). La col·locació que funciona es memoritza (D10) i el
+         * movie ix del pòsit.
+         * @param {Array}  clips - clips (ja filtrats) on buscar
+         * @param {Array}  cands - movies pendents (`ocrItems().pendents`)
+         * @param {Object} paths - nom → ruta del media (ffmpeg)
+         * @param {Object} acc   - comptadors { placed, pendents }
+         */
+        _scanTimeline: async function (clips, cands, paths, acc) {
+            var T = L().TwittsOcr;
+            var a = acc || { placed: 0, pendents: 0 };
+            var falten = (Array.isArray(cands) ? cands : []).slice();
+            if (!falten.length || !(clips || []).length) return a;
+            var c = T.opts({});
+            var self = this;
+            var col = 0, pend = 0;
+            await T.scanClips(clips, falten, c, {
+                paths: paths || null,
+                onHit: async function (e) {
+                    if (!e.tria) {
+                        pend++;
+                        log('⚠️ [XARXES] ' + T.tcStr(e.clip.start) + ' tuit @' + (e.handle || '—') +
+                            ' SENSE movie clar (millor ' + e.score + ') → queda PENDENT', 'WARN');
+                        return true;
+                    }
+                    var r = await self._place({
+                        name: e.tria.name,
+                        // (2026-10-30) Ruta del FICHERO per a ffprobe: si el candidat no la
+                        // porta, es pren del mapa `paths` (nom → ruta) del mateix scan.
+                        full: e.tria.full || (paths && paths[e.tria.name]) || ''
+                    }, e.clip);
+                    if (!r.ok) {
+                        pend++;
+                        log('❌ [XARXES] ' + T.tcStr(e.clip.start) + ': ' + r.why, 'ERROR');
+                        return true;
+                    }
+                    col++;
+                    // D10: la tria que ha funcionat es memoritza (si no venia ja
+                    // de la caché) → la pròxima volta casa sense puntuar.
+                    if (!e.apres) { try { T.learn(e.text, e.tria); } catch (eL) { } }
+                    for (var k = 0; k < falten.length; k++) {
+                        if (falten[k].name === e.tria.name) { falten.splice(k, 1); break; }
+                    }
+                    // Sense movies per col·locar, no es gasta cap OCR més.
+                    return falten.length > 0;
+                }
+            });
+            a.placed = (a.placed || 0) + col;
+            a.pendents = (a.pendents || 0) + pend;
+            return a;
+        },
+
+        /**
+         * _rastreigBloc: (D26) rastreig de GRIS del bloc amb ffmpeg.
+         *
+         * Els ítems sense bloc (és V) NO porten TC ni línia d'escaleta: l'única
+         * manera de saber on van és BUSCAR LA FIRMA VISUAL del tuit cremat (la
+         * placa grisa de la franja inferior, `Logic.GrafZonaGris`) en els clips
+         * de V1 del bloc. Els que la tenen es passen a l'OCR (`_scanTimeline`),
+         * que emparella el text de la imatge amb el NOM del movie del BIN.
+         *
+         * @param {Array}  cands - movies pendents
+         * @param {Object} paths - nom → ruta del media
+         * @param {Object} c     - recepta de TwittsOcr (`minDur`, `maxClips`…)
+         * @param {Object} acc   - comptadors { placed, pendents }
+         * @param {boolean} [fallback] - (2026-10-30) `true` = si la placa grisa no
+         *   decidix (cap clip la té, o cap tuit s'hi ha col·locat), es fa l'OCR de
+         *   RESERVA dels clips sense placa, com es feia abans de filtrar pel gris.
+         *   El 🎯 (`runGris`) no el passa: allà el gris és el criteri de l'usuari.
+         */
+        _rastreigBloc: async function (cands, paths, c, acc, fallback) {
+            var T = L().TwittsOcr;
+            var G = L().GrafZonaGris;
+            var a = acc || { placed: 0, pendents: 0 };
+            var lliures = await this._clipsLliures(c);
+            if (!lliures.length) {
+                log('➖ [XARXES] cap clip de V' + trackV1() + ' lliure per al rastreig de gris', 'INFO');
+                return a;
+            }
+            if (!G || typeof G.detect !== 'function') {
+                log('⚠️ [XARXES] Logic.GrafZonaGris no disponible → no es pot rastrejar el ' +
+                    'gris (es fa OCR de tots els clips lliures)', 'WARN');
+                return this._scanTimeline(lliures, cands, paths, a);
+            }
+            var grisos = [], senseRuta = 0;
+            for (var i = 0; i < lliures.length; i++) {
+                var cl = lliures[i];
+                var ruta = T.pathOf(paths, cl.name);
+                if (!ruta) { senseRuta++; continue; }
+                // El tuit ja està muntat a partir de l'1,40 s del clip (D2).
+                var t0 = T.srcTime(cl, Number(cl.start) + 1.4);
+                var det = null;
+                try {
+                    det = await G.detect(ruta, { tStart: t0, tDur: 2, fps: 1, force: true });
+                } catch (eG) { det = null; }
+                if (det && det.ok && det.hasGrey) {
+                    grisos.push(cl);
+                    log('🎨 [XARXES] ' + T.tcStr(cl.start) + ' «' +
+                        String(cl.name || '').substring(0, 40) + '» TÉ placa grisa (' +
+                        (det.cov === null ? '?' : Number(det.cov).toFixed(1)) + ' %)', 'INFO');
+                } else if (det && det.ok === false) {
+                    log('⚠️ [XARXES] no s\'ha pogut mesurar el gris de «' +
+                        String(cl.name || '').substring(0, 40) + '»: ' + (det.err || '?'), 'WARN');
+                }
+            }
+            if (senseRuta) {
+                log('⚠️ [XARXES] ' + senseRuta + ' clip(s) sense ruta de media coneguda → ' +
+                    'no es poden mesurar', 'WARN');
+            }
+            if (!grisos.length) {
+                log('➖ [XARXES] cap clip amb placa grisa a V' + trackV1(), 'INFO');
+                if (fallback === true) {
+                    log('↩️ [XARXES] sense placa grisa → OCR de reserva dels ' +
+                        lliures.length + ' clip(s) lliures (1 PNG per clip)', 'WARN');
+                    return this._scanTimeline(lliures, cands, paths, a);
+                }
+                return a;
+            }
+            log('🔎 [XARXES] ' + grisos.length + ' clip(s) amb placa grisa → OCR i ' +
+                'emparellament pel nom amb el BIN', 'INFO');
+            var abans = Number(a.placed) || 0;
+            a = await this._scanTimeline(grisos, cands, paths, a);
+            // XARXA (2026-10-30): si la placa NO ha resolt cap tuit, el tuit pot ser
+            // en un clip que no dona gris (fons clar, placa tapada…) → es fa l'OCR
+            // de reserva NOMÉS de la resta. Sense això, filtrar pel gris podria
+            // deixar el tuit pendent per sempre.
+            if (fallback === true && (Number(a.placed) || 0) === abans) {
+                var resta = [];
+                for (var j = 0; j < lliures.length; j++) {
+                    if (grisos.indexOf(lliures[j]) === -1) resta.push(lliures[j]);
+                }
+                if (resta.length) {
+                    log('↩️ [XARXES] la placa grisa no ha resolt cap tuit → OCR de reserva ' +
+                        'dels ' + resta.length + ' clip(s) sense placa (1 PNG per clip)', 'WARN');
+                    a = await this._scanTimeline(resta, cands, paths, a);
+                }
+            }
+            return a;
+        },
+
+        /**
+         * runGris: Ctrl+clic a la DIANA 🎯 (D26).
+         *   1. Rastreig de GRIS del bloc (`_rastreigBloc`) amb els ítems
+         *      CONVERSA/XARXES-TEXT que falten del BIN.
+         *   2. Si el clip del cabezal continua sense grafisme → `runEmergency`
+         *      (OCR del clip i, si no decidix, la FINESTRA DE SELECCIÓ del
+         *      grafisme a importar), que el col·loca sobre eixe clip.
+         *
+         * @returns {Promise<{ok:boolean, placed?:number, pendents?:number, why?:string}>}
+         */
+        runGris: async function () {
+            var res = { ok: false, placed: 0, pendents: 0, why: '' };
+            if (_running) {
+                log('⏭️ [XARXES] ja hi ha una passada en marxa', 'WARN');
+                res.why = 'ocupat';
+                return res;
+            }
+            _running = true;
+            try {
+                var u = U();
+                var T = L().TwittsOcr;
+                try {
+                    if (u && u.validateActiveSequence && !(await u.validateActiveSequence())) return res;
+                } catch (eV) { }
+                var clip = await this._clipAtPlayhead();
+                if (!clip) {
+                    log('⚠️ [XARXES] cap clip de V' + trackV1() + ' davall del cabezal', 'WARN');
+                    status('XARXES: cap clip', 'error');
+                    res.why = 'cap clip';
+                    return res;
+                }
+                log('🎨 [XARXES] rastreig de gris (Ctrl+🎯) des de ' +
+                    T.tcStr(clip.start) + ' → ' + T.tcStr(clip.end), 'INFO');
+                var placed = await T.placedNames();
+                var it = await T.ocrItems({ placed: placed });
+                if (it.ok && it.pendents.length) {
+                    await this._rastreigBloc(it.pendents, it.paths, T.opts({}), res);
+                } else if (it.ok) {
+                    log('➖ [XARXES] cap ítem CONVERSA/XARXES-TEXT sense col·locar → ' +
+                        'no cal rastreig', 'INFO');
+                }
+                // El clip del cabezal, ja té grafisme?
+                if (this._covered(await this._grafClips(), clip)) {
+                    log('✅ [XARXES] el clip del cabezal ja té grafisme (' +
+                        (res.placed || 0) + ' col·locat(s) en esta passada)', 'INFO');
+                    status('XARXES: ' + (res.placed || 0) + ' col·locat(s)', 'exito');
+                    res.ok = true;
+                    return res;
+                }
+                log('🆘 [XARXES] el clip del cabezal continua sense grafisme → ' +
+                    'finestra de selecció del grafisme', 'WARN');
+            } catch (e) {
+                log('💥 [XARXES] runGris: ' + e.message, 'ERROR');
+                status('XARXES: error', 'error');
+                res.why = e.message;
+                return res;
+            } finally {
+                _running = false;
+            }
+            // 2. Finestra de selecció / OCR del clip del cabezal (D9).
+            return this.runEmergency();
+        },
+
         /**
          * _dayDir: DATA DE TREBALL, amb el PROJECTE OBERT com a font de veritat.
          * Mateix orde que `flow_srt.js::_srtCtx` (BUG #187) i
@@ -445,7 +967,7 @@
             var out = { ok: false, files: [], other: [], day: String(dateDir || ''), why: '' };
             var T = L().TwittsOcr;
             var S = L().Scan;
-            if (!T || typeof T.esXarxes !== 'function') { out.why = 'sense Logic.TwittsOcr'; return out; }
+            if (!T || typeof T.esOcrItem !== 'function') { out.why = 'sense Logic.TwittsOcr'; return out; }
             var folder = T.folder();                        // rutas.chyrons + '\'
             if (!folder) { out.why = 'falta Config.rutas.chyrons'; return out; }
             var target = String(dateDir || '').replace(/_/g, '');
@@ -463,7 +985,7 @@
                 for (var i = 0; i < names.length; i++) {
                     var n = String(names[i] || '');
                     if (!/\.mov$/i.test(n)) continue;
-                    if (!T.esXarxes(n)) continue;
+                    if (!T.esOcrItem(n)) continue;
                     movs.push(n);
                 }
                 // ── 2. Datació: caché del Scanner + només els que falten.
@@ -782,12 +1304,12 @@
                     ' «' + String(clip.name || '').substring(0, 50) + '» · dia del projecte ' +
                     (day || '?'), 'INFO');
 
-                // ── 1. Match automàtic (1 frame + OCR) amb els XARXES PENDENTS.
+                // ── 1. Match automàtic (1 frame + OCR) amb els que falten (D24).
                 var pend = [];
                 var fl = null;
                 try {
                     var placed = await T.placedNames();
-                    fl = await T.flotants({ placed: placed });
+                    fl = await T.ocrItems({ placed: placed });
                     if (fl && fl.ok) pend = fl.pendents || [];
                 } catch (eF) { pend = []; }
                 var oc = null;
@@ -798,7 +1320,11 @@
                         });
                     } catch (eO) { oc = null; }
                     if (oc && oc.ok && oc.isTuit && oc.best) {
-                        var r1 = await this._place({ name: oc.best.name, full: oc.best.full || '' }, clip);
+                        var r1 = await this._place({
+                            name: oc.best.name,
+                            // (2026-10-30) Ruta del fichero (ffprobe) si el match no la porta.
+                            full: oc.best.full || (fl && fl.paths && fl.paths[oc.best.name]) || ''
+                        }, clip);
                         if (r1.ok) {
                             try {
                                 T.learn(oc.text, {

@@ -54,6 +54,9 @@
 | **D21** | **La mostra torna a eixir de la TIMELINE (QE) i el mèdia queda de reserva** (2026-10-29, BUG #207): amb D19 el frame es llegia del fitxer en `srcTime(...)`, i eixe mapeig **no és fiable** en les V1 d'esta cadena — el 29/10 el frame del clip de `36:22` eixia del **contingut del clip de `43:08`** (i el de `33:13`, del de `40:07`), així que dos tuits (Feijóo i Nogueras) es van col·locar **2 clips abans** del que tocava. `samplePng` torna a capturar amb **`Render.snapshot`** (`Render.exportFrameQE` → `qeSeq.exportFramePNG`, el mateix mecanisme de `flow_chyrons._capturePng`, en producció des de fa setmanes): el frame de `sampleTime` és, **per construcció**, el d'eixe clip. ffmpeg + `srcTime` (D19) queda **només** de reserva si el QE no dóna cap frame. El log de cada clip diu la via (`· QE` / `· ffmpeg`). |
 | **D22** | **També SÓN tuit els exports a mà `wott x <nom>`** (2026-10-29, BUG #208): el redactor exporta alguns tuits com `wott x salvador illa.00666202.mov`, `wott x salvador illa1.00666204.mov` o `wott_v3 x pedro.00666211.mov`. No porten ni el rol `XARXES`, ni la marca `LUCYS`, ni el bloc a seques `_V_00_`, així que `esXarxes` els descartava **abans de datar-los** i l'emergència no els ensenyava mai. `esXarxes` accepta ara `^wott(?:[_ ]v\d+)?\s+x\s+\S` (la `x` ha d'anar **separada**: els ròtols corrents `Wott_MAT_v2_105_00.01_…` i `Wott_TNM_V4_082_00.35_…` continuen fora). Sense `_tp_`, el nom del titular s'extrau de darrere la `x` amb `nomNet` i es mostra tal qual a la finestra. |
 | **D23** | **La llista de l'emergència s'ordena per SEMBLANÇA amb el text del clip i es pot filtrar** (2026-10-29, BUG #208): `rankPick(items, textOcr)` puntua cada movie amb `semNombre` — +3 si el nom del titular (sense dígits ni espais) ix dins del text OCR, +1 per paraula del nom que hi ix (+0,5 si només n'ix un tros), +2 si un `@handle` del text ix dins del nom — i suma **+2** als que ja són al projecte; desempata pel **número d'export** del nom (`fileSuffix`: `…00666211.mov` > `…00666204.mov`, equivalent a l'hora de creació i **sense cap `stat` al NAS**). La finestra ensenya els punts (`★n`), té un **cercador** (`#tw-pick-q`, filtra en viu pel nom normalitzat) i es navega amb ↑/↓ + ⏎. A més, `_dayMovies` guarda a `other` el que cau en un altre dia o no es pot datar i `_recentOf` n'afig els **20 exports més recents** amb l'etiqueta «altre dia»: un tuit exportat a les 00:30 cau al dia anterior (regla nocturna) i seria invisible. Seguix sense ensenyar-se la carpeta sencera (1.300 fitxers). |
+| **D24** | **El criteri és el ROL i el TC del nom, no la família (2026-10-30 · petició d'usuari).** Només es col·loquen buscant-los a la imatge els ítems amb rol **`CONVERSA`** o **`XARXES-TEXT`** (`esOcrItem`; s'accepten sufixos com `XARXES-TEXT+FOTO`, i es manté la família d'export manual `wott x <nom>` de D22). Fora queden `LUCYS … Tema-Titol`, `… Directe`, `… Enviat`, `… Nomcarrec`… que `esXarxes` acceptava. **El TC és DE FIAR sempre EXCEPTE si és `00.00`** (`tcFiable`): un ítem **amb bloc i TC bo** es col·loca pel TC, **igual que qualsevol wott** (`_placeByTc`), sense OCR. `esXarxes` es queda només per a la idempotència (`_covered` / `_isPlaced`). |
+| **D25** | **Arbre de decisió (2026-10-30).** `runAuto`, al final de 🎯: (1) **hi ha cap CONVERSA/XARXES-TEXT al BIN?** Si no, no es fa res. (2) Per a cada ítem que no és al timeline: **amb bloc i TC de fiar → pel TC**; **amb bloc sense TC → OCR dels clips del timeline** (`_scanTimeline`); **sense bloc (és V) → rastreig de GRIS del bloc** (`_rastreigBloc`). El pòsit (`ocrItems`) llig **l'arrel + tots els bins** i descompta el que ja és al timeline amb `mateixNom` (tolerància al nom truncat de ~90 caràcters). |
+| **D26** | **Rastreig de GRIS i Ctrl+clic 🎯 (2026-10-30).** Un ítem «és V» no té TC ni línia d'escaleta: l'única manera de localitzar-lo és buscar la **firma visual del tuit cremat** (la placa grisa de la franja inferior) al **media de cada clip de V1 lliure**, amb `Logic.GrafZonaGris.detect` (ROI y 0,60→1,00, `#D9D9D9 ±25`, mediana de 2 mostres/s, `force: true` perquè la caché de GrafZonaGris no inclou el `tStart`). Els que la tenen passen a l'**OCR d'1 frame** i s'emparellen **pel nom** amb els movies del BIN; si no hi ha coincidència, l'ítem queda pendent. **`Ctrl+clic` a la DIANA 🎯 = `Twitts.runGris`**: fa eixe rastreig i, si el clip del cabezal continua sense grafisme, obri la **finestra de selecció del grafisme a importar** (`#twitts-pick`, la de D9) i el col·loca damunt d'eixe clip. |
 
 
 
@@ -232,3 +235,95 @@ pel nom (n'hi ha prou amb «illa» o «pedro») i ↑/↓ + ⏎ col·loquen sens
 | `bin/smoke/fp_smoke_build.ps1` | registre dels dos fitxers JS nous + el probe |
 
 Validació: `bin\check_all.ps1 -Only js,smoke`. **`jsx/` intacte.**
+
+## 10 · Revisió 30/10/2026: arbre de decisió (D24-D26)
+
+El pòsit deixa de ser «tuit genèric» i passa a ser el que s'ha de localitzar a la
+imatge. `Twitts.runAuto` (final del 🎯) fa exactament este arbre:
+
+```
+   Hi ha cap CONVERSA o XARXES-TEXT al BIN?   (ocrItems: arrel + tots els bins)
+        |
+        NO ──> res a fer
+        |
+        SI ──> per a cada ítem que NO és al timeline (mateixNom, nom truncat)
+                 |
+                 +-- TÉ BLOC i TC de fiar (no 00.00)?  ──> _placeByTc: es col·loca
+                 |                                        PEL TC, com qualsevol wott
+                 |
+                 +-- TÉ BLOC i TC 00.00?              ──> _scanTimeline: OCR d'1 frame
+                 |    (rastreig dels clips de l'ítem)      per clip → emparellar pel nom
+                 |
+                 +-- NO TÉ BLOC («és V»)              ──> _rastreigBloc:
+                          Gris amb ffmpeg (GrafZonaGris, 2 mostres/s al media)
+                          → clip amb placa grisa?
+                              SI → OCR → emparellar pel NOM amb el BIN
+                                     SI → es col·loca damunt d'eixe clip
+                                     NO → queda PENDENT (finestra de selecció amb Ctrl+🎯)
+                              NO → res
+```
+
+**Ctrl+clic a la DIANA 🎯 (`Twitts.runGris`)**
+
+1. Rastreja el gris del bloc (igual que el pas «és V»).
+2. Si el clip del cabezal **continua sense grafisme** → obri la **finestra de
+   selecció del grafisme** (`#twitts-pick`, la de D9) i col·loca el triat damunt
+   d'eixe clip (importa el movie si no és al projecte).
+
+**Peces noves a `22_TwittsOcr_Logic.js`** (pures, provades a `#TW/65`-`#TW/74`):
+`grafFields` (bloc/línia/TC/rol), `tcFiable`, `tcToSec`, `esOcrItem`,
+`mateixNom`; i l'orquestració `ocrItems` (substituïx `flotants` al flux, que es
+manté per compatibilitat).
+
+**Fora de l'abast d'este canvi:** el wott XARXES amb `V1_10_00.00` continua
+entrant a `_placeChyronsByType` com un rètol més (BUG **#210**, `XARXES_TC00`
+part 2): el filtre del marcador és el pròxim pas.
+
+
+## 11 · Revisió 30/10/2026 (2): gris ABANS de l'OCR i congelat de la cua (D27-D28)
+
+**D27 · El gris va ABANS de l'OCR, sempre.** Els ítems **amb bloc sense TC** anaven
+directes a `_scanTimeline` (un `Render.snapshot` + un OCR **per cada clip lliure** de
+V1: 17 clips = 17 PNG per a un sol tuit, mesurat al TNV V1 del 30/10). Ara `runAuto`
+passa **`ambBloc.concat(esV)`** a `_rastreigBloc(..., fallback = true)`: la placa grisa
+es mesura amb **ffmpeg** (`GrafZonaGris.detect`: 1 crida per clip, 3 frames de 64x64 de
+la franja inferior, **cap PNG**) i només s'exporta el frame dels clips que **tenen**
+placa → **1 PNG**. Xarxa de seguretat (`fallback`): si cap clip té placa, o si els
+clips amb placa no resolen cap tuit, es fa l'OCR de reserva de la resta (comportament
+antic). El 🎯 (`runGris`) **no** passa `fallback`: allà el gris és el criteri.
+
+**D28 · Si el clip de V1 és més llarg que el movie, CONGELAT del darrer frame.**
+`_mediaDur` resol la durada real amb la xarxa de la TRADUCCIÓ
+(`Chyrons._tradMediaDur`: DOM del bin CHY → `Project.itemDuration` → estimació per
+MIDA amb la correcció dels ProRes del canal) perquè `Project.itemDuration` pot tornar
+0. Amb `dur − mediaDur ≥ 0,12 s`, `_placeAmbCongelat` crida
+`Chyrons._freezeZone` (zona de programa BUIDA, per a l'ALPHA del grafisme) +
+`Chyrons._freezeTemaTitol` (clip temporal → captura → PNG al bin CHY estirat) amb
+`animSec = mediaDur` i `freezeSec = dur − mediaDur`. Es verifica amb `_cobert` ≥ 95 %
+(part viva + congelat) i es restauren els finals dels clips que el JSX haja retallat
+(`_restaura`, BUG #206). Si no hi ha zona garantible o el clip viu no s'inserix →
+**estirat** com abans + WARN (mai un congelat amb el vídeo de sota a dins).
+
+## 12 · Revisió 30/10/2026 (3): durada EXACTA i cap PNG de brossa (D29-D30)
+
+**D29 · La durada del movie la diu el FICHERO (ffprobe), no una estimació.**
+En la 2a prova en viu del TNV V1 (30/10) el clip viu va acabar **±16 frames** després
+del final real del movie (≈9 % de més en un movie de 7 s). `_mediaDur` només podia
+estimar per MIDA (`Chyrons._tradMediaDur` × 0,9548 × 0,995), calibrada amb els ProRes
+422 HQ **opacs** del canal (45,56 MB/s), i els movies de tuit són ProRes **amb ALPHA**
+(ProRes 4444), amb més bitrate → estimació llarga → `Clips.endCoherent` allargava el
+clip viu. Ara l'ordre és **1) `Logic.FFmpeg.getMediaDuration(path)`** (ffprobe del
+fitxer; el mateix àtom que `Titol·Petit` per al revers) → 2) `Project.itemDuration` →
+3) estimació per mida (a últim recurs, **avisant al log**). El resultat es porta a la
+rejilla de frames amb `_snapDur` (25 fps, frame més pròxim) perquè Premiere col·loca
+en frames sencers. `_placeAmbCongelat` **mesura** a la pista on acaba la part viva i
+ho diu al log (`🧷 … exacta`, `±N frame/s`); no retalla res.
+
+**D30 · Un sol PNG temporal i se suprimix tot seguit.** `C:\temp` tenia **17
+`fp_twitts_<n>.png` (10,3 MB)** per a un sol tuit i un sol bloc, perquè el nom portava
+l'índex del clip i només es borrava el propi ABANS de capturar-lo. Ara `pngPathOf`
+dóna **un sol fitxer** (`C:\temp\fp_twitts.png`, segur perquè `scanClips` va clip a
+clip amb `await`) i `ocrClip` el suprimix **després** de llegir-lo (`_netejaPng`, amb i
+sense `.png`) → residu 0. Els `freeze_*.png` de `Snapshots\` **no** es toquen: són el
+media del clip del congelat dins del timeline.
+
