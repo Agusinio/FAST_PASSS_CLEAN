@@ -42,6 +42,12 @@ $files = @(
     (Join-Path $repo 'js\core\analysis_center.js'),
     (Join-Path $repo 'js\core\session_manifest.js'),
     (Join-Path $repo 'js\core\assembly_context.js'),
+    # (2026-11-03 · BUG #230) CONFIG REAL al harness: `flow_chyrons._burnedGrafRoles` llegix
+    # `Config.get().titolet.detectRoles` (les 27 etiquetes de la família cremada). Sense este
+    # fitxer, `Config.get` no era funció i el harness petava a mitjan passada (el smoke es
+    # quedava en 120 asertos i «HARNESS ASYNC ERROR» sortia com a verd). És un mòdul PUR de
+    # definició: `init()`/`saveSelection` (les que toquen DOM/localStorage) no s'executen.
+    (Join-Path $repo 'js\core\11_Configuracio.js'),
     (Join-Path $repo 'js\logic\16_Analysis_Logic.js'),
     (Join-Path $repo 'js\workflows\flow_markers.js'),
     (Join-Path $repo 'js\workflows\flow_mainButton.js'),

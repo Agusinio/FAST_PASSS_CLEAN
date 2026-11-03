@@ -5,6 +5,10 @@
  * l'espai hàbil el marca el CLIP SELECCIONAT al timeline (o, si no n'hi ha, el clip
  * de la pista MP4 que conté el cabezal). El MARCADOR de l'ítem NOMÉS serveix per
  * triar l'ÍTEM d'escaleta (coincidència de nom amb el fitxer de ZZZ_GRAFISME).
+ * (2026-11-03 · petició d'usuari) CAP ANCRATGE A MARCADOR al flux manual: en clicar
+ * 🎨 el grafisme entra ON ÉS EL CABEZAL (el 28/10 es movia al marcador de l'ítem i
+ * l'operador no ho vol). I la carpeta del dia es resol amb `_dayFolder` (noms humans:
+ * «3 NOVEMBRE» / «01 NOVEMBRE» / «3 DE NOVEMBRE», i si cal per data de creació).
  * (2026-09-18) Amb el clip a substituir SELECCIONAT al timeline, aquest workflow ofereix 3 opcions:
  *   1) Importar el(s) fitxer(s) de la carpeta del dia que coincideixin amb el nom
  *      de l'ÍTEM D'ESCALETA on és el cabezal.
@@ -118,6 +122,8 @@
          * queda amb el cabezal de sempre.
          * (2026-10-28 · 3a volta) Cas viu: `app google tots sant gervasi esvoranc.mov`
          * contra «01p22 - P2 PAS 1 GOOGLE tots SANT GERVASI ESVORANC» → 0,91.
+         * (2026-11-03) El flux manual de la paleta ja NO crida `_anchorMarker`: mana
+         * sempre el cabezal. El llindar només afecta qui cride l'àtom.
          */
         MATCH_MIN: 0.60,
 
@@ -142,7 +148,7 @@
             L('🎨 [MAPA·MARKS] ' + cand.length + ' marcador(s) amb grafisme associat: ' +
                 cand.map(function (c) { return c.num + '@' + c.time.toFixed(2) + 's'; }).join(', '));
 
-            var folder = this._folderForDate(await this._resolveDateDir());
+            var folder = await this._dayFolder(await this._resolveDateDir());
             if (!folder) {
                 L('⚠️ [MAPA·MARKS] No puc resoldre la carpeta del dia', 'WARN');
                 U().status('MAPA: carpeta del dia no resolta', 'error');
@@ -324,7 +330,7 @@
                     refSec.toFixed(2) + 's · espai hàbil fins ' + ref.end.toFixed(2) + 's');
 
                 var dateDir = await this._resolveDateDir();
-                var folder = this._folderForDate(dateDir);
+                var folder = await this._dayFolder(dateDir);
                 if (!folder) {
                     L('⚠️ [MAPA] No puc resoldre la carpeta del dia (data projecte: "' + dateDir + '")', 'WARN');
                     U().status('MAPA: carpeta del dia no resolta', 'error');
@@ -363,33 +369,13 @@
                     return;
                 }
 
-                // (2026-10-28 · 3a volta) EL GRAFISME VA AL MARCADOR DEL SEU ÍTEM, NO AL
-                // CABEZAL NI AL MARCADOR SELECCIONAT. Cas viu: amb un altre marcador
-                // seleccionat al panell, l'insert eixia a la seua posició. Ara, un cop
-                // triats els fitxers, es busca el marcador amb coincidència RELATIVA de
-                // nom (`_anchorMarker`) i s'ancora ahí; si no n'hi ha cap, es manté el
-                // cabezal de sempre (res canvia respecte d'abans).
-                try {
-                    var anc = await this._anchorMarker(picked, cti);
-                    if (anc && Math.abs(anc.time - refSec) > 0.05) {
-                        var refA = await this._refClipAt(anc.time);
-                        if (refA) {
-                            L('🗺️ [MAPA] Entrada MOVIDA al marcador ' + anc.num + ' (' + anc.time.toFixed(2) +
-                                's): abans el cabezal/selecció la posava a ' + refSec.toFixed(2) + 's');
-                            ref = refA;
-                            refSec = anc.time;
-                            item = await this._itemAtCti(refSec);
-                            L('🗺️ [MAPA] Referència = V' + ref.track + '[' + ref.index + '] "' + ref.name +
-                                '" (' + ref.start.toFixed(2) + 's→' + ref.end.toFixed(2) + 's) · espai hàbil fins ' +
-                                ref.end.toFixed(2) + 's');
-                        } else {
-                            L('⚠️ [MAPA·àncora] El marcador ' + anc.num + ' (' + anc.time.toFixed(2) +
-                                's) no té cap clip de V1 → es manté el cabezal', 'WARN');
-                        }
-                    }
-                } catch (eA) {
-                    L('⚠️ [MAPA·àncora] ' + eA.message + ' → es manté el cabezal', 'WARN');
-                }
+                // (2026-11-03 · petició d'usuari) EL GRAFISME VA AL CABEZAL, SEMPRE.
+                // El 28/10 el flux l'ancorava al MARCADOR del seu ítem (`_anchorMarker`)
+                // i eixe desplaçament sobrava: en clicar 🎨 l'operador vol el grafisme
+                // ON TÉ EL CABEZAL. `_anchorMarker`/`MATCH_MIN`/`ANCHOR_LINE` es queden
+                // al mòdul (els usa el marcatge per marcadors i les proves) però este
+                // flux manual ja no els consulta.
+                L('🗺️ [MAPA] Entrada = el CABEZAL (' + refSec.toFixed(2) + 's) · no s\'ancora a cap marcador');
 
                 var items = await this._import(picked);
                 if (!items.length) { U().status('MAPA: importació fallida', 'error'); return; }
@@ -487,6 +473,10 @@
 
         // ═══════════════════════════════════════════════════════════════
         // CARPETA DEL DIA: 2026_09_17 → "17 SETEMBRE"
+        // (2026-11-03) `_folderForDate` només CONSTRUÏX el nom canònic. Qui decidix
+        // quina carpeta es fa servir és `_dayFolder` (variants humanes + data de
+        // creació), perquè al NAS els noms els escriu una persona: hi ha
+        // «28 OCTUBRE», «01 NOVEMBRE» i «2 NOVEMBRE» alhora.
         // ═══════════════════════════════════════════════════════════════
         _folderForDate: function (dateDir) {
             var m = String(dateDir || '').match(/(\d{4})[_-](\d{2})[_-](\d{2})/);
@@ -503,21 +493,216 @@
         },
 
         /**
-         * _folderExists: la carpeta existix de debò? (àtom JSX `IO.exists`).
-         * Serveix per a no passar mai a `cep.fs.showOpenDialog` una ruta inicial
-         * inexistent (en eixe cas el diàleg obri a l'últim directori recordat).
+         * _folderExists: la CARPETA existix de debò?
+         *
+         * ⚠️ (2026-11-03 · BUG corregit) ABANS només preguntava a l'àtom JSX
+         * `IO.exists`, que fa `new File(path)` i respon `f instanceof File`: valora
+         * FITXERS i diu «false» per a qualsevol DIRECTORI. Resultat: la carpeta del
+         * dia sempre «no existia», `_dialogFolder` queia sempre a l'arrel (o a null)
+         * i el navegador arrancava on recordava Windows. ARA mana la via NATIVA de
+         * CEP: `cep.fs.readdir` només respon `err === 0` en carpetes (i costa
+         * mil·lisegons). El JSX queda de reserva per si CEP no hi és, amb l'avís que
+         * aquell àtom només coneix fitxers.
          * @param {string} folder
          * @returns {Promise<boolean>}
          */
         _folderExists: async function (folder) {
             if (!folder) return false;
+            var ruta = String(folder);
             try {
-                var r = await callJSX("IO.exists('" + U().escape(String(folder)) + "')");
+                if (window.cep && window.cep.fs && window.cep.fs.readdir) {
+                    var rd = window.cep.fs.readdir(ruta);
+                    return !!(rd && rd.err === 0);   // err != 0 = no és carpeta llegible
+                }
+            } catch (eC) {
+                L('⚠️ [MAPA] No puc comprovar la carpeta "' + ruta + '": ' + eC.message, 'WARN');
+            }
+            try {
+                L('⚠️ [MAPA] CEP no oferix readdir → comprovació per JSX (només fitxers): ' + ruta, 'WARN');
+                var r = await callJSX("IO.exists('" + U().escape(ruta) + "')");
                 return String(r).trim() === 'true';
             } catch (e) {
-                L('⚠️ [MAPA] No puc comprovar la carpeta "' + folder + '": ' + e.message, 'WARN');
+                L('⚠️ [MAPA] No puc comprovar la carpeta "' + ruta + '": ' + e.message, 'WARN');
                 return false;
             }
+        },
+
+        /**
+         * _dayFolderNames: noms CANÒNICS possibles de la carpeta del dia.
+         * (2026-11-03 · petició d'usuari) Els noms els escriu una persona: «28 OCTUBRE»,
+         * «01 NOVEMBRE», «2 NOVEMBRE», «3 DE NOVEMBRE». Es proven les quatre formes
+         * habituals (dia amb i sense zero davant, amb i sense «DE») ABANS de res més.
+         * Cost zero: només construïx cadenes.
+         * @param {number} day - 1-31
+         * @param {number} month - 1-12
+         * @returns {Array<string>}
+         */
+        _dayFolderNames: function (day, month) {
+            var mes = MESOS[month - 1];
+            if (!mes || !(day >= 1 && day <= 31)) return [];
+            var d2 = ('0' + day).slice(-2);
+            var tot = [day + ' ' + mes, d2 + ' ' + mes, day + ' DE ' + mes, d2 + ' DE ' + mes];
+            var out = [];
+            for (var i = 0; i < tot.length; i++) {
+                if (out.indexOf(tot[i]) === -1) out.push(tot[i]);
+            }
+            return out;
+        },
+
+        /**
+         * _pickDayFolder: tria, dins del LLISTAT REAL de subcarpetes, la que parla del
+         * dia i el mes demanats. Regla: ha de dur el DIA («3» o «03») I el MES
+         * («NOVEMBRE/NOVEMB» o «11»). Desempat: guanya la que coincidix exactament amb
+         * un nom canònic (`_dayFolderNames`) i, en igualtat, la primera del llistat
+         * (estable: la mateixa entrada dóna sempre el mateix resultat).
+         * @param {Array<string>} names - noms de subcarpeta tal com són al disc
+         * @param {number} day
+         * @param {number} month
+         * @returns {string|null} el nom triat o null si cap parla d'eixe dia
+         */
+        _pickDayFolder: function (names, day, month) {
+            var mes = MESOS[month - 1];
+            if (!mes || !names || !names.length) return null;
+            var mes4 = this._norm(mes).slice(0, 4);       // NOVE (NOVEMBRE / NOVEMB)
+            var mesNum = ('0' + month).slice(-2);         // 11
+            var d1 = String(day);
+            var d2 = ('0' + day).slice(-2);
+            var canon = this._dayFolderNames(day, month);
+            var best = null, bestPunt = -1;
+            for (var i = 0; i < names.length; i++) {
+                var cru = String(names[i] || '');
+                if (!cru || cru.indexOf('.') !== -1) continue;      // fitxers (GRAF.lnk…) fora
+                var nm = this._norm(cru);
+                if (!nm) continue;
+                var toks = nm.split(' ');
+                var teDia = false, teMes = false, teMesNum = false;
+                for (var j = 0; j < toks.length; j++) {
+                    var t = toks[j];
+                    if (t === d1 || t === d2) teDia = true;
+                    if (t.indexOf(mes4) === 0) teMes = true;
+                    if (t === mesNum) teMesNum = true;
+                }
+                if (!teDia || (!teMes && !teMesNum)) continue;
+                var punt = (teMes ? 2 : 0) + (teMesNum ? 1 : 0) + (canon.indexOf(cru) !== -1 ? 2 : 0);
+                if (punt > bestPunt) { bestPunt = punt; best = cru; }
+            }
+            return best;
+        },
+
+        /**
+         * _pickFolderByCreated: tria pel DATO EXACTE, la data de CREACIÓ de la carpeta.
+         * (2026-11-03 · petició d'usuari) Quan el nom no es pot interpretar («mira quan
+         * es va crear: ahí tindràs el dato exacto»), mana el dia en què es va crear la
+         * subcarpeta. Si el sistema no dóna la creació (UNC), es fa servir la
+         * modificació, que en una carpeta del dia és el mateix dia.
+         * @param {Array<Object>} items - [{ name, created, modified }] en ms (0 = sense dat)
+         * @param {string} ymd - 'YYYY_MM_DD' (data de treball)
+         * @returns {string|null} nom de la carpeta o null
+         */
+        _pickFolderByCreated: function (items, ymd) {
+            var m = String(ymd || '').match(/(\d{4})[_-](\d{2})[_-](\d{2})/);
+            if (!m || !items || !items.length) return null;
+            var y = +m[1], mo = +m[2], d = +m[3];
+            var best = null, bestT = -1;
+            for (var i = 0; i < items.length; i++) {
+                var it = items[i] || {};
+                var t = Number(it.created) || Number(it.modified) || 0;
+                if (!t || !isFinite(t)) continue;
+                var dt = new Date(t);
+                if (dt.getFullYear() !== y || (dt.getMonth() + 1) !== mo || dt.getDate() !== d) continue;
+                if (t > bestT) { bestT = t; best = it.name; }
+            }
+            return best || null;
+        },
+
+        /**
+         * _listSubfolders: NOMS del contingut d'una carpeta per la via NATIVA de CEP
+         * (`cep.fs.readdir`), sense demanar cap atribut (2-54 ms al NAS). Es descarten
+         * els noms amb extensió: en eixa arrel hi ha enllaços com «GRAF.lnk».
+         * @param {string} root
+         * @returns {Array<string>} noms (pot ser [], mai null)
+         */
+        _listSubfolders: function (root) {
+            var out = [];
+            try {
+                if (!root || !window.cep || !window.cep.fs || !window.cep.fs.readdir) return out;
+                var rd = window.cep.fs.readdir(String(root));
+                if (!rd || rd.err !== 0 || !rd.data) return out;
+                for (var i = 0; i < rd.data.length; i++) {
+                    var n = rd.data[i];
+                    n = (typeof n === 'string') ? n : (n && n.name);
+                    if (!n || /^\.[^.]*$/.test(n)) continue;              // ocults
+                    if (/\.[a-z0-9]{2,4}$/i.test(n)) continue;            // fitxers
+                    out.push((U() && U()._decodeName) ? U()._decodeName(n) : n);
+                }
+            } catch (e) {
+                L('⚠️ [MAPA] No puc llistar la carpeta arrel: ' + e.message, 'WARN');
+            }
+            return out;
+        },
+
+        /**
+         * _dayFolder: CARPETA DEL DIA que cal fer servir per a una data de treball.
+         * (2026-11-03 · petició d'usuari) Al NAS les carpetes són «28 OCTUBRE»,
+         * «01 NOVEMBRE», «2 NOVEMBRE»… No hi ha una regla única, així que:
+         *   1) nom canònic (`_folderForDate`) — el cas normal, un sol readdir;
+         *   2) variants amb zero davant / «DE» (`_dayFolderNames`);
+         *   3) coincidència tolerant damunt del llistat real (`_pickDayFolder`);
+         *   4) DATO EXACTE: la subcarpeta creada eixe dia (`_pickFolderByCreated`).
+         * Cap de les quatre → null (i el navegador obrirà a l'arrel, amb avís).
+         * @param {string} dateDir - data de treball 'YYYY_MM_DD'
+         * @returns {Promise<string|null>} ruta de la carpeta del dia
+         */
+        _dayFolder: async function (dateDir) {
+            var base = this._folderForDate(dateDir);
+            if (!base) return null;
+            if (await this._folderExists(base)) return base;
+            var root = _grafRoot();
+            var m = String(dateDir || '').match(/(\d{4})[_-](\d{2})[_-](\d{2})/);
+            if (!root || !m) return null;
+            root = String(root).replace(/[\\/]+$/, '');
+            var day = parseInt(m[3], 10), month = parseInt(m[2], 10);
+
+            var vars = this._dayFolderNames(day, month);
+            for (var i = 0; i < vars.length; i++) {
+                if (root + '\\' + vars[i] === base) continue;      // ja provada
+                if (await this._folderExists(root + '\\' + vars[i])) {
+                    L('🗺️ [MAPA] Carpeta del dia per NOM (variant): "' + vars[i] + '" (' + dateDir + ')');
+                    return root + '\\' + vars[i];
+                }
+            }
+
+            var noms = this._listSubfolders(root);
+            var pes = this._pickDayFolder(noms, day, month);
+            if (pes && await this._folderExists(root + '\\' + pes)) {
+                L('🗺️ [MAPA] Carpeta del dia per NOM (tolerant): "' + pes + '" (' + dateDir + ')');
+                return root + '\\' + pes;
+            }
+
+            var ambDat = [];
+            for (var k = 0; k < noms.length; k++) {
+                var full = root + '\\' + noms[k];
+                var creat = 0, modif = 0;
+                try {
+                    if (window.cep && window.cep.fs && window.cep.fs.stat) {
+                        var st = window.cep.fs.stat(full);
+                        if (st && st.err === 0 && st.data) {
+                            creat = Number(st.data.creationTime) || 0;
+                            modif = Number(st.data.mtime) || 0;
+                        }
+                    }
+                } catch (eS) { creat = 0; modif = 0; }
+                ambDat.push({ name: noms[k], created: creat, modified: modif });
+            }
+            var perData = this._pickFolderByCreated(ambDat, dateDir);
+            if (perData && await this._folderExists(root + '\\' + perData)) {
+                L('🗺️ [MAPA] Carpeta del dia per DATA DE CREACIÓ: "' + perData + '" (' + dateDir + ')');
+                return root + '\\' + perData;
+            }
+
+            L('⚠️ [MAPA] Carpeta del dia NO resolta per a ' + dateDir + ' a "' + root + '" (subcarpetes: ' +
+                (noms.join(' · ') || 'cap') + ')', 'WARN');
+            return null;
         },
 
         /**
@@ -528,7 +713,7 @@
          *   1) la carpeta del dia (si existix)
          *   2) l'arrel de grafismes de la config (si existix)
          *   3) null → CEP decidix (últim recurs, amb avís al log)
-         * @param {string} folder - carpeta del dia ja calculada (`_folderForDate`).
+         * @param {string} folder - carpeta del dia ja calculada (`_dayFolder`).
          * @returns {Promise<string|null>}
          */
         _dialogFolder: async function (folder) {

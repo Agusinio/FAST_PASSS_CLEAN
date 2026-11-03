@@ -68,6 +68,13 @@ $defs = @{
 
 # Cada control te el seu format de resum; ací es normalitza a "ok/total".
 function Get-Summary([string]$Kind, [string]$Text) {
+    # (2026-11-03 · BUG #231) Un error DEL HARNESS no es pot llegir com a verd: si la
+    # cadena de proves peta (sincrona/asincrona) o venç el TIMEOUT, el runner bolca
+    # l'estat parcial i el cos encara pot dur un resum "PASS n FAIL 0" (les proves
+    # que no van correr no compten). Eixe senyal mana sobre el resum.
+    if ($Kind -eq 'smoke' -and $Text -match 'HARNESS\s+(?:(?:ASYNC|SYNC)\s+)?ERROR|HARNESS\s+TIMEOUT') {
+        return [pscustomobject]@{ Text = 'harness-error'; Fail = 1; Found = $true }
+    }
     if ($Kind -eq 'total') {
         $m = [regex]::Match($Text, 'TOTAL\s+(\d+)\s*\|\s*OK\s+(\d+)\s*\|\s*FAIL\s+(\d+)')
         if ($m.Success) {

@@ -93,7 +93,7 @@ veredicte:        mediana de les 3 cobertures  >=  30 %  →  hasGrey
 _placeClips(items, refSec, freeze, ref, ctx)
  ├─ 0. neteja prèvia de les restes del BLOC a V2 **i** V3 (per nom de media)
  ├─ 0b. _zonaGris(items, ctx)            ← mesura el FITXER original · NOMÉS INFO al log
- ├─ 0c. _anchorMarker(picked, cti)       ← MARCADOR del seu ítem per NOM (#203)
+ ├─ 0c. (03/11 · #233) FORA del flux manual: mana el CABEZAL (l'àtom _anchorMarker es queda)
  ├─ 0d. _itemRangeAt(refSec)             ← [marcador de l'ítem, següent marcador]
  │        └─ _mascaraAParking(rng, TRACK_MASCARA, TRACK_GRAF)
  │              ok  → tGraf = TRACK_MASCARA (V2)   ← SEMPRE que es puga (2a volta)
@@ -114,10 +114,16 @@ lletres (`01`, `01i`, `01dir`, `02dp`, `19C`): els **sub-ítems** amb dígits de
 el final del programa. Si la seqüència no té cap marcador de línia reconeixible es fa servir
 qualsevol número (i s'avisa al log).
 
-### 4.1 · On va el grafisme: `_anchorMarker` (#203)
+### 4.1 · On va el grafisme: el CABEZAL (03/11 · #233 anul·la l'ancoratge de #203)
 
-El punt d'entrada **no** és el cabezal ni el marcador seleccionat al panell: és el **marcador
-de l'ítem del fitxer triat**. Un cop triats els fitxers, `_anchorMarker(picked, cti)` llig
+**Decisió vigent (2026-11-03, petició d'usuari)**: el flux manual de la paleta col·loca el
+grafisme **ON ÉS EL CABEZAL** (`refSec`). `_anchorMarker` ja **no** es crida des de `_flow`:
+l'àtom queda per al marcatge per marcadors (`runFromMarkers`) i per a les proves. El text de
+davall és l'ancoratge que es va provar el 28/10 (#203), conservat com a documentació de per què
+l'àtom existix.
+
+~~El punt d'entrada **no** és el cabezal ni el marcador seleccionat al panell: és el **marcador
+de l'ítem del fitxer triat**.~~ Un cop triats els fitxers, `_anchorMarker(picked, cti)` llig
 `Markers.get()` i puntua **cada fitxer contra cada marcador numerat** (sub-ítems inclosos):
 
 * `_normFon` — normalització fonètica suau damunt de la de sempre: **B→V**, **Y→I**,
@@ -181,10 +187,10 @@ s'inventa mitja que no existisca.
 | El troç de màscara ja es va pujar en un intent anterior | la cua/original de V2 ja no existixen → V3 és ocupada → `DESTI_OCUPAT` (cal desfer el canvi abans de repetir) |
 | Una mostra cau en una transició (fundit, cortineta) | la **mediana** de les 3 mostres no canvia el veredicte |
 | El grafisme és més curt que la finestra | es mesuren les mostres que hi ha (1 o 2) i mana la mediana; amb 2 es pren la baixa |
-| Hi ha **un altre marcador seleccionat** al panell | no compta: l'àncora és el marcador del **nom del fitxer** (#203) |
-| El nom del fitxer **no és igual** al del marcador (B/V, accents, paraules de més) | `_scoreNombre` el reconeix si arriba a 0,60; el log diu el `score` |
-| El millor marcador és un **sub-ítem** (`01p22`) | l'àncora passa a l'**inici de la LÍNIA** (`01i`) amb `ANCHOR_LINE` |
-| Cap marcador arriba a `MATCH_MIN` | `_anchorMarker` → `null` → **cabezal** (comportament de sempre) |
+| Hi ha **un altre marcador seleccionat** al panell | no compta: mana el **cabezal** (#233) |
+| El nom del fitxer no coincidix amb cap marcador | no passa res: el grafisme va al **cabezal** (#233) |
+| La carpeta del dia té un nom humà («01 NOVEMBRE», «3 DE NOVEMBRE») | `_dayFolder` prova variants, coincidència tolerant i, si cal, la **data de creació** (#233) |
+| (només si es crida l'àtom) el millor marcador és un **sub-ítem** (`01p22`) | l'àncora passa a l'**inici de la LÍNIA** (`01i`) amb `ANCHOR_LINE` |
 | El marcador triat no té clip a V1 | es descarta l'àncora i es manté el cabezal (avís al log) |
 | El `retrim` deixa el troç 1-2 frames curt del marcador | `_ajustarFiAlMarcador` l'allarga fins al marcador |
 | El mèdia de la màscara s'acaba abans del marcador | no s'allarga: es **restaura** i s'avisa dels segons que falten |

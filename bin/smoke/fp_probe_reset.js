@@ -778,10 +778,10 @@
                 ok('#196 la prova de comportament de `_resolveDateDir` no ha llancat', false, eRD && eRD.message);
             }
 
-            ok('cache-busts 28/10: flow_render 40 · flow_mapa 32 · srt_editor 88',
-                /flow_render\.js\?v=40/.test(idx) && /flow_mapa\.js\?v=32/.test(idx) &&
+            ok('cache-busts: flow_render 40 · flow_mapa 33 · srt_editor 88',
+                /flow_render\.js\?v=40/.test(idx) && /flow_mapa\.js\?v=33/.test(idx) &&
                 /srt_editor\.js\?v=88/.test(idx),
-                'render=' + /flow_render\.js\?v=40/.test(idx) + ' * mapa=' + /flow_mapa\.js\?v=32/.test(idx) +
+                'render=' + /flow_render\.js\?v=40/.test(idx) + ' * mapa=' + /flow_mapa\.js\?v=33/.test(idx) +
                 ' * srt=' + /srt_editor\.js\?v=88/.test(idx));
 
         } catch (e) {

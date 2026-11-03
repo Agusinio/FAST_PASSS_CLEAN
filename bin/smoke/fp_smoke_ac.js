@@ -684,21 +684,292 @@ window.__runTests = async function () {
     }
     // Filtres REALS dels botons (mateixa expressió que al codi, amb la guarda):
     // la traducció ha de quedar EXCLOSA de NOM/LLOC i només entrar a TRADUCCIÓ.
+    // (2026-11-03 · BUG #230, 2a part) La família es decidix pel ROL (`_isNomCarrec` /
+    // `_isLlocWott`), no per `name.includes(...)`: el TEXT del rètol viu al nom.
     var filtreNom = function (c) {
-        return !CH._isTraduccioWott(c) &&
-            ((c.rol || '').toUpperCase() === "NOMCARREC" || c.name.includes("Nom") || c.name.includes("Carrec"));
+        return !CH._isTraduccioWott(c) && CH._isNomCarrec(c);
     };
     var filtreLloc = function (c) {
-        return !CH._isTraduccioWott(c) &&
-            (c.name.includes("Lloc") || c.name.includes("Data") || (c.rol || '').toUpperCase() === "LLOCDATA");
+        return !CH._isTraduccioWott(c) && CH._isLlocWott(c);
     };
     ok('filtre NOM: la traducció de TNC V3 queda EXCLOSA (fix del duplicat a V7)', filtreNom(TRAD_TNC) === false);
     ok('filtre NOM: el nom-càrrec legítim segueix capturat', filtreNom(NOM_TNC) === true);
     ok('filtre LLOC: traducció amb "Lloc" al text queda EXCLOSA',
         filtreLloc({ name: 'Wott_TNV_14_00.59_PRG_644349_TRADUCCIO [1-2] Lloc de treball.006.mov', rol: 'TRADUCCIO [1-2] Lloc de treball' }) === false);
     ok('fase TRADUCCIÓ: la traducció sí que hi entra', CH._isTraduccioWott(TRAD_TNC) === true);
+    // ── 14c. BUG #230 (03/11): un GRAFISME CREMAT no entra ni a LLOC ni a NOM ──────
+    // Cas real TNM V2 02/11: el TITOLET eixia DOS voltes — una a l'inici de l'ítem
+    // (marcador + 0,40 s, SENSE rastreig) i una altra al seu instant detectat. La
+    // primera la feia una fase ANTERIOR a RESTO: LLOC/NOM capturen pel TEXT del nom
+    // («Nom», «Carrec», «Lloc», «Data») i el NOM del wott porta el TEXT del rètol al
+    // camp 5. Després, `_placeTitoletChain` no veia eixa inserció (TC distint) i en
+    // col·locava una altra. La família cremada NOMÉS la col·loca la cadena de RESTO.
+    ph('14c-bug230-cremat-fora-de-lloc-nom');
+    var TITOLET_NOM = {
+        name: "Wott_TNM_v2_12_00.00_Només els joves podran accedir-hi_630060_TITOLET_in_setembre.00630065.mov",
+        rol: "TITOLET_in_setembre", tc: "00.00"
+    };
+    var TITOLET_LLOC = {
+        name: "Wott_TNM_v2_12_00.00_Lloc de treball i Data del congrés_630061_TITOLET_in.00630066.mov",
+        rol: "TITOLET_in", tc: "00.00"
+    };
+    var DADA_ITEM = {
+        name: "Wott_TNM_v2_13_00.00_Nom de la dada_630062_DADA-ITEM_in.00630067.mov",
+        rol: "DADA-ITEM_in", tc: "00.00"
+    };
+    // CAS REAL REPORTAT PER L'USUARI (03/11): el TITOLET «Nombre de contractes». Ací la
+    // partícula «Nom» NO és una paraula: va DINS de «Nombre», i el filtre NOM feia
+    // `name.includes("Nom")` (SUBSTRING, no paraula) → hi entrava igualment.
+    var TITOLET_NOMBRE = {
+        name: "Wott_TNM_v2_14_00.00_Nombre de contractes públics_630063_TITOLET_in.00630068.mov",
+        rol: "TITOLET_in", tc: "00.00"
+    };
+    // `js/core/11_Configuracio.js` ja va al harness (fp_smoke_build.ps1): `Config.get()` és
+    // el REAL de producció i `_burnedGrafRoles` hi troba les 27 etiquetes de `detectRoles`.
+    if (CH && typeof CH._isBurnedGrafWott === 'function') {
+        ok('#230: el TITOLET amb «Només» al TEXT és GRAFISME CREMAT',
+            CH._isBurnedGrafWott(TITOLET_NOM) === true);
+        ok('#230: el TITOLET amb «Lloc»/«Data» al TEXT és GRAFISME CREMAT',
+            CH._isBurnedGrafWott(TITOLET_LLOC) === true);
+        ok('#230: el DADA-ITEM és GRAFISME CREMAT (família de `titolet.detectRoles`)',
+            CH._isBurnedGrafWott(DADA_ITEM) === true);
+        ok('#230: un NOM-CARREC no és grafisme cremat (la guarda no el toca)',
+            CH._isBurnedGrafWott(NOM_TNC) === false);
+        // Filtres REALS de les fases LLOC/NOM (mateixa expressió que
+        // `placeChyronLloc`/`placeChyronNom`, igual que fa §14 amb la traducció).
+        // (2026-11-03 · BUG #230, 2a part) Ara PER ROL, no per substring del nom.
+        var filtreNomReal = function (c) {
+            return !CH._isTraduccioWott(c) && !CH._isBurnedGrafWott(c) && CH._isNomCarrec(c);
+        };
+        var filtreLlocReal = function (c) {
+            return !CH._isTraduccioWott(c) && !CH._isBurnedGrafWott(c) && CH._isLlocWott(c);
+        };
+        // Filtre REAL de RESTO:
+        //   c => !isTitol && !isConductor && !isLloc && !isNom && !isTraduccio &&
+        //        !isTe && !isMarkerGraf
+        // És el predicat que decidix qui col·loca el TITOLET: si ací cau fora (com
+        // passava amb `isNom` = `name.includes("Nom")`), NO es col·loca enlloc.
+        var filtreRestoReal = function (c) {
+            return !CH._isTemaTitolWott(c) && !CH._isConductorWott(c) &&
+                !(!CH._isTraduccioWott(c) && CH._isLlocWott(c)) &&
+                !(!CH._isTraduccioWott(c) && CH._isNomCarrec(c)) &&
+                !CH._isTraduccioWott(c) && !CH._isTeWott(c) && !CH._isMarkerGrafWott(c);
+        };
+        ok('#230: la fase NOM NO captura el TITOLET (abans sí: «Només»)',
+            filtreNomReal(TITOLET_NOM) === false);
+        ok('#230: la fase LLOC NO captura el TITOLET (abans sí: «Lloc»)',
+            filtreLlocReal(TITOLET_LLOC) === false);
+        ok('#230: la fase NOM NO captura el DADA-ITEM (abans sí: «Nom de la dada»)',
+            filtreNomReal(DADA_ITEM) === false);
+        ok('#230: la fase NOM sí captura el nom-càrrec legítim (sense regressió)',
+            filtreNomReal(NOM_TNC) === true);
+        ok('#230: «Nombre de contractes» — la partícula «Nom» va DINS de «Nombre» (substring)',
+            TITOLET_NOMBRE.name.includes("Nom") === true,
+            String(TITOLET_NOMBRE.name.split('_')[5]));
+        ok('#230: la fase NOM NO captura el TITOLET «Nombre de contractes»',
+            filtreNomReal(TITOLET_NOMBRE) === false);
+        ok('#230: el TITOLET «Nombre de contractes» és grafisme cremat (rol al camp 7 del nom)',
+            CH._isBurnedGrafWott(TITOLET_NOMBRE) === true,
+            String(CH._burnedGrafRole(TITOLET_NOMBRE)));
+        ok('#230: la traducció continua fora de NOM i LLOC (guarda del 16/10 intacta)',
+            filtreNomReal(TRAD_TNC) === false && filtreLlocReal(TRAD_TNC) === false);
+        // ── 2a part (03/11): el FORAT que va deixar la guarda. RESTO ha de REBRE el
+        // TITOLET; si `isNom`/`isLloc` tornen a mirar el TEXT del nom, el TITOLET cau
+        // fora de TOTES les fases i no es col·loca enlloc.
+        ok('#230: RESTO REP el TITOLET «Nombre de contractes» (es torna a col·locar)',
+            filtreRestoReal(TITOLET_NOMBRE) === true);
+        ok('#230: RESTO REP els TITOLET amb «Només» i amb «Lloc»/«Data» al TEXT',
+            filtreRestoReal(TITOLET_NOM) === true && filtreRestoReal(TITOLET_LLOC) === true);
+        ok('#230: RESTO NO rep el nom-càrrec ni el grafisme amb marcador (famílies pròpies)',
+            filtreRestoReal(NOM_TNC) === false && filtreRestoReal(DADA_ITEM) === false);
+        // 🔑 Criteri NOU (petició d'usuari): un wott és NomCarrec pel ROL —camp 7 del
+        // nom o `chy.rol`— amb IGUALTAT normalitzada, MAI per substring del nom.
+        var WOTT_TEXT_NOM = {
+            name: "Wott_TNM_v2_15_00.00_Nombre de contractes públics_630064_Rotul_.00630071.mov",
+            rol: "Rotul"
+        };
+        ok('#230: el TEXT «Nombre…» amb rol Rotul NO és nom-càrrec (matx d\'IGUALTAT)',
+            CH._isNomCarrec(WOTT_TEXT_NOM) === false &&
+            WOTT_TEXT_NOM.name.indexOf('Nombre') !== -1);
+        ok('#230: NOMCARREC sí que ho és pel rol (Nomcarrec al camp 7)',
+            CH._isNomCarrec(NOM_TNC) === true &&
+            CH._isNomCarrec({ name: 'Wott_TNM_v2_16_00.00_res_630065_Nomcarrec_Ada Colau.006.mov', rol: 'Nomcarrec' }) === true);
+        ok('#230: LLOC pel rol (Lloc) i no pel TEXT («Lloc de treball» amb rol Rotul)',
+            CH._isLlocWott({ name: 'Wott_TNM_v2_17_00.00_Barcelona_630066_Lloc_Catalunya.006.mov', rol: 'Lloc' }) === true &&
+            CH._isLlocWott({ name: 'Wott_TNM_v2_18_00.00_Lloc de treball_630067_Rotul_.006.mov', rol: 'Rotul' }) === false);
+        ok('#230: el TEMA-TÍTOL es decidix pel rol, i TITOLET no hi entra mai',
+            CH._isTemaTitolWott({ name: 'Wott_TNM_v2_19_00.00_Tema_630068_Tema-Titol_Habitatge.006.mov', rol: 'Tema-Titol' }) === true &&
+            CH._isTemaTitolWott(TITOLET_NOMBRE) === false);
+        // Xarxa de seguretat dels noms d'exportació MANUAL (`WOTT_<PROG>_NC_<nom>`):
+        // token SENCER, només si el wott no porta rol (`ROTUL` = valor per defecte).
+        ok('#230: export manual «WOTT_TNC_NC_…» (sense rol) sí que és nom-càrrec',
+            CH._isNomCarrec({ name: 'WOTT_TNC_NC_Miguel Domingo.mov', rol: '' }) === true &&
+            CH._isNomCarrec({ name: 'WOTT_TNC_NC_Miguel Domingo.mov', rol: 'ROTUL' }) === true);
+        ok('#230: …però amb rol propi (TITOLET) el nom NO fa endevinar res',
+            CH._isNomCarrec({ name: 'WOTT_TNC_NC_Miguel Domingo.mov', rol: 'TITOLET_in' }) === false);
+    } else {
+        ok('#230: _isBurnedGrafWott exposat al mòdul', false, typeof (CH && CH._isBurnedGrafWott));
+    }
+    // ── 14d. BUG #230 (2a part, 03/11): ÀNCORA DEL MARCADOR ─────────────────────
+    // El DADA-ITEM ha d'anar al SUB-MARCADOR groc del seu títol («13p72»), MAI al
+    // marcador de l'ítem («13», l'inici del vídeo). Dos motius reals:
+    //   · `isStructuralMarkerComment` (/^\d+\s*[a-z]{0,5}\s*-/) no accepta dígits
+    //     darrere del sufix → «13p72 - p7 Dades HABITATGE» quedava FORA del pot;
+    //   · el pot era únic i guanyava el marcador de l'ítem per punts de títol.
+    if (CH && typeof CH._markerPools === 'function') {
+        var amarillos = [
+            { id: '13', time: 10.0, titol: 'IPD HABITATGE' },
+            { id: '13p72', time: 47.2, titol: 'p7 Dades HABITATGE' },
+            { id: '14', time: 90.0, titol: 'Un altre títol' }
+        ];
+        var pots = CH._markerPools('13', amarillos);
+        ok('#230b: l\'àncora mira PRIMER el SUB-MARCADOR de l\'ítem',
+            pots[0].length === 1 && pots[0][0].id === '13p72',
+            (pots[0] || []).map(function (a) { return a.id; }).join(','));
+        ok('#230b: el marcador de l\'ítem («13») queda de RESERVA (2n pot)',
+            pots.length > 1 && pots[1].some(function (a) { return a.id === '13'; }));
+        ok('#230b: «13» no arrossega «131» (frontera de dígit → xarxa de seguretat)',
+            CH._markerPools('13', [{ id: '131', time: 5, titol: 'Altre' }]).length === 1);
+        ok('#230b: un ítem TE sense sub-marcador usa el SEU marcador («25TE-2»)',
+            CH._markerPools('25TE-2', [{ id: '25TE-2', time: 12, titol: 'TE tort DADES' }])[0][0].id === '25TE-2');
+    } else {
+        ok('#230b: _markerPools exposat al mòdul', false, typeof (CH && CH._markerPools));
+    }
+    if (CH && typeof CH._esComentariAncorable === 'function') {
+        ok('#230b: «13p72 - p7 Dades HABITATGE» SÍ que és àncora (abans quedava fora)',
+            CH._esComentariAncorable('13p72 - p7 Dades HABITATGE') === true);
+        ok('#230b: «13 - IPD HABITATGE» continua sent àncora',
+            CH._esComentariAncorable('13 - IPD HABITATGE') === true);
+        ok('#230b: un marcador sense « - títol» no és àncora',
+            CH._esComentariAncorable('13p72') === false);
+        // (3a part) Formats NO canònics que sí han de poder ancorar.
+        ok('#230c: «13p72-p7 Dades HABITATGE» (guions sense espais) també és àncora',
+            CH._esComentariAncorable('13p72-p7 Dades HABITATGE') === true);
+        ok('#230c: «13p72 · p7 Dades» (punt volat) també és àncora',
+            CH._esComentariAncorable('13p72 · p7 Dades') === true);
+    } else {
+        ok('#230b: _esComentariAncorable exposat al mòdul', false, typeof (CH && CH._esComentariAncorable));
+    }
+    // ── 14e. BUG #230 (3a part, 03/11): EL DADA-ITEM MAI AL MARCADOR DE L'ÍTEM ──
+    // En viu, amb la 2a part, el DADA-ITEM encara eixia al marcador «13»: el color del
+    // marcador (Markers.get() pot tornar -1 o un índex distint) i el títol del sub-
+    // marcador podien fer que es baixara al marcador de l'ítem. Ara:
+    //   · el COLOR només desempata (mai descarta);
+    //   · amb `strictSub`, si l'ítem TÉ sub-marcadors NO es baixa al de l'ítem.
+    if (CH && typeof CH._triaAncora === 'function' && typeof CH._markerSplit === 'function') {
+        var SCO = function (a, b) { return String(a) === String(b) ? 1 : 0; };
+        var SUBS_T = [{ id: '13p72', time: 47.2, titol: 'p7 Dades HABITATGE' }];
+        var ITEM_T = [{ id: '13', time: 10.0, titol: 'p7 Dades HABITATGE' }];
+        var t1 = CH._triaAncora(SUBS_T, ITEM_T, 'p7 Dades HABITATGE', SCO, 0.6, true);
+        ok('#230c: el DADA-ITEM va al SUB-MARCADOR («13p72») i no al de l\'ítem',
+            !!t1.best && t1.best.mk.id === '13p72' && t1.why === 'sub',
+            t1.best ? t1.best.mk.id : 'null');
+        // El cas que va fallar: el títol del sub-marcador NO arriba al llindar.
+        var t2 = CH._triaAncora([{ id: '13p72', time: 47.2, titol: 'Una altra cosa' }],
+            ITEM_T, 'p7 Dades HABITATGE', SCO, 0.6, true);
+        ok('#230c: si el sub-marcador no coincidix, el DADA-ITEM NO es col·loca (mai a «13»)',
+            t2.best === null && t2.why === 'sub-sense-titol', String(t2.best));
+        // El tòtem (sense strictSub) sí que pot caure al marcador de l\'ítem.
+        var t3 = CH._triaAncora([{ id: '25TE-2p1', time: 5, titol: 'Altre' }],
+            [{ id: '25TE-2', time: 12, titol: 'TE tort DADES' }], 'TE tort DADES', SCO, 0.6, false);
+        ok('#230c: el tòtem manté la reserva del marcador de l\'ítem (no és DADA-ITEM)',
+            !!t3.best && t3.best.mk.id === '25TE-2' && t3.why === 'item');
+        // El color GROC (4) desempata, no descarta: un color -1 (il·legible) també val.
+        var t4 = CH._triaAncora([{ id: '13p72', time: 47.2, titol: 'p7 Dades HABITATGE', color: -1 }],
+            [], 'p7 Dades HABITATGE', SCO, 0.6, true);
+        ok('#230c: un marcador amb color il·legible (-1) també pot ser àncora',
+            !!t4.best && t4.best.mk.id === '13p72');
+        var sp = CH._markerSplit('13', [
+            { id: '13', time: 10.0, titol: 'IPD HABITATGE' },
+            { id: '13p72', time: 47.2, titol: 'p7 Dades HABITATGE' },
+            { id: '131', time: 5.0, titol: 'Altre' }
+        ]);
+        ok('#230c: _markerSplit separa SUB (13p72) i ÍTEM (13) i no arrossega «131»',
+            sp.subs.length === 1 && sp.subs[0].id === '13p72' &&
+            sp.item.length === 1 && sp.item[0].id === '13' &&
+            sp.mine.length === 2, 'subs=' + sp.subs.length + ' item=' + sp.item.length);
+        // El TÍTOL de l\'àncora s\'extrau igual amb o sense espais al voltant del guió.
+        ok('#230c: _anchorMarkerTitle talla «13p72-p7 Dades HABITATGE» → «p7 Dades HABITATGE»',
+            CH._anchorMarkerTitle('13p72-p7 Dades HABITATGE') === 'p7 Dades HABITATGE',
+            CH._anchorMarkerTitle('13p72-p7 Dades HABITATGE'));
+        ok('#230c: _anchorMarkerTitle no trenca «25TE-2 - TE tort DADES» (guionet intern)',
+            CH._anchorMarkerTitle('25TE-2 - TE tort DADES') === 'TE tort DADES',
+            CH._anchorMarkerTitle('25TE-2 - TE tort DADES'));
+        // I el PNG de fons a V3 ja no existix (petició d'usuari: «son innecesarios»).
+        ok('#230c: placeTeWotts ja no col·loca cap PNG de fons a V3',
+            String(CH.placeTeWotts).indexOf('_placeTeFons') === -1 &&
+            CH.TE_FONS_PNG === undefined);
+    } else {
+        ok('#230c: _triaAncora/_markerSplit exposats al mòdul', false,
+            typeof (CH && CH._triaAncora) + '/' + typeof (CH && CH._markerSplit));
+    }
 
-    // ── 14b. BUG #195 (2026-10-27): el rètol del CONDUCTOR no cau dins del directe ──
+
+
+    // ── 14f. BUG #230 (4a part, 03/11): ÀNCORA PER PARAULA CLAU I BLOC DE WOTTS ──
+    // Cas real TNM V2 02/11 (log 12:41): els 3 DADA-ITEM de l'ítem «13» NO es podien
+    // ancorar mai per títol, perquè el NOM del wott repeteix el títol de l'ÍTEM
+    // («Wott_TNM_v2_13_00.00_ES FRENA EL PREU DEL LLOGUER_675009_DADA-ITEM_…») i el
+    // sub-marcador diu una altra cosa («13P72 - p7 dades HABITATGE» → semblança 0,12).
+    // Regla d'usuari: «Por nombre: la pista es "dades"» + «es col·loquen a partir d'eixe
+    // marcador; el topall és el següent marcador ESTRUCTURAL i, si no hi caben, es
+    // retallen de manera homogènia».
+    if (CH && typeof CH._pickByKey === 'function' && typeof CH._blockFit === 'function') {
+        var SUBS_K = [
+            { id: '13P71', time: 10.0, titol: 'p7 foto HABITATGE', color: -1 },
+            { id: '13P72', time: 15.0, titol: 'p7 dades HABITATGE', color: -1 }
+        ];
+        var k1 = CH._pickByKey(SUBS_K, 'dades');
+        ok('#230d: _pickByKey troba el sub-marcador «dades» (13P72)', !!k1 && k1.mk.id === '13P72',
+            k1 ? k1.mk.id : 'null');
+        ok('#230d: _pickByKey no encerta el de «foto»', !!k1 && k1.mk.id !== '13P71');
+        ok('#230d: _pickByKey és insensible a accents/majúscules/guions',
+            !!CH._pickByKey([{ id: '13P72', time: 1, titol: 'P7-DADES' }], 'Dades'));
+        ok('#230d: _pickByKey no inventa res si no hi ha la paraula',
+            CH._pickByKey(SUBS_K, 'mapa') === null);
+        // El TÍTOL del wott és el de l'ÍTEM: la semblança no arriba al llindar (0,12).
+        var SCOF = function (a, b) {
+            a = String(a).toUpperCase(); b = String(b).toUpperCase();
+            if (a === b) return 1;
+            return (a.indexOf(b) !== -1 || b.indexOf(a) !== -1) ? 0.8 : 0;
+        };
+        var ITEM13 = [{ id: '13', time: 25.92, titol: 'ES FRENA EL PREU DEL LLOGUER' }];
+        var a1 = CH._triaAncora(SUBS_K, ITEM13, 'ES FRENA EL PREU DEL LLOGUER', SCOF, 0.6, true, 'dades');
+        ok('#230d: amb la pista «dades» el DADA-ITEM sí que té àncora (sub-clau)',
+            !!a1.best && a1.best.mk.id === '13P72' && a1.why === 'sub-clau',
+            a1.best ? a1.best.mk.id + '/' + a1.why : 'null/' + a1.why);
+        var a2 = CH._triaAncora(SUBS_K, ITEM13, 'ES FRENA EL PREU DEL LLOGUER', SCOF, 0.6, true);
+        ok('#230d: sense la pista es manté la regla estricta (no es col·loca)',
+            a2.best === null && a2.why === 'sub-sense-titol', String(a2.best));
+        // El tòtem (TE) no rep mai la pista: continua caient al marcador de l'ítem.
+        var a3 = CH._triaAncora([{ id: '25TE-2p1', time: 5, titol: 'Altre' }],
+            [{ id: '25TE-2', time: 12, titol: 'TE tort DADES' }], 'TE tort DADES', SCOF, 0.6, false);
+        ok('#230d: el tòtem no canvia de comportament (reserva del marcador de l\'ítem)',
+            !!a3.best && a3.best.mk.id === '25TE-2' && a3.why === 'item');
+        // ── _blockFit: bloc de 3 wotts de 4 s (12 s) contra un topall a 10,92 s ──
+        var f1 = CH._blockFit([4, 4, 4], 15, null, 0.04);
+        ok('#230d: _blockFit sense topall deixa les durades naturals',
+            f1.scale === 1 && Math.abs(f1.total - 12) < 1e-6, 'total=' + f1.total);
+        var f2 = CH._blockFit([4, 4, 4], 15, 25.92, 0.04);
+        ok('#230d: _blockFit retalla quan el bloc no hi cap',
+            f2.scale < 1 && f2.total <= f2.room + 1e-6 &&
+            Math.abs(f2.total - f2.room) < 0.5, 'total=' + f2.total.toFixed(2) + ' room=' + f2.room.toFixed(2));
+        ok('#230d: el retall és HOMOGENI (tots els wotts iguals)',
+            Math.abs(f2.durs[0] - f2.durs[1]) < 1e-6 && Math.abs(f2.durs[1] - f2.durs[2]) < 1e-6,
+            f2.durs.map(function (d) { return d.toFixed(2); }).join('/'));
+        var f3 = CH._blockFit([4, 4, 4], 0, 100, 0.04);
+        ok('#230d: _blockFit no toca res si hi ha marge de sobres',
+            f3.scale === 1 && Math.abs(f3.total - 12) < 1e-6 && f3.room === 100);
+        ok('#230d: _blockFit sempre deixa almenys 1 frame per wott',
+            CH._blockFit([4, 4, 4], 0, 0.1, 0.04).durs.every(function (d) { return d >= 0.04 - 1e-9; }));
+        ok('#230d: el pla de bloc viu a placeTeWotts (topall = marcador estructural)',
+            String(CH.placeTeWotts).indexOf('nextStructural') !== -1 &&
+            String(CH.placeTeWotts).indexOf('_blockFit') !== -1);
+    } else {
+        ok('#230d: _pickByKey/_blockFit exposats al mòdul', false,
+            typeof (CH && CH._pickByKey) + '/' + typeof (CH && CH._blockFit));
+    }
+
     // Cas real TNM_V1 26/10 (CHYRONS_2026-10-27_1400): el rètol «Directe_PRESENCIAL_
     // Ciutat de la Justícia», penjat de `01BT - PG bona tarda i DONA PAS…` @0,00,
     // s'anava a `01dir`@32,28 + 0,40 = **32,68 s** (dins de la connexió) perquè `01BT`

@@ -201,8 +201,8 @@
             srcMp.indexOf('MainButton._setupContext()') === -1);
 
         var idx = await readRepo('index.html');
-        ok('#DIR/15 index.html: cache-busts del #220 (mainButton 42 · chyrons 94 · graphics 27 · markers 68 · mp4 8 · render 40 · srt 88)',
-            /flow_mainButton\.js\?v=42/.test(idx) && /flow_chyrons\.js\?v=94/.test(idx) &&
+        ok('#DIR/15 index.html: cache-busts del #220 (mainButton 42 · chyrons 99 · graphics 27 · markers 68 · mp4 8 · render 40 · srt 88)',
+            /flow_mainButton\.js\?v=42/.test(idx) && /flow_chyrons\.js\?v=99/.test(idx) &&
             /flow_graphics\.js\?v=27/.test(idx) && /flow_markers\.js\?v=68/.test(idx) &&
             /flow_mp4\.js\?v=8/.test(idx) &&
             /flow_render\.js\?v=40/.test(idx) && /srt_editor\.js\?v=88/.test(idx),

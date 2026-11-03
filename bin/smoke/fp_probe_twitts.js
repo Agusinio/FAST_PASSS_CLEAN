@@ -543,6 +543,33 @@
             'png=' + (T.pngPathOf ? String(T.pngPathOf(1)) : '-') +
             ' font=' + (srcOcr ? srcOcr.length + ' B' : 'NO llegida'));
 
+        // ── A3-f. 03/11 · BUG #232: la finestra del Ctrl+🎯 ha de ser ─────────
+        // CONGRUENT amb la data de la capçalera. Dos defectes vistos en viu:
+        // (a) la data de cada movie es decidia NOMÉS pel stat del fitxer (no pel
+        // NOM, com fa `filterByWorkDate` a tota l'extensió) i (b) la cua de
+        // reserva era «els 20 exports més recents de la carpeta SENCERA»
+        // (qualsevol dia) → un projecte d'ahir ensenyava movies de hui.
+        ok('#TW/86 _diesEntre: dies entre dos YYYYMMDD (simètric, null si no és data)',
+            W._diesEntre('20261101', '20261102') === 1 &&
+            W._diesEntre('20261102', '20261101') === -1 &&
+            W._diesEntre('20261030', '20261102') === 3 &&
+            W._diesEntre('20261102', '20261102') === 0 &&
+            W._diesEntre('', '20261102') === null &&
+            W._diesEntre('20261232', '20261102') === null,
+            'dif=' + W._diesEntre('20261030', '20261102'));
+        ok('#TW/87 _dayMovies: data pel NOM (criteri de filterByWorkDate) i cua només de dies veïns',
+            /_fileDateYYYYMMDD\(\{\s*name:\s*movs\[j\]\s*\}\)/.test(srcTW) &&
+            /_diesEntre\(d8,\s*target\)/.test(srcTW) &&
+            /Math\.abs\(dif\)\s*<=\s*1/.test(srcTW) &&
+            /out\.far\+\+/.test(srcTW) &&
+            typeof dm0.far === 'number',
+            'far=' + dm0.far + ' font=' + (srcTW ? srcTW.length + ' B' : 'NO llegida'));
+        ok('#TW/88 runEmergency: el recompte visible diu del dia / al projecte / dies veïns',
+            /de dies veïns/.test(srcTW) &&
+            /movie\(s\):/.test(srcTW) &&
+            /Cap \.mov de tuit datat el /.test(srcTW),
+            'sub=' + /movie\(s\):/.test(srcTW));
+
     };
 })();
 

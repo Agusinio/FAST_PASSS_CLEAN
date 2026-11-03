@@ -27,7 +27,9 @@
 
         ok('flow_chyrons exposat amb la passada de tòtem (placeTeWotts) i els helpers #216',
             !!(CHY && typeof CHY.placeTeWotts === 'function' &&
-                typeof CHY._placeTeFons === 'function' &&
+                typeof CHY._markerSplit === 'function' &&
+                typeof CHY._triaAncora === 'function' &&
+                typeof CHY._anchorMarkerTitle === 'function' &&
                 typeof CHY._markerItemId === 'function' &&
                 typeof CHY._isTeItemId === 'function' &&
                 typeof CHY._isTeWott === 'function' &&
@@ -87,34 +89,20 @@
             String(CHY.placeTeWotts).indexOf('_placeTitoletChain') === -1 &&
             String(CHY.placeTeWotts).indexOf('titolet') === -1);
 
-        // ── FONS del wott gràfic: PNG a V3 · WOTT a V4 (2026-11-02) ──────────
-        // Petició d'usuari: davall del wott gràfic hi va el PNG de fons del MATEIX
-        // projecte (`3CatInfo_VERTICALITZACIO_Fons-per-videos.png`). El wott puja a
-        // V4 (`graficos`+1) i el PNG es queda a V3 (`graficos`), amb el mateix rang.
-        // És el mecanisme GENÈRIC per a tots els wotts gràfics d'este sistema.
+        // ── (2026-11-03 · BUG #230, 3a part) FORA el PNG de fons ──────────────
+        // Petició d'usuari, en veure el resultat en viu: «siguen colocándose los pngs
+        // de fondo en V3. Son innecesarios». El wott gràfic es col·loca SOL, a V4.
         var srcTe = String(CHY.placeTeWotts);
-        ok('fons: el PNG de fons està declarat (Chyrons.TE_FONS_PNG)',
-            CHY.TE_FONS_PNG === '3CatInfo_VERTICALITZACIO_Fons-per-videos.png',
-            String(CHY.TE_FONS_PNG));
-        ok('fons: el wott va a V4 = graficos + 1 i el fons a V3 = graficos',
-            srcTe.indexOf('const V_WOTT = V_FONS + 1') !== -1 &&
-            srcTe.indexOf('const V_FONS = parseInt(cfg.tracks.video.graficos, 10) || 3') !== -1);
-        ok('fons: el wott s\'inserix a la pista del slot (V4) i el fons després',
-            srcTe.indexOf('${slot.track}, ${start.toFixed(4)}, null') !== -1 &&
-            srcTe.indexOf('await this._placeTeFons(TE_FONS_PNG, V_FONS, start, end, ctx)') !== -1);
+        ok('#230c fons: el PNG de fons ja NO existix (ni constant ni mètode)',
+            CHY.TE_FONS_PNG === undefined && typeof CHY._placeTeFons === 'undefined',
+            'TE_FONS_PNG=' + String(CHY.TE_FONS_PNG) + ' · _placeTeFons=' + typeof CHY._placeTeFons);
+        ok('#230c fons: placeTeWotts ja no inserta cap PNG (ni _placeTeFons ni el nom)',
+            srcTe.indexOf('_placeTeFons') === -1 && srcTe.indexOf('Fons-per-videos') === -1);
+        ok('#230c fons: el wott es queda a V4 (= graficos + 1)',
+            srcTe.indexOf('const V_WOTT = V_GRAF + 1') !== -1 &&
+            srcTe.indexOf('const V_GRAF = parseInt(cfg.tracks.video.graficos, 10) || 3') !== -1);
         ok('fons: si V4 està OCUPADA en tot l\'ítem no es col·loca res (no arrasa traduccions)',
             srcTe.indexOf('slot.overlap') !== -1 && srcTe.indexOf('NO es col·loca') !== -1);
-        // El still NO s'inserix directament al rang: l'`overwriteClip` d'un PNG ocupa
-        // la durada per defecte (~5 s) i esborraria els clips veïns de V3.
-        var srcFons = String(CHY._placeTeFons || '');
-        ok('fons: el PNG s\'inserix a una zona temporal LLIURE i es mou amb moveToRange',
-            srcFons.indexOf('_v6FreeTC') !== -1 && srcFons.indexOf('Clips.moveToRange') !== -1);
-        ok('fons: el clip es deixa COHERENT (imatge fixa estirable) amb endCoherent',
-            srcFons.indexOf('endCoherent') !== -1 && srcFons.indexOf('TE\u00b7fons') !== -1);
-        ok('fons: mira que la pista estiga LLIURE abans de res (BUSY)',
-            srcFons.indexOf('BUSY') !== -1 && srcFons.indexOf('getTrackClips') !== -1);
-        ok('fons: si el PNG no és al projecte ho diu (NO_ITEM) i el wott queda igual',
-            srcFons.indexOf('ITEM_NOT_FOUND') !== -1 && srcFons.indexOf('NO_ITEM') !== -1);
 
         // ── #216 (2a part) · DADA-ITEM: MARCADOR GROC, mai rastreig de color ──
         // Petició d'usuari (TNM V2 del 02/11): «els gràfics DADA-ITEM són els que van

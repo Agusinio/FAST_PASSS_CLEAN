@@ -438,6 +438,88 @@
             var z3 = await MAPA._zonaGris([{ name: 'RAR.mov' }], { picked: [] });
             ok('#199 _zonaGris: si no sap la ruta original → null (no inventa cap veredicte)', z3 === null);
             GZ.detect = savedDetect;
+
+            // ── C. PALETA: CABEZAL + CARPETA DEL DIA (2026-11-03 · #233) ──────
+            // (1) El flux manual ja NO ancora el grafisme a cap marcador: mana el cabezal.
+            var srcFlow = String(MAPA._flow);
+            ok('#233 _flow: el grafisme entra al CABEZAL (ja no crida _anchorMarker)',
+                !/_anchorMarker\(/.test(srcFlow) && /_placeClips\(items, refSec/.test(srcFlow),
+                'crida=' + /_anchorMarker\(/.test(srcFlow));
+            ok('#233 _flow i runFromMarkers resolen la carpeta amb _dayFolder',
+                /_dayFolder\(dateDir\)/.test(srcFlow) &&
+                /_dayFolder\(await this\._resolveDateDir\(\)\)/.test(String(MAPA.runFromMarkers)));
+
+            var vars1 = MAPA._dayFolderNames(1, 11);
+            ok('#233 _dayFolderNames(1,11): «1 NOVEMBRE», «01 NOVEMBRE» i les dos amb «DE»',
+                vars1.indexOf('1 NOVEMBRE') !== -1 && vars1.indexOf('01 NOVEMBRE') !== -1 &&
+                vars1.indexOf('1 DE NOVEMBRE') !== -1 && vars1.indexOf('01 DE NOVEMBRE') !== -1,
+                JSON.stringify(vars1));
+            ok('#233 _dayFolderNames: dies de dos dígits sense duplicats',
+                JSON.stringify(MAPA._dayFolderNames(15, 11)) ===
+                JSON.stringify(['15 NOVEMBRE', '15 DE NOVEMBRE']),
+                JSON.stringify(MAPA._dayFolderNames(15, 11)));
+            ok('#233 _dayFolderNames: mes fora de rang → [] (no inventa noms)',
+                MAPA._dayFolderNames(3, 13).length === 0 && MAPA._dayFolderNames(0, 11).length === 0);
+
+            var NOMS = ['28 OCTUBRE', '01 NOVEMBRE', '2 NOVEMBRE', 'GRAF.lnk'];
+            ok('#233 _pickDayFolder: dia 1 → «01 NOVEMBRE» (al disc el zero davant)',
+                MAPA._pickDayFolder(NOMS, 1, 11) === '01 NOVEMBRE', MAPA._pickDayFolder(NOMS, 1, 11));
+            ok('#233 _pickDayFolder: dia 2 → «2 NOVEMBRE» (i no el 28 d\'octubre)',
+                MAPA._pickDayFolder(NOMS, 2, 11) === '2 NOVEMBRE', MAPA._pickDayFolder(NOMS, 2, 11));
+            ok('#233 _pickDayFolder: un dia sense carpeta → null (no agafa el veí)',
+                MAPA._pickDayFolder(NOMS, 5, 11) === null, MAPA._pickDayFolder(NOMS, 5, 11));
+            ok('#233 _pickDayFolder: «3 NOVEMBRE 2026» també val (any al nom)',
+                MAPA._pickDayFolder(['3 NOVEMBRE 2026'], 3, 11) === '3 NOVEMBRE 2026');
+            ok('#233 _pickDayFolder: el número sol no basta si el MES no hi és',
+                MAPA._pickDayFolder(['3 DESEMBRE'], 3, 11) === null && MAPA._pickDayFolder([], 3, 11) === null);
+
+            var T3 = new Date(2026, 10, 3, 12, 0, 0).getTime();
+            var T2 = new Date(2026, 10, 2, 9, 0, 0).getTime();
+            ok('#233 _pickFolderByCreated: tria la carpeta creada el dia de treball',
+                MAPA._pickFolderByCreated([{ name: 'A', created: T2 }, { name: 'B', created: T3 }], '2026_11_03') === 'B');
+            ok('#233 _pickFolderByCreated: sense creació (UNC) val la modificació',
+                MAPA._pickFolderByCreated([{ name: 'A', created: 0, modified: T3 }], '2026_11_03') === 'A');
+            ok('#233 _pickFolderByCreated: cap carpeta d\'eixe dia → null',
+                MAPA._pickFolderByCreated([{ name: 'A', created: T2 }], '2026_11_03') === null &&
+                MAPA._pickFolderByCreated([{ name: 'A', created: T3 }], 'avui') === null);
+
+            // (2) _folderExists preguntava a `IO.exists` (new File → només FITXERS) i deia
+            //     «false» per a qualsevol carpeta. Amb un CEP SIMULAT es comprova el nou camí.
+            var savedCep = window.cep;
+            var CARPETES = {
+                '\\\\nas\\ZZZ_GRAFISME': ['28 OCTUBRE', '01 NOVEMBRE', '2 NOVEMBRE', 'GRAF.lnk'],
+                '\\\\nas\\ZZZ_GRAFISME\\01 NOVEMBRE': ['a.mov'],
+                '\\\\nas\\ZZZ_GRAFISME\\2 NOVEMBRE': ['b.mov']
+            };
+            window.cep = { fs: {
+                readdir: function (p) {
+                    var k = String(p);
+                    return CARPETES[k] ? { err: 0, data: CARPETES[k] } : { err: 13, data: [] };
+                },
+                stat: function () { return { err: 0, data: { creationTime: 0, mtime: 0 } }; }
+            } };
+            UI.Config.get = function () { return { rutas: { grafismos: '\\\\nas\\ZZZ_GRAFISME' } }; };
+            ok('#233 _folderExists: una CARPETA existent → true (abans deia false)',
+                (await MAPA._folderExists('\\\\nas\\ZZZ_GRAFISME')) === true);
+            ok('#233 _folderExists: ruta inexistent → false',
+                (await MAPA._folderExists('\\\\nas\\NO_HI_ES')) === false);
+            var df1 = await MAPA._dayFolder('2026_11_01');
+            ok('#233 _dayFolder: 2026_11_01 → «01 NOVEMBRE» (el nom canònic «1 NOVEMBRE» no hi és)',
+                String(df1).toUpperCase().indexOf('01 NOVEMBRE') !== -1, String(df1));
+            var df2 = await MAPA._dayFolder('2026_11_02');
+            ok('#233 _dayFolder: 2026_11_02 → «2 NOVEMBRE» (cas normal, nom canònic)',
+                String(df2).toUpperCase().indexOf('2 NOVEMBRE') !== -1, String(df2));
+            var df3 = await MAPA._dayFolder('2026_10_28');
+            ok('#233 _dayFolder: un dia sense carpeta → null, sense petar',
+                df3 === null, String(df3));
+            var df4 = await MAPA._dayFolder('sense-data');
+            ok('#233 _dayFolder: data de treball il·legible → null',
+                df4 === null, String(df4));
+            window.cep = savedCep;
+            UI.Config.get = function () {
+                return { tracks: { video: { mp4: 1, mascara: 2, graficos: 3, graf: 3, temattitol: 6 } },
+                         rutas: { destinoBase: 'C:/TMP/NAS/' } };
+            };
         } catch (e199) {
             ok('#199 la prova no ha llançat cap excepció', false, e199 && (e199.message + ' | ' + e199.stack));
         } finally {

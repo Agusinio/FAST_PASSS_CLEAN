@@ -958,9 +958,49 @@
         },
 
         /**
+         * _ymdToMs: (PURA) 'YYYYMMDD' (o 'YYYY_MM_DD') → ms a mitjanit LOCAL.
+         * null si no és una data.
+         */
+        _ymdToMs: function (v) {
+            var s = String(v == null ? '' : v).replace(/[_\-\/\s]/g, '');
+            if (!/^\d{8}$/.test(s)) return null;
+            var y = +s.slice(0, 4), m = +s.slice(4, 6), d = +s.slice(6, 8);
+            if (m < 1 || m > 12 || d < 1 || d > 31) return null;
+            var t = new Date(y, m - 1, d).getTime();
+            return isNaN(t) ? null : t;
+        },
+
+        /**
+         * _diesEntre: (PURA) dies de diferència (`b` − `a`) entre dos 'YYYYMMDD'.
+         * null si alguna de les dos no és una data.
+         * (2026-11-03 · BUG #232) Servix per a decidir si un movie és «del dia»
+         * de la data de treball o d'un dia VEÍ (la finestra del Ctrl+🎯 ha de
+         * ser congruent amb la data que ensenya a la capçalera).
+         */
+        _diesEntre: function (a, b) {
+            var d1 = this._ymdToMs(a), d2 = this._ymdToMs(b);
+            if (d1 === null || d2 === null) return null;
+            return Math.round((d2 - d1) / 86400000);
+        },
+
+        /**
          * _dayMovies: els `.mov` de TUIT (XARXES) de la CARPETA DEL DIA DEL
          * PROJECTE (29/10: la finestra d'emergència ja no ensenya la carpeta
          * sencera).
+         *
+         * (2026-11-03 · BUG #232) CONGRUÈNCIA DATA ↔ CONTINGUT:
+         *   · la data de cada movie es decidix pel NOM (`Scan._fileDateYYYYMMDD`
+         *     → `_extractDateFromFileName`: el MATEIX criteri que
+         *     `filterByWorkDate` a tota l'extensió) i només si el nom no en duu
+         *     cap, pel stat del fitxer (`_dateWotts`). Abans només es mirava el
+         *     stat: un mateix fitxer podia ser «del dia» al scanner i «d'un
+         *     altre dia» en esta finestra (dos criteris, dos resultats).
+         *   · la cua de reserva (`other`) es limita als **dies veïns** de la data
+         *     de treball (± 1 dia): l'export de les 00:30 que la regla nocturna
+         *     deixa al dia anterior i el reexportat de matinada (D23). La resta
+         *     va a `far` (només al disc, per la finestra de «Buscar al disc…»):
+         *     així la llista mai no barreja dies llunys amb la data de la
+         *     capçalera.
          *
          * NO es fa cap llistat car: s'aprofita la datació del Scanner
          * (`_listNamesNative` → noms en ms; `_dateWotts` → data per fitxer, amb
@@ -972,7 +1012,7 @@
          * @returns {Promise<{ok:boolean, files:Array<{name,full}>, day:string, why:string}>}
          */
         _dayMovies: async function (dateDir) {
-            var out = { ok: false, files: [], other: [], day: String(dateDir || ''), why: '' };
+            var out = { ok: false, files: [], other: [], far: 0, day: String(dateDir || ''), why: '' };
             var T = L().TwittsOcr;
             var S = L().Scan;
             if (!T || typeof T.esOcrItem !== 'function') { out.why = 'sense Logic.TwittsOcr'; return out; }
@@ -1002,9 +1042,22 @@
                     if (typeof S._loadDateCache === 'function') S._loadDateCache();
                     dates = S._wottDateCache || {};
                 } catch (eD) { dates = {}; }
+                // (2026-11-03 · #232) El NOM mana: si el fitxer duu la data al
+                // nom (`…_20261102_…`), eixa és la seua data i NO es pregunta al
+                // NAS. El stat (`_dateWotts`) queda només per als noms sense data
+                // — així el criteri és el mateix que `Scan.filterByWorkDate`.
+                var nameDate = {};
                 var pend = [];
                 for (var j = 0; j < movs.length; j++) {
-                    if (!dates[String(movs[j]).toUpperCase()]) pend.push(movs[j]);
+                    var kj = String(movs[j]).toUpperCase();
+                    var dNom = null;
+                    try {
+                        dNom = (typeof S._fileDateYYYYMMDD === 'function')
+                            ? S._fileDateYYYYMMDD({ name: movs[j] }) : null;
+                    } catch (eFN) { dNom = null; }
+                    if (dNom && typeof S._validDate8 === 'function' && !S._validDate8(dNom)) dNom = null;
+                    if (dNom) nameDate[kj] = dNom;
+                    else if (!dates[kj]) pend.push(movs[j]);
                 }
                 if (pend.length && typeof S._dateWotts === 'function') {
                     try {
@@ -1015,15 +1068,19 @@
                     } catch (eW) { }
                 }
                 // ── 3. Filtre per la data del projecte (anti-contaminació: un
-                // fitxer que no es pot datar NO entra a «del dia»), però es
-                // GUARDA a `other` per a la cua curta de l'emergència: un tuit
-                // exportat a les 00:30 cau al dia anterior (regla nocturna) i
-                // seria invisible tot i ser el bo (D23).
+                // fitxer que no es pot datar NO entra a «del dia»). A `other`
+                // només entren els DIES VEÏNS (± 1: export de les 00:30 deixat
+                // al dia anterior per la regla nocturna i reexportat de matinada
+                // — D23); la resta ES COMPTA a `far` i no es mostra, perquè la
+                // capçalera de la finestra diu una única data.
                 for (var k = 0; k < movs.length; k++) {
-                    var d8 = dates[String(movs[k]).toUpperCase()];
+                    var kk = String(movs[k]).toUpperCase();
+                    var d8 = nameDate[kk] || dates[kk];
                     var it = { name: movs[k], full: base + movs[k], d8: String(d8 || '') };
                     if (String(d8 || '') === target) { out.files.push(it); continue; }
-                    out.other.push(it);
+                    var dif = d8 ? this._diesEntre(d8, target) : null;
+                    if (dif !== null && Math.abs(dif) <= 1) { out.other.push(it); continue; }
+                    out.far++;
                 }
                 out.ok = true;
                 out.why = '';
@@ -1049,7 +1106,15 @@
                     var oth = (resD.dropped || []).concat(resD.noDate || []);
                     for (var q2 = 0; q2 < oth.length; q2++) {
                         if (!oth[q2] || !oth[q2].name) continue;
-                        out.other.push({ name: oth[q2].name, full: base + oth[q2].name });
+                        // (03/11 · #232) Mateixa regla: a la cua només els dies
+                        // veïns de la data de treball.
+                        var d8b = null;
+                        try { d8b = S._fileDateYYYYMMDD(oth[q2]); } catch (eF2) { d8b = null; }
+                        var difB = d8b ? this._diesEntre(d8b, target) : null;
+                        if (difB === null || Math.abs(difB) > 1) { out.far++; continue; }
+                        out.other.push({
+                            name: oth[q2].name, full: base + oth[q2].name, d8: String(d8b)
+                        });
                     }
                     out.ok = true;
                 } else {
@@ -1243,7 +1308,8 @@
                         e.textContent = q
                             ? 'Cap movie coincideix amb «' + q + '».'
                             : ('Cap .mov de tuit datat el ' + ((info && info.day) || '?') +
-                                ". Pots buscar-lo al disc (movie d'un altre dia, reexportat…).");
+                                ' ni dels seus dies veïns.' +
+                                " Pots buscar-lo al disc (movie d'un altre dia, reexportat…).");
                         list.appendChild(e);
                     }
                     if (cntEl) {
@@ -1279,8 +1345,11 @@
          *      la tria s'aprén a la caché
          *   3. si no casa: LLISTA CURTA amb els .mov de tuit del DIA DEL
          *      PROJECTE (pot ser ahir: mana el .prproj, no el rellotge) + els
-         *      pendents que ja són al projecte + una cua d'exports d'ALTRES
-         *      dies (un tuit exportat a les 00:30 cau al dia anterior: D23).
+         *      pendents que ja són al projecte + una cua dels seus DIES VEÏNS
+         *      (± 1: un tuit exportat a les 00:30 cau al dia anterior — D23).
+         *      (2026-11-03 · #232) La capçalera diu la DATA del projecte i el
+         *      contingut ha de ser congruent: res d'altres dies dins la llista
+         *      (per a això està «Buscar al disc…»).
          *      La llista va ORDENADA per semblança amb el text OCR del clip
          *      (`rankPick`) i té un CERCADOR (`#tw-pick-q`); ↑/↓ + ⏎ per triar.
          *   4. «Buscar al disc…» → navegador natiu (movie d'un altre dia,
@@ -1363,12 +1432,19 @@
                 for (var ia = 0; ia < altres.length; ia++) items.push(altres[ia]);
                 log("📋 [TWITTS] llista d'emergència: " + items.length + ' movie(s) (' +
                     pend.length + ' al projecte · ' + (dm.files || []).length + ' del dia ' +
-                    (day || '?') + ' · ' + altres.length + " d'altres dies" +
+                    (day || '?') + ' · ' + altres.length + ' de dies veïns' +
+                    (dm.far ? ' · ' + dm.far + " d'altres dies només al disc" : '') +
                     (dm.why ? ' · ' + dm.why : '') + ')', 'INFO');
 
                 var sub = 'OCR: «' +
                     String((oc && oc.text) || '(sense text)').replace(/\s+/g, ' ').substring(0, 90) + '»' +
                     (oc && oc.best ? ' · millor candidat ' + oc.score + ' punts' : '');
+                // (03/11 · #232) RECOMPTE VISIBLE: la capçalera diu UNA data i
+                // ací s'explica d'on ix cada movie (cap barreja silenciosa).
+                sub += ' · ' + items.length + ' movie(s): ' +
+                    (dm.files || []).length + ' del dia ' + (day || '?') + ' · ' +
+                    pend.length + ' al projecte · ' + altres.length + ' de dies veïns' +
+                    (dm.far ? ' (' + dm.far + " d'altres dies fora de la finestra)" : '');
                 var picked = await this._pick(items, {
                     day: day, sub: sub, text: (oc && oc.text) || ''
                 });
