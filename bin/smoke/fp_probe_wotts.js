@@ -247,7 +247,7 @@
                 /placeEnd = gridDown\(placeEnd - REV_FRAME\);/.test(chySrc));
             var idxW = await readRepo('index.html');
             ok('#WOTT/24 cache-bust al dia (4_Context, flow_chyrons, Scanner)',
-                /4_Context\.js\?v=33/.test(idxW) && /flow_chyrons\.js\?v=94/.test(idxW) &&
+                /4_Context\.js\?v=33/.test(idxW) && /flow_chyrons\.js\?v=95/.test(idxW) &&
                 /Scanner\.js\?v=26/.test(idxW),
                 (idxW.match(/4_Context\.js\?v=\d+/) || '') + ' ' +
                 (idxW.match(/flow_chyrons\.js\?v=\d+/) || '') + ' ' +
@@ -530,8 +530,9 @@
             var fN = function (s) { return Math.round(Number(s) / FR); };
             // Rèplica EXACTA del bloc de flow_chyrons (`afig` = 1 frame que hi afig
             // Premiere en fixar el final: és el pitjor cas, el que abans es colava).
-            // (2026-11-02 · #218) La cua és `WOTT_TAIL_FRAMES` = 20 frames.
-            var TAIL_F = 20;
+            // (2026-11-03 · #218) La cua és `WOTT_TAIL_FRAMES` = 8 frames (la prova en
+            // viu del 03/11 va dir que 20 era massa; 8 és el que es va mesurar de negre).
+            var TAIL_F = 8;
             var retallSencer = function (start, dIns, afig) {
                 if (!(dIns > 2 * FR)) return null;
                 var dWant = Math.max(FR, dIns - TAIL_F * FR), dFin = dIns;
@@ -544,46 +545,52 @@
             };
             var rA = retallSencer(100.00, 156 * FR, false);
             var rB = retallSencer(100.00, 156 * FR, true);
-            ok('#WOTT/42 retall del clip sencer: 156 → 136 frames (20 de cua, amb i sense el frame inclusiu)',
-                rA !== null && fN(rA) === 136 && rB !== null && fN(rB) === 136,
+            ok('#WOTT/42 retall del clip sencer: 156 → 148 frames (8 de cua, amb i sense el frame inclusiu)',
+                rA !== null && fN(rA) === 148 && rB !== null && fN(rB) === 148,
                 'sense=' + (rA === null ? 'n/d' : fN(rA)) + ' amb=' + (rB === null ? 'n/d' : fN(rB)));
             var rC = retallSencer(100.00, 2 * FR, false);
             var rD = retallSencer(100.00, 3 * FR, false);
             ok('#WOTT/43 retall del clip sencer: 3 → 1 frame i un de 2 frames NO es toca (mai <1)',
                 rC === null && rD !== null && fN(rD) === 1,
                 '2f=' + (rC === null ? 'intacte' : fN(rC)) + ' 3f=' + (rD === null ? 'n/d' : fN(rD)));
-            ok('#WOTT/44 el retall del sencer deixa traça (✂️ CLIP SENCER) i cache-bust flow_chyrons 94',
+            ok('#WOTT/44 el retall del sencer deixa traça (✂️ CLIP SENCER) i cache-bust flow_chyrons 95',
                 chySrc.indexOf('✂️ [') > 0 && chySrc.indexOf('CLIP SENCER') > 0 &&
-                /flow_chyrons\.js\?v=94/.test(idxW),
+                /flow_chyrons\.js\?v=95/.test(idxW),
                 (idxW.match(/flow_chyrons\.js\?v=\d+/) || ''));
 
-            // ── N2. CUA DE SEGURETAT DE TOTS ELS WOTTS (2026-11-02 · #218) ──────
+            // ── N2. CUA DE SEGURETAT DE TOTS ELS WOTTS (2026-11-02 · #218, 03/11) ──
             // Queixa: «el wott que s'inserix és 8 frames més llarg que la imatge
             // real» → l'últim tros del mèdia és NEGRE. Petició d'usuari: la solució
-            // MÉS SIMPLE — retallar SEMPRE 20 frames la cua de tots els wotts
+            // MÉS SIMPLE — retallar SEMPRE una cua fixa de tots els wotts
             // (`WOTT_TAIL_FRAMES`) en els punts on es fixa el final; res d'endevinar
-            // la longitud real de cada mèdia.
-            ok('#WOTT/63 flow_chyrons: constant WOTT_TAIL_FRAMES = 20 i helper _wottTailEnd',
-                /const WOTT_TAIL_FRAMES = 20;/.test(chySrc) &&
+            // la longitud real de cada mèdia. La xifra final és 8 (la del 02/11, 20,
+            // «era demasiado») i la durada genèrica de referència d'un chyron és 4 s.
+            ok('#WOTT/63 flow_chyrons: constant WOTT_TAIL_FRAMES = 8 i helper _wottTailEnd',
+                /const WOTT_TAIL_FRAMES = 8;/.test(chySrc) &&
                 /_wottTailEnd: function \(startSec, endSec\)/.test(chySrc) &&
                 /Math\.floor\(\(en - WOTT_TAIL_FRAMES \* REV_FRAME\) \/ REV_FRAME \+ 1e-6\) \* REV_FRAME/.test(chySrc) &&
                 /return Math\.max\(st \+ REV_FRAME, cut\);/.test(chySrc),
-                'const=' + /const WOTT_TAIL_FRAMES = 20;/.test(chySrc) +
+                'const=' + /const WOTT_TAIL_FRAMES = 8;/.test(chySrc) +
                 ' helper=' + /_wottTailEnd: function/.test(chySrc));
+            ok('#WOTT/66 flow_chyrons: WOTT_DUR_REF = 4 s (durada genèrica d\'un chyron)',
+                /const WOTT_DUR_REF = 4\.0;/.test(chySrc) &&
+                /let wantDur = \(durOwn !== null\) \? durOwn : WOTT_DUR_REF;/.test(chySrc),
+                'const=' + /const WOTT_DUR_REF = 4\.0;/.test(chySrc) +
+                ' us=' + /: WOTT_DUR_REF;/.test(chySrc));
             ok('#WOTT/64 la cua es descompta en els DOS camins: rètol/grafisme i tòtem (TE)',
                 /const endCut = this\._wottTailEnd\(slot\.start, placeEnd\);/.test(chySrc) &&
                 /endCoherent\(slot\.track, slot\.start, endCut, 'video', label\)/.test(chySrc) &&
                 /end = this\._wottTailEnd\(start, end\);/.test(chySrc),
                 'generic=' + /_wottTailEnd\(slot\.start, placeEnd\)/.test(chySrc) +
                 ' te=' + /_wottTailEnd\(start, end\)/.test(chySrc));
-            // Rèplica de la funció: 20 frames de cua, graella cap avall, mai <1 frame.
+            // Rèplica de la funció: 8 frames de cua, graella cap avall, mai <1 frame.
             var tail = function (st, en) {
                 if (!isFinite(st) || !isFinite(en)) return en;
                 var cut = gDown(en - TAIL_F * FR);
                 return Math.max(st + FR, cut);
             };
-            ok("#WOTT/65 _wottTailEnd: 6,24s de mèdia → 5,44s de clip i mai per davall d'un frame",
-                Math.abs((tail(100, 100 + 6.24) - 100) - 5.44) < 1e-6 &&
+            ok("#WOTT/65 _wottTailEnd: 6,24s de mèdia → 5,92s de clip i mai per davall d'un frame",
+                Math.abs((tail(100, 100 + 6.24) - 100) - 5.92) < 1e-6 &&
                 Math.abs((tail(100, 100.2) - 100) - 0.04) < 1e-6,
                 'viu=' + (tail(100, 106.24) - 100).toFixed(2) +
                 ' curt=' + (tail(100, 100.2) - 100).toFixed(2));
@@ -675,11 +682,11 @@
                     /const LIMIT_PROGRAMA = 400 \* 1024/.test(stillSrc) &&
                     /const pngSospitos = cap\.ok && Number\(cap\.bytes\) > LIMIT_PROGRAMA/.test(stillSrc) &&
                     /if \(cap\.ok && !pngSospitos\)/.test(stillSrc) &&
-                    /flow_chyrons\.js\?v=94/.test(idxW),
+                    /flow_chyrons\.js\?v=95/.test(idxW),
                     'still=' + stillSrc.length +
                     ' zoneAvansCaptura=' + (stillSrc.indexOf('_freezeZone(needZone)') > -1 && stillSrc.indexOf('_freezeZone(needZone)') < stillSrc.indexOf('_capturePng(capBase')) +
                     ' v6=' + (stillSrc.indexOf('const TEMP_TC = await this._v6FreeTC') === -1 ? 'fora' : 'DINS') +
-                    ' v94=' + /flow_chyrons\.js\?v=94/.test(idxW));
+                    ' v95=' + /flow_chyrons\.js\?v=95/.test(idxW));
             } finally {
                 UI.Utils.callJSX = savedCJZ;
             }

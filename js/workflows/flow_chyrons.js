@@ -35,13 +35,25 @@
     // com que l'`outPoint` del project item és INCLUSIU (Premiere hi afig el frame del
     // outPoint), un clip que acabe al final del mèdia ensenya eixe negre al timeline.
     // Petició de l'usuari (02/11): de les dos solucions possibles, la MÉS SIMPLE —
-    // «reduir per defecte tots els wotts 20 frames per a assegurar que no es cole cap
-    // negre». 20 frames (0,80 s a 25 fps) cobrixen amb marge els 8 frames mesurats.
-    // ÀMBIT: només els wotts (rètols i grafismes de `_placeChyronsByType` + tòtems de
-    // `placeTeWotts`, via `_wottTailEnd`). Els clips de duració FIXA (Conductor,
-    // Tema-Títol, congelats, PNG de fons) NO es toquen, i la TRADUCCIÓ i els TUITS
-    // tenen regla pròpia (mesuren el mèdia real o fan congelat de la cua).
-    const WOTT_TAIL_FRAMES = 20;
+    // retallar SEMPRE una cua fixa de tots els wotts. Es va posar a 20 frames i la
+    // prova en viu del 03/11 va dir que ERA MASSA («ajusta el recorte a 8 frames en
+    // vez de 20, era demasiado»): la mida de 8 frames és la que es va MESURAR de negre.
+    // REGLA D'OR que no s'ha de trencar (usuari, 03/11): «un chyron ha de durar, de
+    // manera genèrica, uns 4 segons, o el que dura el seu clip de referència (V1)»;
+    // amb 8 frames (0,32 s a 25 fps) un wott de 4 s queda en 3,68 s i no s'hi veu cap
+    // negre. ÀMBIT: només els wotts (rètols i grafismes de `_placeChyronsByType` +
+    // tòtems/grafismes amb marcador de `placeTeWotts`, via `_wottTailEnd`). Els clips
+    // de duració FIXA (Conductor, Tema-Títol, congelats, PNG de fons) NO es toquen, i
+    // la TRADUCCIÓ i els TUITS tenen regla pròpia (mesuren el mèdia real o fan
+    // congelat de la cua).
+    const WOTT_TAIL_FRAMES = 8;
+
+    // ⏱️ (2026-11-03 · BUG #218) DURADA GENÈRICA DE REFERÈNCIA d'un wott/grafisme quan
+    // el bin NO dóna la seua durada (`_resolveWottDur` buit): la regla de l'usuari és
+    // «uns 4 segons, o el que dura el seu clip de referència (V1)». Abans eren 3,0 s,
+    // que amb la cua restada deixava el clip per davall dels 3 s. Sempre es retalla al
+    // marcador següent (cap wott no entra a l'ítem de darrere).
+    const WOTT_DUR_REF = 4.0;
 
     // (2026-10-16 · BUG #170) CAS del bloc (intro LLARGA vs intro CURTA): constants compartides
     // per `placeChyronConductor` i `_blockStartTime` (abans eren literals duplicats dins de
@@ -55,6 +67,23 @@
     // `Clips.insert` → `Project.find`, que recorre l'arbre i els bins: pot viure a qualsevol
     // bin). Si no hi és, el wott es col·loca igualment i el log ho diu ben clar.
     const TE_FONS_PNG = '3CatInfo_VERTICALITZACIO_Fons-per-videos.png';
+
+    // 🗂️ (2026-11-03 · BUG #216, 2a part) GRAFISMES QUE VAN ANCORATS A UN MARCADOR GROC
+    // (no al rastreig de color). Petició de l'usuari amb el cas real TNM V2 del 02/11:
+    // «els gràfics DADA-ITEM són els que van associats al marcador AMARILLO p7 Dades
+    // HABITATGE; els wotts TITOLET són els que s'han de col·locar en les zones
+    // detectades per l'ffmpeg». El rastreig de gris/color va trobar 3 grafismes cremats
+    // i va col·locar-hi 2 gràfics ERRONIS: estos rols NO es rastregen mai, es col·loquen
+    // pel TÍTOL al marcador groc del seu ítem (mateixa mecànica que el tòtem TE, vegeu
+    // `placeTeWotts`) amb el PNG de fons a V3 i el wott a V4.
+    // Són etiquetes LITERALS de `titolet.detectRoles` (matx d'IGUALTAT normalitzat).
+    const MARKER_GRAF_ROLES = ['DADA-ITEM'];
+
+    /** _normRole: normalitza una etiqueta de rol per comparar-la (igual que els rols). */
+    const MARKER_GRAF_NORMS = MARKER_GRAF_ROLES.map(function (r) {
+        return String(r || '').toUpperCase().normalize('NFD')
+            .replace(/[\u0300-\u036f]/g, '').replace(/[^A-Z0-9]/g, '');
+    });
 
     // (2026-10-16 · BUG #170) ESTAT del cas de la intro (botó 🔀 de la fila CHY):
     //   'A' = intro LLARGA (l'inici del bloc l'obre el Tema-Títol; el Conductor va després)
@@ -3363,6 +3392,18 @@
                     // si xoca amb rètols ja col·locats, els aparta o baixa la cadena de pista.
                     // CONDICIÓ DE DISPARO: `_isBurnedGrafWott` (rols de `titolet.detectRoles`).
                     if (opts && opts.chainTitolet) {
+                        // 🗂️ (2026-11-03 · BUG #216, 2a part) Els grafismes ANCORATS A
+                        // MARCADOR (DADA-ITEM) NO entren mai al rastreig: van al marcador
+                        // groc del seu títol (`placeTeWotts`). Si hi entraren, el rastreig
+                        // de color els col·locaria a les zones detectades de l'ffmpeg i
+                        // eixirien gràfics ERRONIS (cas real TNM V2, 02/11: 3 zones → 2
+                        // gràfics equivocats).
+                        const nAnc = matching.filter(c => this._isMarkerGrafWott(c)).length;
+                        if (nAnc > 0) {
+                            matching = matching.filter(c => !this._isMarkerGrafWott(c));
+                            log(`   🗂️ [${label}] ${nAnc} grafisme(s) amb MARCADOR (${MARKER_GRAF_ROLES.join('/')}) fora del rastreig: els col·loca la passada de marcador`, "INFO");
+                            if (matching.length === 0) continue;
+                        }
                         const cremats = matching.filter(c => this._isBurnedGrafWott(c));
                         if (cremats.length > 0) {
                             const itemEndChain = await this._itemEndTime(mk, markersFull);
@@ -5896,6 +5937,31 @@
         },
 
         /**
+         * _isMarkerGrafWott: el wott és un GRAFISME que va ANCORAT A UN MARCADOR GROC?
+         *
+         * (2026-11-03 · BUG #216, 2a part) Cas real TNM V2 del 02/11: el rastreig de
+         * color va trobar 3 grafismes cremats i hi va col·locar 2 gràfics ERRONIS. La
+         * regla de l'usuari és:
+         *   · TITOLET (i la resta de la família amb ROI pròpia) → zones detectades per
+         *     l'ffmpeg (`_placeTitoletChain`), com sempre;
+         *   · DADA-ITEM → al MARCADOR GROC del seu títol («p7 Dades HABITATGE»), mai
+         *     al rastreig de color.
+         * Els rols són les etiquetes LITERALS de `MARKER_GRAF_ROLES` (matx d'IGUALTAT
+         * normalitzat, igual que `_burnedGrafRole`).
+         * @param {Object} chy - {name, rol}
+         * @returns {boolean}
+         */
+        _isMarkerGrafWott: function (chy) {
+            var role = this._burnedGrafRole(chy);
+            if (!role) return false;
+            var n = this._burnedGrafNorm(role);
+            return MARKER_GRAF_NORMS.indexOf(n) !== -1;
+        },
+
+        /** Rols (literal) que s'ancoren al marcador groc. Exposat per al smoke. */
+        MARKER_GRAF_ROLES: MARKER_GRAF_ROLES,
+
+        /**
          * _teWottTitle: TÍTOL del wott (la part del nom que es compara amb el marcador).
          * Es fa servir `Logic.Parse.meta`, que és la font única del parseig de noms.
          * @param {string} name - nom del wott
@@ -5997,12 +6063,25 @@
         placeTeWotts: async function () {
             const struct = FASTPASS_UI.State.structure || [];
             const cand = [];
+            let nTe = 0, nMarc = 0;
             for (const e of struct) {
-                if (!e || !this._isTeItemId(e.id)) continue;
-                for (const c of (e.chyrons || [])) cand.push({ id: String(e.id || ''), chy: c });
+                if (!e) continue;
+                const esTe = this._isTeItemId(e.id);
+                for (const c of (e.chyrons || [])) {
+                    // (2026-11-03 · BUG #216, 2a part) DOS camins per al MATEIX destí:
+                    //   · ÍTEM TE (tòtem): tots els seus wotts (comportament 02/11);
+                    //   · qualsevol ítem: els rols de `MARKER_GRAF_ROLES` (DADA-ITEM), que
+                    //     van associats al marcador groc del seu títol («p7 Dades HABITATGE»)
+                    //     i que MAI s'han de col·locar pel rastreig de color de l'ffmpeg.
+                    const esMarc = this._isMarkerGrafWott(c);
+                    if (!esTe && !esMarc) continue;
+                    cand.push({ id: String(e.id || ''), chy: c, tag: esTe ? 'TE' : 'MARC' });
+                    if (esTe) nTe++; else nMarc++;
+                }
             }
             if (cand.length === 0) {
-                log("➖ [TE] Cap wott de tòtem (sufix TE) a l'escaleta → res a fer.");
+                log("➖ [TE] Cap wott de tòtem (sufix TE) ni grafisme amb marcador (" +
+                    MARKER_GRAF_ROLES.join('/') + ") a l'escaleta → res a fer.");
                 return 0;
             }
             const cfg = FASTPASS_UI.Config.get();
@@ -6035,10 +6114,12 @@
                 amarillos.push({ time: t, id: this._markerItemId(cmt), titol: titol, comments: cmt });
             }
             if (amarillos.length === 0) {
-                log(`➖ [TE] ${cand.length} wott(s) de tòtem, però cap marcador GROC amb «NN - Títol» → no es col·loca res.`);
+                log(`➖ [TE] ${cand.length} wott(s) de tòtem/marcador, però cap marcador GROC amb «NN - Títol» → no es col·loca res.`);
                 return 0;
             }
-            log(`🎯 [TE] ${cand.length} wott(s) de tòtem · ${amarillos.length} marcador(s) groc(s): ` +
+            log(`🎯 [TE] ${nTe} wott(s) de tòtem` +
+                (nMarc > 0 ? ` + ${nMarc} grafisme(s) amb MARCADOR (${MARKER_GRAF_ROLES.join('/')})` : '') +
+                ` · ${amarillos.length} marcador(s) groc(s): ` +
                 amarillos.map(a => a.id + '@' + a.time.toFixed(1)).join(', '));
             // ── Semblança de títols (la MATEIXA que el flux MAPA) ───────────────
             const Mapa = FASTPASS_UI.Workflows && FASTPASS_UI.Workflows.Mapa;
@@ -6074,18 +6155,21 @@
                     default: return String(f.res);
                 }
             };
-            let ok = 0;
+            let ok = 0, okTe = 0, okMarc = 0;
             for (const it of cand) {
                 const name = String((it.chy && it.chy.name) || '');
                 const shortName = name.substring(0, 40);
                 const title = this._teWottTitle(name);
+                // Etiqueta del log: 'TE' per al tòtem i el ROL literal per als grafismes
+                // ancorats a marcador (p.ex. 'DADA-ITEM').
+                const TG = (it.tag === 'MARC') ? (this._burnedGrafRole(it.chy) || 'MARC') : 'TE';
                 let best = null;
                 for (const am of amarillos) {
                     const sc = score(title, am.titol);
                     if (!best || sc > best.score + 1e-9) best = { score: sc, mk: am };
                 }
                 if (!best || best.score < MIN) {
-                    log(`   ⏭️ [TE] «${shortName}…» («${title}»): cap marcador GROC de títol semblant` +
+                    log(`   ⏭️ [${TG}] «${shortName}…» («${title}»): cap marcador GROC de títol semblant` +
                         (best ? ` — el millor és «${best.mk.id} - ${best.mk.titol}» ${best.score.toFixed(2)} < ${MIN}` : '') +
                         ' → NO es col·loca', "WARN");
                     continue;
@@ -6093,27 +6177,28 @@
                 const mk = best.mk;
                 if (this._isAlreadyPlaced(name, { lo: mk.time - 0.5, hi: mk.time + 0.5 })) {
                     this._noteDup(1);
-                    log(`   🛡️ [TE] «${shortName}…» ja és al timeline @ ${mk.time.toFixed(2)}s → no es duplica`);
+                    log(`   🛡️ [${TG}] «${shortName}…» ja és al timeline @ ${mk.time.toFixed(2)}s → no es duplica`);
                     continue;
                 }
                 // Durada PRÒPIA del wott, retallada al marcador següent. Sense durada
-                // coneguda al bin, 3 s de referència (el clip queda estirable).
+                // coneguda al bin, `WOTT_DUR_REF` (4 s: la durada genèrica d'un chyron;
+                // el clip queda estirable).
                 let durInfo = {};
                 try { durInfo = (PL && PL._resolveWottDur) ? (PL._resolveWottDur(wottIdx, it.chy) || {}) : {}; } catch (eD) { }
                 const durOwn = (durInfo && durInfo.dur > 0) ? Number(durInfo.dur) : null;
                 const lim = nextAfter(mk.time);
-                let wantDur = (durOwn !== null) ? durOwn : 3.0;
+                let wantDur = (durOwn !== null) ? durOwn : WOTT_DUR_REF;
                 if (lim !== null) wantDur = Math.min(wantDur, Math.max(0.5, lim - mk.time));
                 const slot = await this._chooseSlot([V_WOTT], mk.time, wantDur, ctx, lim);
                 if (!slot || !slot.track) {
-                    log(`   ⚠️ [TE] Sense pista per a «${shortName}…»`, "WARN");
+                    log(`   ⚠️ [${TG}] Sense pista per a «${shortName}…»`, "WARN");
                     continue;
                 }
                 // 🚫 V4 OCUPADA en tot l'ítem: `_chooseSlot` no ha trobat forat i, si
                 // s'inserira igualment, l'`overwriteClip` s'enduguera el clip que hi haja
                 // (a V4 hi viuen les TRADUCCIONS). Millor no tocar res i avisar.
                 if (slot.overlap) {
-                    log(`   ⛔ [TE] «${shortName}…»: V${V_WOTT} OCUPADA en tot l'ítem (marcador @ ${mk.time.toFixed(2)}s) → NO es col·loca`, "WARN");
+                    log(`   ⛔ [${TG}] «${shortName}…»: V${V_WOTT} OCUPADA en tot l'ítem (marcador @ ${mk.time.toFixed(2)}s) → NO es col·loca`, "WARN");
                     continue;
                 }
                 let useDur = wantDur;
@@ -6130,42 +6215,45 @@
                 const insW = String(await callJSX(
                     `Clips.insert('${getUtils().escape(getUtils().jsxName(name))}', ${slot.track}, ${start.toFixed(4)}, null, 'video')`) || '');
                 if (insW.indexOf('OK') === -1) {
-                    log(`   ⚠️ [TE] «${shortName}…»: insert V${slot.track} @ ${start.toFixed(2)}s → ${insW}`, "WARN");
+                    log(`   ⚠️ [${TG}] «${shortName}…»: insert V${slot.track} @ ${start.toFixed(2)}s → ${insW}`, "WARN");
                     continue;
                 }
                 this._markPlaced(name, start, end);
                 try {
-                    const rEnd = await getClipsLogic().endCoherent(slot.track, start, end, 'video', 'TE');
+                    const rEnd = await getClipsLogic().endCoherent(slot.track, start, end, 'video', TG);
                     if (String(rEnd).indexOf('OK') === -1) {
-                        log(`   ⚠️ [TE] retall V${slot.track} @ ${start.toFixed(2)}s → ${rEnd}`, "WARN");
+                        log(`   ⚠️ [${TG}] retall V${slot.track} @ ${start.toFixed(2)}s → ${rEnd}`, "WARN");
                     }
                 } catch (eE) {
-                    log(`   ⚠️ [TE] no s'ha pogut fixar el final del clip: ${eE.message}`, "WARN");
+                    log(`   ⚠️ [${TG}] no s'ha pogut fixar el final del clip: ${eE.message}`, "WARN");
                 }
                 this._addPlaced(ctx, slot.track, start, end);
                 // 2) El FONS del wott gràfic (PNG del MATEIX projecte), a V3 i amb eixe
                 //    MATEIX rang. Si no es pot, el wott ja està col·locat i s'avisa.
                 const fons = await this._placeTeFons(TE_FONS_PNG, V_FONS, start, end, ctx);
                 if (fons && fons.res !== 'OK') {
-                    log(`   ⚠️ [TE] fons V${V_FONS} de «${shortName}…»: ${fonsTxt(fons)}`, "WARN");
+                    log(`   ⚠️ [${TG}] fons V${V_FONS} de «${shortName}…»: ${fonsTxt(fons)}`, "WARN");
                 }
                 placedRecs.push({
                     num: String(it.id || mk.id || ''), name: name, track: slot.track,
                     startSec: start, endSec: end, tipus: 'GRF'
                 });
-                log(`   ✅ [TE] «${shortName}…» ≈ «${mk.id} - ${mk.titol}» (${best.score.toFixed(2)}) → V${slot.track} @ ${start.toFixed(2)}s → ${end.toFixed(2)}s` +
+                log(`   ✅ [${TG}] «${shortName}…» ≈ «${mk.id} - ${mk.titol}» (${best.score.toFixed(2)}) → V${slot.track} @ ${start.toFixed(2)}s → ${end.toFixed(2)}s` +
                     (slot.moved ? ` ⟵ desplaçat per no trepitjar (ideal ${mk.time.toFixed(2)}s)` : '') +
-                    (durOwn === null ? ' (sense durada al bin: 3,0s de referència)' : '') +
+                    (durOwn === null ? ` (sense durada al bin: ${WOTT_DUR_REF.toFixed(1).replace('.', ',')}s de referència)` : '') +
                     ` · cua −${WOTT_TAIL_FRAMES}f · fons V${V_FONS}: ${fonsTxt(fons)}`);
                 ok++;
+                if (it.tag === 'MARC') okMarc++; else okTe++;
             }
             if (ok === 0) {
-                log("⚠️ [TE] Cap wott de tòtem col·locat.", "WARN");
+                log("⚠️ [TE] Cap wott de tòtem ni grafisme amb marcador col·locat.", "WARN");
             } else {
-                log(`🎬 [TE] ${ok} tòtem(s) col·locat(s) al marcador groc del seu títol` +
-                    ` (wott a V${V_WOTT}, fons «${TE_FONS_PNG}» a V${V_FONS}).`, "INFO");
+                log(`🎬 [TE] ${ok} grafisme(s) col·locat(s) al marcador groc del seu títol` +
+                    ` (${okTe} tòtem(s)` +
+                    (okMarc > 0 ? ` + ${okMarc} de marcador (${MARKER_GRAF_ROLES.join('/')})` : '') +
+                    `; wott a V${V_WOTT}, fons «${TE_FONS_PNG}» a V${V_FONS}).`, "INFO");
                 getUtils().status(`Tòtem: ${ok}`, "exito");
-                await this._recordPlacedChyrons(placedRecs, 'TE');
+                await this._recordPlacedChyrons(placedRecs, nMarc > 0 ? 'TE/MARC' : 'TE');
             }
             return ok;
         },
@@ -6191,8 +6279,12 @@
             // `titolet.detectRoles`: acabarien amb rastreig de color). Els col·loca la
             // passada pròpia `placeTeWotts` DESPRÉS, al marcador groc del seu títol.
             const isTe = c => this._isTeWott(c);
+            // (2026-11-03 · BUG #216, 2a part) Els grafismes ancorats a marcador
+            // (DADA-ITEM) tampoc passen pel bucle genèric ni pel rastreig: els col·loca
+            // `placeTeWotts`, al marcador groc del seu títol.
+            const isMarkerGraf = c => this._isMarkerGrafWott(c);
             await this._placeChyronsByType(
-                c => !isTitol(c) && !isConductor(c) && !isLloc(c) && !isNom(c) && !isTraduccio(c) && !isTe(c),
+                c => !isTitol(c) && !isConductor(c) && !isLloc(c) && !isNom(c) && !isTraduccio(c) && !isTe(c) && !isMarkerGraf(c),
                 (c, cfg) => {
                     const rName = (c.name || '').toUpperCase();
                     const rRol = (c.rol || '').toUpperCase();

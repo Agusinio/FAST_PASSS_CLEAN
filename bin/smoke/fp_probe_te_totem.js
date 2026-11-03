@@ -116,7 +116,39 @@
         ok('fons: si el PNG no és al projecte ho diu (NO_ITEM) i el wott queda igual',
             srcFons.indexOf('ITEM_NOT_FOUND') !== -1 && srcFons.indexOf('NO_ITEM') !== -1);
 
-        // ── Un marcador groc TOT SOL no dispara res (ni tan sols llig marcadors) ─
+        // ── #216 (2a part) · DADA-ITEM: MARCADOR GROC, mai rastreig de color ──
+        // Petició d'usuari (TNM V2 del 02/11): «els gràfics DADA-ITEM són els que van
+        // associats al marcador AMARILLO p7 Dades HABITATGE; els wotts TITOLET són els
+        // que s'han de col·locar en les zones detectades per l'ffmpeg». El rastreig va
+        // trobar 3 zones i hi va col·locar 2 gràfics ERRONIS: DADA-ITEM ha d'anar pel
+        // TÍTOL al marcador, com el tòtem.
+        var W_DADA = 'Wott_TNM_v2_07_00.00_p7 Dades HABITATGE_672605_DADA-ITEM_VERTICAL_9x16.mov';
+        var W_TITOLET = 'Wott_TNM_v2_07_00.00_DONA PAS_672606_TITOLET_VERTICAL_9x16.mov';
+        ok('#216 DADA-ITEM és grafisme AMB MARCADOR; el TITOLET no (va per l\'ffmpeg)',
+            CHY._isMarkerGrafWott({ name: W_DADA }) === true &&
+            CHY._isMarkerGrafWott({ name: W_TITOLET, rol: 'TITOLET' }) === false &&
+            CHY._isMarkerGrafWott({ name: 'x' }) === false,
+            'dada=' + CHY._isMarkerGrafWott({ name: W_DADA }) +
+            ' titolet=' + CHY._isMarkerGrafWott({ name: W_TITOLET }));
+        ok('#216 MARKER_GRAF_ROLES: només DADA-ITEM (etiqueta literal de detectRoles)',
+            Array.isArray(CHY.MARKER_GRAF_ROLES) && CHY.MARKER_GRAF_ROLES.length === 1 &&
+            CHY.MARKER_GRAF_ROLES[0] === 'DADA-ITEM',
+            String(CHY.MARKER_GRAF_ROLES));
+        ok('#216 el títol que es compara amb el marcador és el TEXT del wott (p7 Dades HABITATGE)',
+            CHY._teWottTitle(W_DADA) === 'p7 Dades HABITATGE',
+            CHY._teWottTitle(W_DADA));
+        ok('#216 el bucle genèric (Resto) exclou els grafismes amb marcador',
+            String(CHY.placeChyronResto).indexOf('!isMarkerGraf(c)') !== -1,
+            'resto=' + (String(CHY.placeChyronResto).indexOf('!isMarkerGraf(c)') !== -1));
+        ok('#216 el rastreig de color/cadena també els exclou (mai zones detectades)',
+            String(CHY._placeChyronsByType).indexOf('_isMarkerGrafWott(c)') !== -1 &&
+            String(CHY._placeChyronsByType).indexOf('fora del rastreig') !== -1);
+        ok('#216 placeTeWotts recull els grafismes de marcador de QUALSEVOL ítem (tag MARC)',
+            String(CHY.placeTeWotts).indexOf("tag: esTe ? 'TE' : 'MARC'") !== -1 &&
+            String(CHY.placeTeWotts).indexOf("it.tag === 'MARC'") !== -1 &&
+            String(CHY.placeTeWotts).indexOf('MARKER_GRAF_ROLES') !== -1);
+
+
         var St = window.FASTPASS_UI.State;
         var abans = St ? St.structure : undefined;
         try {
