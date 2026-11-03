@@ -284,6 +284,232 @@ bin\calibra_a1.ps1 -Mix t\mescla.wav -Template t\plantilla.wav -Voice t\veu.wav 
   **`e` = música estimada** (A/B). `eps` per defecte val **1** al filtre (no adapta): sempre cal
   passar-lo baix (`1e-4`). `leakage=0.0005` evita que `h` es desboque en trams sense música.
 
+#### Mesures amb àudio REAL (2026-11-03) · primera reixeta sobre `Audios/`
+
+El parell més net de les plantilles reals (`3CatInfo_TN_anada_publi.WAV` ≡
+`3CatInfo_TN_tornada_publi_.WAV`, **r = 0,993**, lag 0) fa de cas fàcil: les dos
+porten la MATEIXA música, així que el que es mesura és **quanta música de la mescla
+absorbix `anlms`**. Eixe tram no té veu (les 8 bandes d'octava ixqueren totes
+classificades com a MÚSICA i per això `VoiceDb` = NaN).
+
+| `mu` (`order`=1024) | 0,005 | 0,02 | 0,05 | 0,1 | 0,2 | 0,4 | 0,75 |
+|---|---|---|---|---|---|---|---|
+| música (dB) | −1,88 | −3,85 | −5,88 | −7,95 | −10,59 | −13,85 | **−17,36** |
+| residu (dBFS) | −25,1 | −27,6 | −29,8 | −31,8 | −34,1 | −36,8 | −39,3 |
+
+- **`order` no decidix**: 1024, 4096 i 16384 donen el mateix dB (±0,3) i costen
+  **0,3 s / 1,1 s / 6,3 s** per a un clip d'11,8 s → **`order=1024`** (20× més ràpid
+  que 16384 per a res en este material).
+- **`mu` és l'única palanca** i la corba és monòtona fins al màxim del filtre (`mu`
+  va de 0 a 1). `eps=1e-6` + `leakage=1e-5` només afigen **+0,5 dB** (−17,86 a
+  `mu=0,75`): no cal tocar-los.
+- **Falta la dada que decidix**: eixe parell NO té veu. Per a triar `mu` de
+  producció cal **un export real d'A1** (veu + molinet/careta mesclats). La prova
+  sintètica de dalt diu que `mu` alt es menja la veu (−8,4 dB a `mu=0,1`) i eixa
+  mesura diu que `mu` baix deixa la música dins (−8 dB a `mu=0,1`): el punt de
+  treball és eixe marge. **Criteri proposat per a F1**: `order=1024`, `mu=0,05`
+  conservador (o `0,1` si l'A/B de l'operador ho aguanta), `eps=1e-4`,
+  `leakage=0,0005`.
+- **Defecte corregit a l'eina (03/11)**: `-Orders '1024,4096'` s'executava com a
+  **un sol** `order` (la coma es prenia per decimal i `[int]'1024,4096'` arredonia a
+  1024 amb la cultura ca-ES). Ara la coma només és decimal en valors curts
+  (`0,005`, `12,5`) i les llistes d'enters es trenquen com cal.
+
+### 1.3 quinquies · Mapping **escaleta → clip** i prova amb el clip REAL (2026-11-03) ⭐
+
+#### a) La fórmula que cal usar (surt de l'escaleta i del `ref` del projecte)
+
+El `TNV_V<n>.fastpass.json` ja guarda tot el que cal; no fa falta cap TC «d'original» a mà:
+
+| Camp | Exemple (TNV V1 · 2026-11-02) | Què és |
+|---|---|---|
+| `ref.extractedWorldSecMediaStart` | **75696,68** | segons de món (00:00 = 00:00 del dia) on comença el **clip exportat** |
+| `ref.blockInSec` | **75657** | inici de **bloc** segons l'escaleta (ítem de vídeo V1) |
+| `ref.mp4ExpandedInPoint` = `tlBlockInPointSec` | **20,32** | on cau eixe inici **dins del clip** |
+| `escaletaItems[].horaEntradaPrevista` | `21:01:50` (CARETA) · `21:01:57` (Intro) | hora **on air** de cada ítem |
+
+Connexió (verificada amb el JSON del 02/11): `mp4ExpandedInPoint` **no** és el
+`blockInSec` — és l'inici del **primer ítem que realment entra** (ací la *Intro*),
+que va **després** de la careta:
+
+```
+world(ítem) = horaOnAir → segons de món      (21:01:57 = 75600+60+57 = 75717)
+clip(ítem)  = world(ítem) − extractedWorldSecMediaStart   (75717 − 75696,68 = 20,32 ✓)
+```
+
+| Ítem de l'escaleta | On air | world (s) | **clip (s)** | Durada |
+|---|---|---|---|---|
+| **CARETA TNV** | 21:01:50 → 21:02:20 | 75710 → 75740 | **13,32 → 43,32** | 30,0 s |
+| **Intro** («01i») | 21:01:57 → 21:02:20 | 75717 → 75740 | **20,32 → 43,32** | 23,0 s (= marcador 23,080) |
+| SÁNCHEZ… («01») | 21:02:20 → 21:04:22 | 75740 → 75862 | 43,32 → 165,32 | 122 s |
+
+**Conseqüència de disseny**: la careta **no és un ítem anterior** al clip d'A1 (la §1.5-bis
+punt 1 ho suposava): és **damunt** de la intro. L'àudio del primer clip d'A1 (la intro) porta
+la careta des del **sample 0** i el que cal llevar és eixa música, no un tros de cua.
+
+Corol·lari útil: **els 7 s previs a la intro** (clip 13,32 → 20,32) són **careta neta, sense
+veu** — eixe tram és el candidat natural per a *localitzar* el so (correlació) i, si fa falta,
+per a aprendre'n el guany: eixa dada no existia en el diagnòstic del 30/10.
+
+#### b) Prova amb les 7 plantilles contra eixa finestra (RESULTAT: cap encaixa)
+
+`bin\cmp_audio.ps1`-style (embolcall RMS 20 ms, mono 8 kHz, banda 40–2000 Hz, cerca de
+desplaçament completa dins la finestra):
+
+| Finestra del clip | Plantilla que més s'hi acosta | r màxim |
+|---|---|---|
+| 13,32 s + 30,08 s (careta sencera) | `TNC_careta_sense_alpha` a +12,42 s | **0,258** |
+| 13,32 s + 17,48 s (= durada de la careta WAV) | `TN_tornada_publi_` / `TN_anada_publi` a +1,60 s (**les dos caretes WAV no hi caben** i se salten) | **0,277** |
+| 20,32 s + 23,08 s (intro) | `TN_molinet_02` a +0,58 s | **0,248** |
+| 19,32 s + 24,08 s | `TNC_careta_sense_alpha` a +6,42 s | **0,247** |
+| clip sencer (245 s) | `TN_anada_publi` a 1,44 s · `TN_molinet_02` a 107,7 s | 0,62 / 0,42 |
+
+Referència del que és una còpia real: **0,82–0,99** (§1.3-ter). Amb `r ≤ 0,27` la conclusió és
+clara: **la careta que sona el 02/11 a TNV V1 no és cap dels 7 WAV**. A més, la careta de
+l'escaleta dura **30 s** i els dos WAV de careta fan **17,5 s**: no és el mateix tall.
+
+> ⚠️ Estos `r` són d'un estimador **no** normalitzat per finestra. El resultat es va repetir
+> amb Pearson pur a **§1.3-sexies** (control d'auto-correlació = 1,000): seguix sense encaixar
+> res, i el fitxer `CARETA_20` que va arribar el 03/11 és el **mateix so** que `TN_Careta`.
+
+I no és un problema d'alineament: la reixeta `order` (1024/4096/16384) ja es va provar amb
+àudio real i, amb la plantilla equivocada, `anlms` **no lleva res** (mesurat amb
+`bin\calibra_a1.ps1` sobre la intro: música −0,5…−0,7 dB, és a dir pèrdua de nivell, no
+cancel·lació; la cancel·lació de veritat dona −17 dB, §1.3-quater).
+
+#### c) Què falta (i què fa el codi mentrestant)
+
+Segons el **criteri d'acceptació 5** (§1.6): *«sense plantilla del so que es cola → no es toca
+res i el log ho diu»*. És exactament el cas del 02/11.
+
+Falta **el màster del tall que sona eixe dia**: un WAV de la *careta* de 30 s (o el tall exacte
+que envie el tècnic). Dos camins, per ordre de cost:
+
+1. **El WAV** (0 codi): deixar-lo a `Audios/` → la selecció automàtica per correlació (§1.5-bis
+   punt 3, llindar `r ≥ 0,7`) el triarà i `anlms` farà la resta.
+2. **Treure'l del propi clean feed** (si mai no arriba): la careta sona **neta** en algun punt
+   del dia (ací, clip 13,32 → 20,32; en general, abans que arranque la veu de la intro). Amb
+   eixe tros es pot **localitzar** el so i calcular el guany/retard (`r` alt contra si mateix),
+   però per a restar 23 s de música cal la referència **sencera** o una finestra prou curta:
+   viables només els primers segons (F2/F4), no la intro completa.
+
+### 1.3 sexies · Mètode de correlació **corregit** i fitxer nou del 03/11 (2026-11-03)
+
+#### a) L'estimador anterior no era Pearson pur
+
+Els números de §1.3-quinquies eixien de z-scorar la **mescla sencera** i la plantilla per
+separat, i després fer el producte escalar. Això **no** és el coeficient de Pearson de la
+finestra: la mitjana/desviació de la mescla han de ser les **de cada finestra** (si no, el
+valor ix esbiaixat i no servix com a llindar absolut).
+
+Corregit amb **sumes prefixades** de la mescla (mitjana i variància de cada finestra en O(1)):
+
+```
+r(lag) = [ Σ_i zt[i] · zm[lag+i] / nt ] / sd( zm[lag .. lag+nt) )
+```
+
+Controls que validen el mètode (imprescindibles abans de creure's un resultat negatiu):
+
+| Control | r esperat | r mesurat |
+|---|---|---|
+| Els 7 s de careta neta del clip (13,32→20,32) **contra si mateix** dins del clip sencer | 1,000 | **1,000** (al seu lloc exacte, 13,32 s) |
+| `molinet_01` (mescla) vs `molinet_02` (plantilla) | ~0,93 | **0,927** a +0,38 s |
+
+#### b) Resultat definitiu amb Pearson pur — cap plantilla encaixa
+
+| Finestra del clip | Millor plantilla | r | Altres pics |
+|---|---|---|---|
+| **clip sencer (245 s)** | `TN_anada_publi` a 1,44 s | **0,452** | `TN_tornada_publi_` 0,450 · `TN_molinet_01` 0,418 · `TN_molinet_02` 0,404 · **`TN_Careta` i `CARETA_20` 0,403** (tots dos al mateix t=10,74 s) |
+| **13,32 s + 30,08 s** (careta) | `TN_tornada_publi_` a 1,60 s | **0,285** | `TN_anada_publi` 0,284 · `TN_molinet_02` 0,262 · `TNC_careta_sense_alpha` 0,248 · **`TN_Careta` i `CARETA_20` 0,200** (al mateix t=12,24 s) |
+| **20,32 s + 23,08 s** (intro) | — | **≤ 0,25** | — |
+
+Una còpia real dona **0,82–1,00**. Amb **0,20–0,45** la conclusió no admet discussió: **la
+música que sona el 02/11 no és cap dels WAV de `Audios/`**.
+
+#### c) `Audios/3CATINFO_CARETA_20.WAV` (arribat el 03/11) **no és el màster que falta**
+
+| Prova | Resultat | Lectura |
+|---|---|---|
+| `bin\cmp_audio.ps1` `CARETA_20` vs `TN_Careta` | **Corr = 1,000 · Lag = 0 ms · Same = True** | **és el mateix so** (MD5 distint: re-exportat, no duplicat binari) |
+| Pearson contra el clip sencer / la finestra | 0,403 / 0,200 — **idèntic a `TN_Careta`** i al mateix desplaçament | no aporta informació nova |
+| Estirat amb `atempo` 0,5 / 0,583 / 0,667 / 0,75 / 1,25 / 1,5 / 2,0 (per si el tècnic el va passar de velocitat: 30 s d'escaleta vs 17,5 s de WAV) | r màxim **0,262** (x1,25) | no és un problema de velocitat |
+| Els 7 s de careta neta com a plantilla de la intro (hipòtesi «la música és un bucle») | **0,239** | la música **evoluciona**: el tros net no servix per a restar la resta del tall |
+
+#### d) Conseqüència operativa
+
+Es complix el **criteri d'acceptació 5** (§1.6): *«sense plantilla del so que es cola → no es
+toca res i el log ho diu»*. El pas de Diana ha de fer **no-op + log** (`r < 0,7`) amb este
+material. Per a vore una cancel·lació de veritat fa falta **el màster del 02/11** (o el tall
+exacte de 30 s); el que hi ha a `Audios/` és una altra careta.
+
+#### e) Descartat també: freqüència de mostreig, «cinta» i drift (2026-11-03)
+
+Pregunta de l'usuari: *«¿cabe la posibilidad de que el clip mp4 tenga un sampleado diferente del wav?»*.
+Provat, i descartat amb números:
+
+| Hipòtesi | Com s'ha provat | Resultat |
+|---|---|---|
+| Mostreig distint clip/WAV → decodificació esbiaixada | `ffprobe`: clip = **AAC 48 kHz estèreo**; **tots** els WAV = **PCM `s16le` 48 kHz estèreo** (`CARETA_20` inclòs). Cada flux es decodifica a la seua freqüència i després es re-mostreja a 8 kHz per a l'embolcall | cap desajust: la re-mostreja és transparent |
+| Canvi de rellotge «de cinta» (to **i** velocitat alhora, com 44,1 k tocat a 48 k) | `asetrate = sr·k` amb **k = 0,30 … 1,30** (inclou 0,9187 = 44,1→48 i 1,0884 = 48→44,1), Pearson pur contra la finestra de careta | **r màxim = 0,267** (k = 1,28) |
+| El mateix amb la plantilla de molinet contra la intro | `molinet_01`, k = 0,85 … 1,15 | **r màxim = 0,269** |
+| Drift de rellotge (dos clocks que se separen al llarg de 30 s) | correlació per **fragments de 2,5 s** (immunes al drift) | ❌ mètrica **no vàlida**: el control **negatiu** (`molinet_01` vs `anada_publi`) dona **0,93–0,95**, com el positiu (0,93–0,94) → una finestra de 2,5 s no discrimina res. Es descarta com a prova; la mesura amb la plantilla sencera (17,5 s) sí que nota el drift i dona 0,200 |
+| To distint amb el mateix tempo (transposició) | centroide espectral mitjà (`aspectralstats`) | ❌ tampoc discrimina: la família va de **1.639 Hz** (`TN_Careta`) a **3.370 Hz** (`molinet_02`) entre sons que són idèntics. La música neta del clip dona **2.305 Hz**, dins del rang |
+
+Conclusió: **no és mostreig, ni velocitat, ni alineament, ni drift: és una altra gravació.**
+
+#### f) Anàlisi de **freqüència** (to): la desviació que demanava l'usuari, mesurada (2026-11-03)
+
+Pregunta de l'usuari: *«fes una anàlisi de freqüència dels dos, compara les notes; si hi ha una
+desviació de freqüència hi ha una desviació en algun lloc (reproducció o gravació)»*.
+
+Eina: **`bin/analitza_to.ps1`** (nova). FFT real 4096 punts a 8 kHz mono (`highpass 70` +
+`lowpass 3500`), finestra Hann, **12 finestres de 0,512 s** repartides pel tram; espectre mitjà;
+pics amb **interpolació parabòlica**; banda de pics 60–2.000 Hz. D'eixos pics se'n trau: **afinació**
+(mitjana circular de `1200·log2(f/440) mod 100`), **croma** (12 classes de to) i el **factor `k`**
+(0,90–1,10) que millor alinea els pics dels dos senyals (tolerància 0,4%).
+
+| Parell comparat (finestres de 7 s) | tipus | `k` | pics (de 12) | croma | tempo A / B |
+|---|---|---|---|---|---|
+| `TN_Careta` vs `CARETA_20` | **control positiu: còpia exacta** | 0,998 | **12** | **1,000** | 81,08 / 81,08 |
+| `molinet_01` vs `molinet_02` | positiu (desplaçat 0,38 s) | 0,998 | **4** | 0,964 | 120,00 / 81,08 |
+| `molinet_01` vs `anada_publi` | **negatiu: sons distints** | 1,000 | 5 | 0,968 | 120,00 / 81,08 |
+| `molinet_01` vs `CARETA_20` | negatiu | 0,994 | 5 | 0,923 | 120,00 / 81,08 |
+| **clip 13,32 s vs `CARETA_20` (0–7 s)** | **el cas que busquem** | **0,998** | 6 | 0,995 | 157,89 (2n 81,08) / 81,08 |
+
+Pics del clip davant dels de `CARETA_20` (Hz): **97,6 / 97,8** · 292,9 / 292,7 · 390,9 / 390,8 ·
+783,3 / 780,1 · 880,3 / 879,3 · 146,4 / 145,8 → tots són harmònics (×1, ×3, ×4, ×8, ×9) d'una
+fonamental a **≈97,7 Hz**, la **mateixa** als dos. Afinació del clip **−1,3 cents** contra **−5,3**
+de `CARETA_20` (repetint la mesura ix −1,9 / −5,4: el mètode té **±1 cent** de soroll). La música
+del clip va **en el mateix to i a la mateixa velocitat** que la plantilla.
+
+**Conclusió 1 (la pregunta de l'usuari): no hi ha cap desviació de freqüència.**
+Si el clip fóra la mateixa música reproduïda a un altre rellotge, l'error clàssic 44,1↔48 donaria
+`k` = **1,0884** i **±147 cents** d'afinació; la mesura dona `k` = **0,998** (0,2%) i **±3,5 cents**
+de diferència (−1,9 vs −5,4, dins del soroll de mesura). Descartat, doncs, que el problema siga de
+reproducció o de gravació: **els dos àudios corren igual**.
+
+**Conclusió 2 (per què no servix com a prova d'identitat):** cap d'estos mètrics **discrimina**.
+Els parells **negatius** també donen **5 pics** a `k` ≈ 1, perquè tots els talls de la casa estan en
+el mateix to i afinats a La = 440; el **croma** del negatiu `molinet_01`/`anada_publi` és **0,968**,
+gairebé el **0,995** del cas que volem decidir; i el **tempo** és el pitjor de tots: el parell
+**positiu** `molinet_01`/`molinet_02` (el mateix so!) dona **120,00 contra 81,08 BPM** segons la
+finestra — la mateixa peça mesurada dos voltes ix amb temps distints. És a dir: **ni els pics, ni el
+croma, ni el tempo decidixen res**; només el parell de còpia exacta trau números rodons (12 pics,
+croma 1,000, 81,08/81,08) i eixe cas no necessita cap anàlisi.
+
+**Conclusió 3 (quina mesura decidix, doncs):** només la **correlació d'ona** de §1.3-sexies, que
+està validada amb controls (0,93–1,00 per a una còpia real, fins i tot desplaçada, contra
+**0,20–0,45** ací). Eixa diu que el contingut **no coincidix** a cap desplaçament del clip.
+
+Lectura final: **no hi ha cap desviació de freqüència**, i en això l'usuari tenia raó —és el que
+descartava. I l'orella tampoc enganya: **mateix to, mateixa afinació, mateixa família** de música de
+la casa (fins i tot el pols a 81 BPM apareix als dos). Però que coincidisca «tot el que és musical»
+no prova que siga la mateixa gravació, i la mesura que sí que ho prova diu que no: la careta que va
+eixir el 02/11 **no és l'àudio de `CARETA_20`**, sinó un **tall/versió diferent** de la mateixa
+música. Per tant es manté el criteri 5: **no-op + log** fins que arribe el màster del 02/11.
+Reproduïble amb
+`bin\analitza_to.ps1 -FitxerA <clip> -DesA 13.32 -DurA 7 -FitxerB <wav> -DesB 0 -DurB 7`.
+
 ### 1.4 · Comparativa
 
 | Opció | Què fa | Dependències noves | Temps per bloc | Risc | Toca `jsx/`? |

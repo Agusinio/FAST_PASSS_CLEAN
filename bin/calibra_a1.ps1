@@ -67,13 +67,18 @@ $ErrorActionPreference = 'Stop'
 $inv = [Globalization.CultureInfo]::InvariantCulture
 
 function Split-Values {
-    <# Trenca llistes escrites a mà: «0.005,0.02» / «0,005;0,02» / «1024 4096». #>
+    <# Trenca llistes escrites a mà: «0.005,0.02» / «0,005;0,02» / «1024 4096» / «1024,4096». #>
     param([string[]] $Raw)
     $acc = @()
     foreach ($chunk in $Raw) {
         foreach ($piece in ($chunk -split '[;/\s]+')) {
             if (-not $piece) { continue }
-            if ($piece -match '^[+-]?\d+,\d+$') { $acc += ($piece -replace ',', '.') }
+            # (2026-11-03) La coma es DECIMAL només en valors curts de laboratori
+            # («0,005» → 0,005 · «12,5»). En una llista d'enters («1024,4096») la
+            # coma és SEPARADOR: abans eixe cas entrava pel ramal decimal i, amb la
+            # cultura ca-ES, `[int]'1024,4096'` arredonia a 1024 — la reixeta
+            # sencera s'executava amb UN sol `order` sense avisar.
+            if ($piece -match '^[+-]?\d{1,2},\d{1,3}$') { $acc += ($piece -replace ',', '.') }
             else { $acc += ($piece -split ',' | Where-Object { $_ -ne '' }) }
         }
     }
