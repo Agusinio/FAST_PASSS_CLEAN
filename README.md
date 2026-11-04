@@ -34,7 +34,8 @@ Un clic **sense Ctrl treballa SEMPRE amb la data d'avui** (encara que el panell 
 el projecte d'ahir obert). Per a un projecte d'ahir cal **Ctrl+clic** (mode correcció) — obligatori.
 
 Els fluxos els dirigeix el **botó principal**, que canvia d'estat segons el context
-(`MASSA D'HORA` → `ESPERA` → `CREA` → `ACTUAL.`; `BLOQUEJAT: <autor>` si un company té el lock).
+(`MASSA D'HORA` → `ESPERA` → `CREA` → `OBRIR` → `ACTUAL.`; `OBRIR` = el projecte del bloc ja existix
+però no és l'actiu (cal obrir-lo), `ACTUAL.` = ja està obert i és l'actiu; `BLOQUEJAT: <autor>` si un company té el lock).
 Detall: [`docs/guides/MASTER_MANUAL_RAPID.md`](docs/guides/MASTER_MANUAL_RAPID.md) (operativa)
 i [`docs/guides/MASTER_FUNCIONALITATS.md`](docs/guides/MASTER_FUNCIONALITATS.md) (botó a botó).
 

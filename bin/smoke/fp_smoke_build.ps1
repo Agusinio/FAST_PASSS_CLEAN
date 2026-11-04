@@ -139,6 +139,12 @@ $files = @(
     # proactive + watchdog de 20 s); si el motor torna a contestar i els retols
     # ja han entrat, el flux continua en lloc d'avortar.
     (Resolve-Harness 'fp_probe_ingest.js'),
+    # (2026-11-04 - F1 A1) ECHO-OFF: el cleanFeed arrossega la musica de la
+    # careta/molinet damunt de la veu al primer clip d'A1. La decisio es per
+    # CORRELACIO (no pel nom) i la resta amb `anlms` nomes al tram de musica.
+    # El prova la prova 28-a1clean (fp_probe_a1clean.js).
+    (Join-Path $repo 'js\logic\23_A1_Clean_Logic.js'),
+    (Resolve-Harness 'fp_probe_a1clean.js'),
     (Resolve-Harness 'fp_smoke_runner.js')
 )
 

@@ -247,7 +247,17 @@
                         await FASTPASS_UI.Workflows.MainButton.runMainAction(plan.action, dataA);
                     }
                 } finally {
-                    St.workTarget = 'today';
+                    // ── (2026-11-04 nit · #238) SI EL PROJECTE D'AHIR S'HA FET, LA DATA
+                    // ES QUEDA A AHIR ──────────────────────────────────────────────
+                    // Tornar SEMPRE a HOY (#181) feia que, en acabar de crear el
+                    // projecte d'AHIR, el repintat escanejara la carpeta d'AVUI
+                    // —on encara no hi ha res— i el botó caiguera a MASSA D'HORA:
+                    // l'operador veia «massa d'hora» damunt d'un projecte que
+                    // acaba de crear. Només es torna a HOY si la data demanada NO
+                    // ha produït cap projecte (flux avortat o amb error), que és
+                    // el cas que el #181 volia protegir.
+                    const _doneTarget = !!(St && St.projectDateDir && St.projectDateDir === targetY);
+                    St.workTarget = _doneTarget ? 'yesterday' : 'today';
                     // Repintat de HOY (si `runMainAction` ha petat, el panell no es
                     // queda ensenyant l'estat d'AHIR ni un botó desactivat).
                     // (2026-10-22 · #181) `fresh:true`: el poll pot haver arrancat un
@@ -350,6 +360,65 @@
                 return { ok: false, found: false, count: 0 };
             }
         },
+
+        /**
+         * _justOpenedProjectName: (2026-11-04 nit · #238) Nom del `.prproj` que la
+         * PRÒPIA extensió acaba de crear o obrir per a la data demanada, o null.
+         *
+         * PER QUÈ EXISTIX: just després de crear un projecte, el llistat de la
+         * carpeta de treball pot arribar tard (llatència SMB) o tornar `null` si
+         * el pont JSX està ocupat (el CREAR acaba de fer-hi una dotzena de
+         * crides). Sense eixe fitxer, `existingProjectName` quedava buit i el
+         * gate d'inici repintava el botó com si no hi haguera projecte:
+         *   · bloc d'AVUI amb wotts   → «CREA» sobre un projecte acabat de fer
+         *   · bloc d'AHIR (Ctrl+clic) → «MASSA D'HORA» (el d'avui encara no ha eixit)
+         * L'operador veu, doncs, l'estat equivocat just en acabar la creació.
+         *
+         * Fonts, per orde de cost:
+         *   1) Ancoratge de SESSIÓ (0 crides): `_runNew`/`_runLoad` deixen
+         *      `State.lastOpenedProjectName` + `State.projectDateDir`; si la data
+         *      és la que s'escaneja i el nom seguix el patró del bloc, eixe és
+         *      el projecte.
+         *   2) El `.prproj` OBERT (`FASTPASS.Project.path()`): si viu EN ESTA
+         *      carpeta (una carpeta = un bloc i una data), el projecte existix
+         *      encara que `State` haja perdut l'ancoratge. Només es pregunta si
+         *      la font (1) no decidix I hi ha senyals que algun projecte s'haja
+         *      obert (sense cap senyal no es gasta cap crida: és l'estat normal
+         *      del matí, quan el botó ha de poder dir MASSA D'HORA).
+         * @param {Object} ctx - context de treball (`dateDir`, `bloque`, `progData`)
+         * @param {string} folderPath - carpeta escanejada (la del bloc i la data)
+         * @param {string} progKey - `ctx.progData.wott || ctx.progData.archivo`
+         * @returns {Promise<string|null>} nom del `.prproj`, o null
+         */
+        _justOpenedProjectName: async function (ctx, folderPath, progKey) {
+            const Scan = (window.FASTPASS_UI && window.FASTPASS_UI.Logic)
+                ? window.FASTPASS_UI.Logic.Scan : null;
+            if (!Scan || typeof Scan.matchesProjectName !== 'function') return null;
+            const st = (window.FASTPASS_UI && window.FASTPASS_UI.State)
+                ? window.FASTPASS_UI.State : null;
+            // 1) Ancoratge de sessió (gratuït).
+            const last = (st && st.lastOpenedProjectName) || '';
+            if (last && st.projectDateDir === ctx.dateDir &&
+                Scan.matchesProjectName(last, progKey, ctx.bloque)) {
+                return last;
+            }
+            // 2) El projecte OBERT en Premiere, si viu en esta carpeta.
+            if (!last && !(st && st.projectDateDir)) return null;
+            let raw = '';
+            try { raw = await getUtils().callJSX('FASTPASS.Project.path()'); } catch (e) { return null; }
+            if (!raw || String(raw).toLowerCase().indexOf('.prproj') === -1) return null;
+            // Barra invertida sense escapar-la al codi (el repo ja usa este recurs).
+            const BS = String.fromCharCode(92);
+            const norm = String(raw).split(BS).join('/');
+            const cut = norm.lastIndexOf('/');
+            if (cut < 0) return null;
+            const dirNorm = norm.slice(0, cut).replace(/\/+$/, '').toLowerCase();
+            const folderNorm = String(folderPath || '').split(BS).join('/').replace(/\/+$/, '').toLowerCase();
+            if (!folderNorm || dirNorm !== folderNorm) return null;
+            const name = norm.slice(cut + 1);
+            return Scan.matchesProjectName(name, progKey, ctx.bloque) ? name : null;
+        },
+
 
         /**
          * checkContext: porta d'entrada ÚNICA al sintetitzador (single-flight).
@@ -495,6 +564,21 @@
                     progKey,
                     ctx.bloque
                 );
+                // ── FALLBACK «PROJECTE ACABAT DE CREAR/OBRIR» (2026-11-04 nit · #238) ──
+                // El `.prproj` que la pròpia extensió acaba de guardar pot no eixir
+                // encara al llistat (llatència del NAS, o lectura que torna null amb
+                // el pont JSX ocupat just després del CREAR). Sense este senyal, el
+                // gate d'inici repintava CREA (bloc d'avui) o MASSA D'HORA (bloc
+                // d'ahir) damunt d'un projecte que l'usuari acabava de crear.
+                if (!existingProjectName) {
+                    const _justOpened = await this._justOpenedProjectName(ctx, folderPath, progKey);
+                    if (_justOpened) {
+                        existingProjectName = _justOpened;
+                        getUtils().log('🆕 [checkContext] Projecte acabat de crear/obrir (' + _justOpened +
+                            ') encara no al llistat → es tracta com a EXISTENT (ACTUALITZAR)', 'INFO');
+                    }
+                }
+
 
                 // ── MECÀNICA D'INICI (2026-10-21 · 3 ESTATS, #177/#182) ───────────
                 // Amb el projecte del dia ja fet (o d'un altre dia obert) no canvia res:
@@ -667,7 +751,11 @@
                     }
 
                     // Mirem si hi ha lock (Lògica JS pura sobre la llista ja descarregada)
-                    lockFile = projectFiles.find(f => f.name === existingProjectName + ".lock");
+                    // (2026-11-04 nit · #238) `projectFiles` pot ser null (lectura
+                    // fallida del NAS) i el fallback «acabat de crear» haver posat
+                    // `existingProjectName`: sense la guarda, ací petava i el botó
+                    // queia a WAITING («error de xarxa») tenint el projecte obert.
+                    lockFile = (projectFiles || []).find(f => f.name === existingProjectName + ".lock");
                     const currentUser = config.autor;
                     
                     if (lockFile) {
@@ -1026,9 +1114,26 @@
                     };
                     break;
                 case 'UPDATE':
+                    btn.innerText = "ACTUAL.";
+                    btn.title = "El projecte del bloc està Obert i és l'actiu: actualitzar-lo (sincronitza el que falte del NAS).";
+                    btn.onclick = function (ev) {
+                        FASTPASS_UI.Core.Context._onMainClick(ev, 'UPDATE', data);
+                    };
+                    break;
+                // (2026-11-04 nit · #239) OBRIR ≠ ACTUALITZAR. Si el projecte del bloc
+                // EXISTIX però NO és l'actiu, el que farà el clic és OBRIR-lo (GO: ja
+                // està obert en segon pla; LOAD: cal carregar-lo). Que eixe flux
+                // aprove per a sincronitzar el que falte és cosa d'ell, no de
+                // l'etiqueta. Abans els TRES estats deien «ACTUAL.», i canviar de
+                // PROG o de BLOC a una selecció que ja existix —sense haver obert
+                // res encara— ensenyava «Actualizar» on tocava «Abrir» (queixa
+                // d'usuari, 04/11 nit).
                 case 'GO':
                 case 'LOAD':
-                    btn.innerText = "ACTUAL.";
+                    btn.innerText = "OBRIR";
+                    btn.title = (state === 'GO')
+                        ? "El projecte del bloc ja està obert en segon pla: portar-lo al davant i sincronitzar el que falte."
+                        : "El projecte del bloc ja existix però no està obert: obrir-lo i sincronitzar el que falte.";
                     btn.onclick = function (ev) {
                         FASTPASS_UI.Core.Context._onMainClick(ev, state, data);
                     };

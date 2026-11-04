@@ -1576,7 +1576,13 @@ if (btnMarksC1) btnMarksC1.addEventListener('click', () => callWorkflow('Markers
             // quedar mai superposats. És l'última passada del pipeline (després de F6·GF i
             // dels vermells, que també poden afegir marcadors al 00:00): separa els que
             // coincidixen en orde d'escaleta amb GAP de 3 s (flow_markers: F8·Separació).
-            ['Separació (F8)',         () => callWorkflow('Markers', 'separateOverlappingMarkers')]
+            ['Separació (F8)',         () => callWorkflow('Markers', 'separateOverlappingMarkers')],
+            // (2026-11-04 nit · ORDRE D'USUARI) ACÍ NO es neteja A1. El cleanFeed
+            // porta la música de la careta/molinet damunt de la veu al primer clip
+            // d'A1, però eixa neteja (`Logic.A1Clean`) s'ha de fer NOMÉS quan
+            // l'operador clica la DIANA 🎯 COL·LOCAR (`runPlaceAllChyrons`):
+            // OUT & GO ha de deixar el bloc tal com ha eixit del muntatge.
+            // Si mai es torna a enganxar ací, que siga amb una decisió explícita.
         ];
         utils.log('🚀 [PIPE] Marcadors post-OUT: ' + phases.map(p => p[0]).join(' → ') + '. Verifica els marcadors i usa COLOCAR per als chyrons.', 'INFO');
         // [2026-09-17] NOMES MARCADORS: si la V1 ja esta trocejada (>=2 clips) no tornem a
@@ -1630,6 +1636,19 @@ if (btnMarksC1) btnMarksC1.addEventListener('click', () => callWorkflow('Markers
      */
     async function runPlaceAllChyrons() {
         const utils = FASTPASS_UI.Utils;
+        // 🎧 (2026-11-04 nit · ORDRE D'USUARI) NETEJA D'A1 ACÍ I NOMÉS ACÍ: el
+        // primer clip d'A1 porta la música de la careta/molinet damunt de la veu
+        // del presentador. Es mesura per correlació i, si hi és, es resta quan
+        // l'operador clica la DIANA 🎯 COL·LOCAR — ni al flux d'INICI
+        // (crear/actualitzar/obrir/canviar de focus) ni a OUT & GO: el bloc s'ha
+        // de poder muntar i revisar sense que es toque l'àudio.
+        // Clicar la DIANA dos voltes no repetix la faena: `Logic.A1Clean` ho
+        // detecta (el primer clip d'A1 ja és el WAV net) i no mesura res.
+        try {
+            await callWorkflow('MainButton', '_cleanA1Echo');
+        } catch (eA1) {
+            utils.log('⚠️ [A1] la neteja d\'eco ha llançat: ' + eA1.message, 'WARN');
+        }
         // 🛡️ (2026-10-30 · petició d'usuari) NO-DUPLICAR: no hi ha mode ni interruptor — el
         // comptador d'omessos es posa a zero ací per poder informar al final de la passada.
         try {
@@ -2142,6 +2161,10 @@ setInterval(async function () {
                 FASTPASS_UI.Utils.log('🔓 [dateDir] Desancorant projectDateDir=' + StA.projectDateDir + ' (2 cicles seguits sense projecte actiu)', 'WARN');
                 StA.projectDateDir = null;
                 StA.lastOpenedProjectName = "";
+                // (2026-11-04 nit · #238) Sense projecte ancorat s'acaba també el
+                // MODE CORRECCIÓ (Ctrl+clic = AHIR): si no, el panell es quedava
+                // escanejant el dia d'AHIR la resta de la sessió.
+                StA.workTarget = 'today';
                 _projDateMissTicks = 0;
             }
         } else if (StA.lastOpenedProjectName && activeA === StA.lastOpenedProjectName) {

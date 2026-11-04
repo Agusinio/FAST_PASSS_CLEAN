@@ -125,20 +125,41 @@
             return str.replace(/[^a-z0-9]+/g, '');
         },
 
+        /**
+         * _projectPrefix: (2026-11-04 nit · #238) PREFIX d'identitat del `.prproj`
+         * del bloc: `Pruebas_<progKey>_<blocKey>_`, en minúscules i amb el guió
+         * baix FINAL (buscant V1 no s'ha d'agafar V10). És l'ÚNICA definició del
+         * patró: la fan servir `selectedProject` (llistat del NAS) i
+         * `matchesProjectName` (un nom que ve de l'estat o de `Project.path()`).
+         */
+        _projectPrefix: function (progKey, blocKey) {
+            return ('Pruebas_' + progKey + '_' + blocKey + '_').toLowerCase();
+        },
+
+        /**
+         * matchesProjectName: (2026-11-04 nit · #238) És este nom el `.prproj` del BLOC?
+         *
+         * Funció PURA (ni NAS ni DOM), per poder provar-la aïllada. La fa servir
+         * el fallback «acabat de crear» de `Context.checkContext`: just després
+         * de crear el projecte, el llistat de la carpeta pot arribar tard (o
+         * tornar null amb el pont JSX ocupat) i el `.prproj` encara no hi és.
+         * @param {string} name - nom del fitxer (amb `.prproj`)
+         * @param {string} progKey - `ctx.progData.wott || ctx.progData.archivo`
+         * @param {string} blocKey - `ctx.bloque` (ex: 'V1')
+         * @returns {boolean}
+         */
+        matchesProjectName: function (name, progKey, blocKey) {
+            if (!name || !progKey || !blocKey) return false;
+            const n = String(name).toLowerCase();
+            return n.indexOf(this._projectPrefix(progKey, blocKey)) === 0 &&
+                n.slice(-7) === '.prproj';
+        },
+
         selectedProject: function(fileList, progKey, blocKey) {
             if (!fileList || fileList.length === 0) return null;
-            
-            // El patrón de identidad: Pruebas_TNV_V1_ (con guión bajo final)
-            // para evitar falsos positivos como V10 cuando buscamos V1
-            const pattern = `Pruebas_${progKey}_${blocKey}_`.toLowerCase();
-            
-            const match = fileList.find(f => {
-                const name = f.name.toLowerCase();
-                // Verifiquem que comenci per la cadena i sigui un projecte de Premiere
-                const matches = name.indexOf(pattern) === 0 && name.endsWith(".prproj");
-                return matches;
-            });
-            
+            // Patró d'identitat del bloc (vegeu `_projectPrefix`): començar pel
+            // prefix I ser un projecte de Premiere.
+            const match = fileList.find(f => this.matchesProjectName(f && f.name, progKey, blocKey));
             return match ? match.name : null;
         },
 

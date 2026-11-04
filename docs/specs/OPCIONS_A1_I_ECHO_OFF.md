@@ -1,11 +1,30 @@
 # OPCIONS — neteja de música a A1 i execució sense finestres (echo off)
 
-> **Estat (2026-11-02)**:
+> **Estat (2026-11-04)**:
 > · **Echo off: FET** — `bin/hidden.vbs` + `Utils.execHidden()` (wscript GUI, 0 finestres, ~250 ms
 >   per crida) i rellotge d'arena als botons (`.btn-busy`). Falta **només la prova en viu** a Premiere.
-> · **A1 (neteja de música): EN MARXA** — plantilles rebudes a `Audios/` i eines de calibratge
->   escrites i provades (`bin/cmp_audio.ps1`, `bin/calibra_a1.ps1`). Falta l'**F0** amb trams reals
->   (§1.5 bis). La via triada no és IA: és **resta adaptativa amb la plantilla** (§1.3 bis, E1).
+> · **A1 (neteja de música): ENGAMXAT AL BOTÓ 🎯 (04/11, #235)** — `Logic.A1Clean` corre al final de
+>   `_runNew` i `_runUpdate` amb `mode:'on'` per defecte. **PARÀMETRES DEFINITIUS (mesurats amb
+>   ffmpeg real, veu TTS de Windows + `Audios/3CatInfo_TN_Careta.WAV` 17,48 s)**:
+>   `order=1024`, `mu=0,5`, `eps=0,0001`, **`leakage=0`** (l'antic `leak` **no existix** i petava) i
+>   **`out_mode=n`** — atenció: **`out_mode=o` no és la senyal neta, DESTRUÏX la veu** (`rVeu` 0,06)
+>   mentres `n` la conserva (`rVeu` **0,99**) i baixa la música **38–40 dB**. La resta s'aplica
+>   **només al tram de música** d'una **finestra** (música ± **1,5 s**) que es remunta amb
+>   `Clips.insert` (overwrite, sense ripple); el clip original queda partit i el so de fora no passa
+>   mai per ffmpeg. Guards: `minR` 0,70 + `minRatio` 0,25 + **guarda d'energia** (si el WAV net puja
+>   > 3 dB no es munta res). Prova permanent `#A1C/1-17` a `bin/smoke/fp_probe_a1clean.js`.
+>   **Prova en viu feta el 04/11 (9:40) a TNV V1 03/11: el pas SÍ s'executa** (`_last_run.txt`:
+>   `mode=on clips=28 hits=0`) **i el clip NO coincidia perquè només se'n mirava la part de davant**.
+>   **ARREL (04/11, nit)**: en el primer clip d'A1 **només hi ha la COLA** — el transitori es va
+>   quedar fora del tall. Buscant cap avant: `r=0,109`; buscant **20 s ENRERE** del `inPoint`:
+>   **`r=0,873`, `rMaxWin=0,995`** (`3CatInfo_TNC_careta_sense_alpha.WAV` a 14,49 s del media,
+>   clip a 25,44 s → **10,95 s fora** i **6,53 s de cua** dins). Per això ara: **`preSec=20`**
+>   (pre-finestra), **`maxItems=1`** (només el 1r clip), `maxLagSec` automàtic i `refSkipSec` —
+>   la referència d'`anlms` s'agafa des del segon **10,949** de la plantilla i la finestra comença
+>   a 0. Prova de cap a cap amb ffmpeg: `net` vs cola **r=0,023** i `mix − net` **r=0,969** (el que
+>   es lleva és exactament la careta; veu −26,2 → −26,4 dB). `_last_run.txt` duu `from`/`at`/`skip`/
+>   `net`/`HIT`. Prova permanent `#A1C/17-19`. Pendent: el muntatge real a Premiere (`hits>0`).
+> · La via no és IA: és **resta adaptativa amb la plantilla** (§1.3 bis, E1).
 > Catàleg: `AUDIO_IA_DEREVERB` (pregunta 1, apuntada el 27/10 i ampliada hui) i `ECHO_OFF_UI`
 > (pregunta 2) a [`FEATURES.md`](../../FEATURES.md) §3.
 > Petició de l'usuari (30/10/2026):
@@ -509,6 +528,62 @@ eixir el 02/11 **no és l'àudio de `CARETA_20`**, sinó un **tall/versió difer
 música. Per tant es manté el criteri 5: **no-op + log** fins que arribe el màster del 02/11.
 Reproduïble amb
 `bin\analitza_to.ps1 -FitxerA <clip> -DesA 13.32 -DurA 7 -FitxerB <wav> -DesB 0 -DurB 7`.
+
+### 1.3 octies · Mesura amb **refinament fi** i clips reals de la timeline (2026-11-03) ⭐
+
+> **Corregix §1.3-sexies.** L'estimador d'aleshores donava el lag amb la resolució de l'embolcall
+> (±10 ms) i **no el refinava** a nivell de mostra. Amb música, eixos 10 ms fan caure `r` de 0,987 a
+> 0,016: **fals negatiu**. Refinant (Pearson mostra a mostra en ±1 trama al voltant del millor lag),
+> el resultat canvia de dalt a baix. Detall del defecte: **BUG #234**.
+
+**Control positiu** (dos trams del **mateix** `TNV_V1_CLIP.mp4`: 23,40–43,40 contra 13,32–43,32, que
+compartixen 10,08 s): `r = 1,000` exacte, `lag = −10,0800 s` (= 23,40 − 13,32). L'estimador refinat
+és fiable abans de creure-se'l amb material distint.
+
+**Els dos clips que l'usuari va posar a la timeline** (autosave 15:35 del projecte
+`Pruebas_TNV_V1_SANCHEZ I ALTRES SOBRE TRENS.prproj`, seqüència `TNV_V1_SANCHEZ I ALTRES SOBRE TRENS`):
+
+| clip | timeline | media in → out | durada |
+|---|---|---|---|
+| `TNV_V1_CLIP.mp4` (`AudioClip` 2223) | `46,32 → 66,32 s` | **23,400 → 43,400 s** | 20,00 s |
+| `3CATINFO_CARETA_20.WAV` (`AudioClip` 2226) | `12,28 → 29,76 s` | **0 → 17,480 s** | 17,48 s |
+
+**Escaneig del WAV (17,48 s) al llarg dels 245,376 s del mp4** (mapa deslizant, envolvent RMS 25 ms
++ refinament fi), amb les finestres de 2 s des de l'alineació trobada:
+
+```
+millor posició:  mp4 10,7309 s  ≡  WAV 0 s      r_TOTAL = 0,746
+  +0,0 s 0,932 | +2,0 s 0,985 | +4,0 s 0,974 | +6,0 s 0,987
+  +8,0 s 0,988 | +10,0 s 0,273 | +12,0 s 0,034 | +14,0 s —
+```
+
+→ **El WAV i el mp4 són el mateix àudio durant ~9,5 s** (`r ≈ 0,98`: només la compressió AAC pel
+mig) i **a partir d'ahí el WAV no apareix enlloc més** del mp4 (els altres candidats del mapa donen
+`r ≈ 0,01`). No és deriva de rellotge: **hi ha un tall**. Coherent amb el que diu l'usuari: *«el audio
+de la careta dura solo 13 segundos»* (i el WAV en té 17,48: els primers 9,5 s són els que coincidixen).
+
+**Conclusió corregida.** La careta del 02/11 **sí que és dins del media** — a **10,73 s** —, però
+**no** en el tram que el clip de la timeline utilitza (23,40–43,40), i per això eixe clip concret dona
+`r = 0,009`. Conseqüències:
+- `3CATINFO_CARETA_20.WAV` **val com a plantilla** per als primers ~9,5 s de la careta, és a dir per al
+  tram del media **10,73 → 20,2 s**.
+- Per al tram **23,40 → 43,40 s** no hi ha cap coincidència → **criteri 5** (no-op + log).
+
+**Prova de resta (`anlms`) en la zona comuna** — `order=1024`, `mu=0.05`, `out_mode=o`, 48 kHz mono,
+mp4 10,7309–20,4 contra WAV 0–9,6691:
+
+| fitxer | mean_volume | max_volume |
+|---|---|---|
+| mescla (mp4) | −23,7 dB | −8,7 dB |
+| **residu (`anlms`)** | **−34,5 dB** | −7,5 dB |
+
+→ **−10,8 dB de mitjana** i el **pic no baixa** (puja 1,2 dB): lleva música, **no atenua en bloc**.
+Complix l'esperit del criteri 1 (§1.6) amb material real, no sintètic.
+
+**Reproduïble amb** (fora del repo, a `%TEMP%\fp_a1_probe\`): `corr.cs` (alineació + refinament fi +
+`r` total i de la cua), `corr3.cs` (el mateix amb `r` per ventanes) i `corr4.cs` (escaneig complet de
+la plantilla dins del media, amb els millors pics) — C# compilat amb `Add-Type`, de segons a ms.
+⚠️ **No** val `bin\cmp_audio.ps1` mentres no es tanque **#234** (normalitza mal i no refina el lag).
 
 ### 1.4 · Comparativa
 

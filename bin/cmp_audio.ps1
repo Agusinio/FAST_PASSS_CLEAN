@@ -14,9 +14,17 @@
       2. Embolcall RMS per finestres de 20 ms: descriu «com sona» i no depén de
          la fase ni del nivell absolut.
       3. Per a cada parell es busca el desplaçament (lag) que maximitza la
-         correlació de Pearson de l'embolcall (±3 s).
+         correlació de l'embolcall (±3 s) i després es REFINA a nivell de mostra
+         sobre la senyal crua.
       4. Es retorna la millor correlació, el lag i la cobertura. Si
-         corr >= -Threshold es considera el mateix so (1.0 = idèntic).
+         corr >= Threshold es considera el mateix so (1.0 = idèntic).
+
+    ⚠️ BUG #234 (corregit 03/11/2026): abans es normalitzava cada fitxer amb el
+    seu z-score GLOBAL i es feia el producte sobre el solapament sense tornar a
+    normalitzar → podia eixir r>1 (mesurat 1,1378) i, sense refí de lag, 5 ms de
+    desajust feien caure r de 0,987 a 0,016 (fals negatiu). Ara les sumes de
+    Pearson es fan sobre el solapament i el refí va a la mostra. Motor compartit
+    amb `corr_audio.ps1`: bin\corr_core.cs.
 
 .PARAMETER Path
     Carpeta (o llista de fitxers) a comparar. Per defecte: Audios del projecte.
@@ -49,6 +57,11 @@ if (-not $Path) { $Path = Join-Path (Split-Path -Parent $binDir) 'Audios' }
 $ffmpeg = Join-Path $binDir 'ffmpeg\bin\ffmpeg.exe'
 if (-not (Test-Path -LiteralPath $ffmpeg)) { throw "No trobe $ffmpeg" }
 
+# Motor de correlació (Pearson pur + refí fi). Vegeu bin\corr_core.cs.
+$core = Join-Path $binDir 'corr_core.cs'
+if (-not (Test-Path -LiteralPath $core)) { throw "No trobe $core" }
+if (-not ('CorrCore' -as [type])) { Add-Type -Path $core }
+
 $files = @(Get-ChildItem -LiteralPath $Path -Filter $Pattern -File | Sort-Object Name)
 if ($files.Count -lt 2) { throw "Calen almenys 2 fitxers a $Path" }
 
@@ -75,36 +88,19 @@ function Get-Envelope {
         for ($i = 0; $i -lt $perFrame; $i++) { $v = $smp[$base + $i]; $acc += $v * $v }
         $env[$f] = [Math]::Sqrt($acc / $perFrame)
     }
-    return @{ env = $env; secs = ($n / $Rate); frames = $frames }
-}
-
-function Get-ZScore {
-    param([double[]] $a)
-    $m = 0.0; for ($i = 0; $i -lt $a.Length; $i++) { $m += $a[$i] }
-    $m /= $a.Length
-    $v = 0.0; for ($i = 0; $i -lt $a.Length; $i++) { $d = $a[$i] - $m; $v += $d * $d }
-    $sd = [Math]::Sqrt($v / $a.Length)
-    if ($sd -lt 1e-9) { $sd = 1.0 }
-    $z = New-Object double[] $a.Length
-    for ($i = 0; $i -lt $a.Length; $i++) { $z[$i] = ($a[$i] - $m) / $sd }
-    return $z
+    return @{ env = $env; smp = $smp; secs = ($n / $Rate); frames = $frames; perFrame = $perFrame }
 }
 
 function Get-BestCorr {
-    param([double[]] $A, [double[]] $B, [int] $MaxLag)
-    $best = -2.0; $bestLag = 0
-    for ($lag = -$MaxLag; $lag -le $MaxLag; $lag++) {
-        $i0 = [Math]::Max(0, $lag)
-        $j0 = [Math]::Max(0, -$lag)
-        $len = [Math]::Min($A.Length - $i0, $B.Length - $j0)
-        if ($len -lt 8) { continue }
-        # z-score previ -> el producte ja és la correlació de Pearson.
-        $s = 0.0
-        for ($k = 0; $k -lt $len; $k++) { $s += $A[$i0 + $k] * $B[$j0 + $k] }
-        $r = $s / $len
-        if ($r -gt $best) { $best = $r; $bestLag = $lag }
-    }
-    return @{ r = $best; lag = $bestLag }
+    param([double[]] $EA, [double[]] $EB, [float[]] $A, [float[]] $B, [int] $MaxLagFrames, [int] $PerFrame)
+    # 1) Maxim de l'embolcall: resolució de trama, estable, barat.
+    $rEnv = 0.0
+    $lagF = [CorrCore]::BestLagEnvelope($EA, $EB, $MaxLagFrames, [ref]$rEnv)
+    # 2) Refí a nivell de mostra: el pic d'un audio té ~1 mostra d'ample, així que
+    #    sense este pas un desajust de 5 ms convertix un 0,987 en un 0,016.
+    $r = 0.0
+    $lagS = [CorrCore]::RefineLag($A, $B, ($lagF * $PerFrame), $PerFrame, [ref]$r)
+    return @{ r = $r; lagSamples = $lagS; rEnv = $rEnv }
 }
 
 
@@ -118,11 +114,13 @@ foreach ($f in $files) {
     $e = Get-Envelope -File $f.FullName -OutRaw $raw -Rate $rate -Hop $HopMs
     if ($null -eq $e) { Write-Warning "No s'ha pogut decodificar $($f.Name)"; continue }
     $data += [pscustomobject]@{
-        Name   = $f.Name
-        Bytes  = $f.Length
-        Secs   = [Math]::Round($e.secs, 3)
-        Frames = $e.frames
-        Z      = (Get-ZScore $e.env)
+        Name     = $f.Name
+        Bytes    = $f.Length
+        Secs     = [Math]::Round($e.secs, 3)
+        Frames   = $e.frames
+        PerFrame = $e.perFrame
+        Env      = $e.env
+        Smp      = $e.smp
     }
     Write-Host ("  {0,-42} {1,7:N2}s  {2} frames" -f $f.Name, $e.secs, $e.frames) -ForegroundColor DarkGray
 }
@@ -131,12 +129,14 @@ $maxLag = [int]($MaxLagSec * 1000 / $HopMs)
 $pairs = @()
 for ($i = 0; $i -lt $data.Count; $i++) {
     for ($j = $i + 1; $j -lt $data.Count; $j++) {
-        $c = Get-BestCorr -A $data[$i].Z -B $data[$j].Z -MaxLag $maxLag
+        $c = Get-BestCorr -EA $data[$i].Env -EB $data[$j].Env `
+                          -A $data[$i].Smp -B $data[$j].Smp `
+                          -MaxLagFrames $maxLag -PerFrame $data[$i].PerFrame
         $pairs += [pscustomobject]@{
             A     = $data[$i].Name
             B     = $data[$j].Name
             Corr  = [Math]::Round($c.r, 4)
-            LagMs = $c.lag * $HopMs
+            LagMs = [Math]::Round($c.lagSamples * 1000 / $rate)
             Same  = ($c.r -ge $Threshold)
         }
     }

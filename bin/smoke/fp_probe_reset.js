@@ -405,9 +405,9 @@
             var idx = await readRepo('index.html');
             ok('#175/20 index.html carrega `19_Fs_Wipe.js` i ha pujat els cache-busts',
                 /19_Fs_Wipe\.js\?v=2/.test(idx) && /utils\.js\?v=32/.test(idx) &&
-                /flow_mainButton\.js\?v=42/.test(idx) && /srt_editor\.js\?v=88/.test(idx),
+                /flow_mainButton\.js\?v=47/.test(idx) && /srt_editor\.js\?v=88/.test(idx),
                 'modul=' + /19_Fs_Wipe\.js\?v=2/.test(idx) + ' * utils=' + /utils\.js\?v=32/.test(idx) +
-                ' * main=' + /flow_mainButton\.js\?v=42/.test(idx) + ' * srt=' + /srt_editor\.js\?v=88/.test(idx));
+                ' * main=' + /flow_mainButton\.js\?v=47/.test(idx) + ' * srt=' + /srt_editor\.js\?v=88/.test(idx));
 
             // ── 5a-bis) #213 · LLANÇADOR OCULT (2026-11-02) ─────────────────────
             // `cep.process.createProcess` NO busca al PATH: amb 'wscript.exe' a

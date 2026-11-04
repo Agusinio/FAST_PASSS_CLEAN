@@ -58,7 +58,7 @@
         runMainAction: async function (action, data) {
             getUtils().clearLogFile();
             log(`⏯️ Iniciant workflow: [${action}]`);
-            log(`🔧 [DIAG] FASTEPASS v2.6.0+EXTRACT | FlowMainButton carregat | Versió de codi: EXTRACT_2026-07-27`);
+            log(`🔧 [DIAG] FASTEPASS v2.6.0+EXTRACT | FlowMainButton carregat | Versió de codi: EXTRACT_2026-07-27 +A1CLEAN_2026-11-04`);
             log(`🔧 [DIAG] window.FASTPASS_UI.Logic.FFmpeg existeix? ${!!(window.FASTPASS_UI && window.FASTPASS_UI.Logic && window.FASTPASS_UI.Logic.FFmpeg)}`);
             log(`🔧 [DIAG] FFmpeg.extractClip existeix? ${!!(window.FASTPASS_UI && window.FASTPASS_UI.Logic && window.FASTPASS_UI.Logic.FFmpeg && typeof window.FASTPASS_UI.Logic.FFmpeg.extractClip === 'function')}`);
             getUtils().updateUIState('BUSY');
@@ -1392,6 +1392,12 @@
                     window.FASTPASS_UI.State.projectDateDir = ctx.dateDir;
                 }
 
+                // (2026-11-04 nit · ORDRE D'USUARI) Ací NO es neteja A1. La
+                // neteja de la música de la careta/molinet es dispara MÉS TARD:
+                // al final d'OUT & GO i, si no s'ha fet, en clicar la DIANA
+                // (🎯 COL·LOCAR). Al flux de creació/actualització/obertura
+                // (`_runNew`/`_runUpdate`/`_runLoad`/`_runGo`) no hi va: el
+                // muntatge encara no està tancat i eixe pas no és de la fase.
                 log("✅ Workflow NOU completat amb èxit.");
                 // Actualizar contexto
                 if (FASTPASS_UI.Core && FASTPASS_UI.Core.Context) {
@@ -1452,6 +1458,57 @@
                     await FASTPASS_UI.Core.Context.checkContext();
                 }
             }
+
+            // (2026-11-04 nit) Actualitzar NO neteja A1: eixe pas va NOMÉS a la
+            // DIANA 🎯 COL·LOCAR (vegeu `_cleanA1Echo`).
+        },
+
+        /**
+         * _cleanA1Echo: (2026-11-04 · F1 A1 echo-off) Neteja la música de
+         * careta/molinet que el cleanFeed arrossega DAMUNT de la veu del
+         * presentador al primer clip d'A1.
+         *
+         * QUAN ES CRIDA (ordre de l'usuari, 04/11 nit): NOMÉS en clicar la
+         * DIANA 🎯 COL·LOCAR (`runPlaceAllChyrons`, abans dels chyrons). MAI
+         * al flux d'INICI (`_runNew`/`_runUpdate`/`_runGo`/`_runLoad`: crear,
+         * actualitzar, canviar de focus o obrir el projecte no netegen res) ni
+         * a OUT & GO: el bloc s'ha de poder muntar i revisar sense que es
+         * toque l'àudio, i la neteja és una decisió de l'operador en el moment
+         * de deixar el bloc bo. Clicar la DIANA dos voltes és segur: `Logic.A1Clean`
+         * guarda que el primer clip d'A1 ja siga el WAV net d'esta mateixa
+         * neteja (`a1_<ts>_net.wav`) i, si ho és, no torna a mesurar res.
+         *
+         * Ho decidix `Logic.A1Clean` per CORRELACIÓ d'àudio (no pel nom ni per
+         * l'escaleta): si cap plantilla d'`Audios\` no arriba al guard `minR`,
+         * no es toca res. Per defecte treballa en mode 'on'; `Config.A1_CLEAN.mode`
+         * el pot deixar en 'dry' (només mesura) o 'off'.
+         *
+         * MAI tomba el flux: qualsevol error es registra i es continua.
+         * @returns {Promise<Object|null>} el resultat d'A1Clean.run()
+         */
+        _cleanA1Echo: async function () {
+            const A1 = window.FASTPASS_UI && window.FASTPASS_UI.Logic && window.FASTPASS_UI.Logic.A1Clean;
+            if (!A1 || typeof A1.run !== 'function') {
+                log('ℹ️ [A1] Logic.A1Clean no carregat: no es neteja l\'eco de la careta', 'WARN');
+                return null;
+            }
+            log('🎧 [A1] comprovant si els primers clips d\'A1 porten música de careta/molinet ' +
+                '(correlació d\'àudio; pot tardar una mica)…', 'INFO');
+            try {
+                const r = await A1.run();
+                log(`🎧 [A1] eco de la careta: mode=${r.mode} · clips=${r.clips} · hits=${r.hits}` +
+                    (r.why ? ` · ${r.why}` : ''), r.ok ? 'INFO' : 'WARN');
+                // El timeline s'ha tocat (split + WAV nou): desar o el canvi es
+                // perd en tancar el projecte. Només si hi ha hagut muntatge.
+                if (r && r.ok && r.hits > 0 && r.mode === 'on') {
+                    const saveRes = await callJSX("Project.save()");
+                    log('💾 [A1] projecte desat després de la neteja (' + saveRes + ')', 'INFO');
+                }
+                return r;
+            } catch (e) {
+                log('⚠️ [A1] la neteja d\'eco ha fallat: ' + (e && e.message ? e.message : e), 'ERROR');
+                return null;
+            }
         },
 
         _runGo: async function (data) {
@@ -1483,7 +1540,10 @@
             const ctx = await this._sessionCtx();
             const assets = await this._fullScan(ctx);
             await this._completeSyncUI(ctx, assets);
-            
+
+            // (2026-11-04 nit) Canviar de focus NO neteja A1: eixe pas va NOMÉS
+            // a la DIANA 🎯 COL·LOCAR (vegeu `_cleanA1Echo`).
+
             if (FASTPASS_UI.Core && FASTPASS_UI.Core.Context) {
                 await FASTPASS_UI.Core.Context.checkContext();
             }
@@ -1567,6 +1627,10 @@
             }
             
             log("✅ Projecte obert.");
+
+            // (2026-11-04 nit) Obrir un projecte NO neteja A1: eixe pas va NOMÉS
+            // a la DIANA 🎯 COL·LOCAR (vegeu `_cleanA1Echo`).
+
             // Actualizar contexto para que el botón cambie a UPDATE si el proyecto está abierto
             if (FASTPASS_UI.Core && FASTPASS_UI.Core.Context) {
                 await FASTPASS_UI.Core.Context.checkContext();

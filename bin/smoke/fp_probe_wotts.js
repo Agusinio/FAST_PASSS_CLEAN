@@ -172,7 +172,10 @@
             // `ctx.dateDir` mana a tot el flux (gate de wotts, escaleta local, FOTO,
             // `_runNew`). El que no pot passar és quedar-se ancorat en 'yesterday'.
             var iYest = ctxSrc.indexOf("St.workTarget = 'yesterday'");
-            var iToday = ctxSrc.indexOf("St.workTarget = 'today'");
+            // (2026-11-04 nit · #238) Dins del `finally` ja NO hi ha un «torna sempre a
+            // HOY» literal: la data es queda a AHIR si el projecte d'eixa data s'ha
+            // creat/obert de debò (`_doneTarget`) i només torna a HOY si no.
+            var iToday = ctxSrc.indexOf("_doneTarget ? 'yesterday' : 'today'");
             var iFin = ctxSrc.indexOf('} finally {', iYest);
             ok('#WOTT/11 Ctrl+clic (AHIR): mateix camí amb dateDir i retorn a HOY dins de finally',
                 iYest > 0 && iToday > iYest && iFin > iYest && iFin < iToday &&
@@ -246,9 +249,9 @@
                 /if \(placeEnd !== null && \(placeEnd - slot\.start\) > REV_FRAME \+ 0\.001\) \{/.test(chySrc) &&
                 /placeEnd = gridDown\(placeEnd - REV_FRAME\);/.test(chySrc));
             var idxW = await readRepo('index.html');
-            ok('#WOTT/24 cache-bust al dia (4_Context, flow_chyrons, Scanner)',
-                /4_Context\.js\?v=33/.test(idxW) && /flow_chyrons\.js\?v=99/.test(idxW) &&
-                /Scanner\.js\?v=26/.test(idxW),
+            ok('#WOTT/24 cache-bust al dia (4_Context 34, flow_chyrons, Scanner 27)',
+                /4_Context\.js\?v=34/.test(idxW) && /flow_chyrons\.js\?v=99/.test(idxW) &&
+                /Scanner\.js\?v=27/.test(idxW),
                 (idxW.match(/4_Context\.js\?v=\d+/) || '') + ' ' +
                 (idxW.match(/flow_chyrons\.js\?v=\d+/) || '') + ' ' +
                 (idxW.match(/Scanner\.js\?v=\d+/) || ''));
@@ -499,8 +502,8 @@
                 /else if \(escReady\) \{/.test(ctxSrc) &&
                 ctxSrc.indexOf('CREA: escaleta local') > 0);
 
-            ok('#WOTT/39 cache-bust del #182 (4_Context 33 · Scanner 26)',
-                /4_Context\.js\?v=33/.test(idxW) && /Scanner\.js\?v=26/.test(idxW),
+            ok('#WOTT/39 cache-bust del #182 i del #238 (4_Context 34 · Scanner 27)',
+                /4_Context\.js\?v=34/.test(idxW) && /Scanner\.js\?v=27/.test(idxW),
                 (idxW.match(/4_Context\.js\?v=\d+/) || '') + ' ' + (idxW.match(/Scanner\.js\?v=\d+/) || ''));
 
             // (2026-10-22 · #182) TESTIMONI al log: si el stat d'UNC no dóna cap data,
@@ -999,6 +1002,59 @@
             'ocr=' + (chyMod && typeof chyMod._isOcrItemWott) +
             ' xarxes=' + (chyMod && chyMod._isOcrItemWott({ name: XARXES_210 })) +
             ' nom=' + (chyMod && chyMod._isOcrItemWott({ name: NOM_210 })));
+
+        // ── Q. CONTEXT DEL BOTÓ: «ACABAT DE CREAR» ≠ CREA / MASSA D'HORA (2026-11-04 nit) ──
+        // Queixa d'usuari: «cuando creas un proyecto, luego el contexto pasa a Crear
+        // (o a Massa d'Hora si es de ayer)», quan el correcte és ACTUALITZAR; i
+        // canviar PROG/BLOC a una selecció que ja existix deia «Actualizar» on
+        // tocava «Abrir». Bugs #238 (context) i #239 (etiqueta).
+        var N_PR = 'Pruebas_TNV_V1_CAP POLICIA.prproj';
+        ok('#WOTT/63 Scanner.matchesProjectName: patró del bloc (V1≠V10, PENDENT sí, .prproj sí)',
+            !!Scan && typeof Scan.matchesProjectName === 'function' &&
+            Scan.matchesProjectName(N_PR, 'TNV', 'V1') === true &&
+            Scan.matchesProjectName('pruebas_tnv_v1_pendent.prproj', 'TNV', 'V1') === true &&
+            Scan.matchesProjectName('Pruebas_TNV_V10_ALTRE.prproj', 'TNV', 'V1') === false &&
+            Scan.matchesProjectName('Pruebas_TNM_V1_ALTRE.prproj', 'TNV', 'V1') === false &&
+            Scan.matchesProjectName('Pruebas_TNV_V1_CAP.txt', 'TNV', 'V1') === false &&
+            Scan.matchesProjectName('', 'TNV', 'V1') === false &&
+            Scan.matchesProjectName(N_PR, '', 'V1') === false &&
+            Scan.matchesProjectName(N_PR, 'TNV', '') === false &&
+            Scan.selectedProject([{ name: 'Pruebas_TNV_V10_ALTRE.prproj' }, { name: N_PR }], 'TNV', 'V1') === N_PR,
+            'pure=' + (!!Scan && typeof Scan.matchesProjectName === 'function') +
+            ' v10=' + (!!Scan && Scan.matchesProjectName('Pruebas_TNV_V10_ALTRE.prproj', 'TNV', 'V1')) +
+            ' sel=' + (!!Scan && Scan.selectedProject([{ name: 'Pruebas_TNV_V10_A.prproj' }, { name: N_PR }], 'TNV', 'V1')));
+
+        // El fallback ha d'anar ABANS del gate d'inici (si no, no servix de res) i el
+        // seu resultat s'ha de desar a `existingProjectName`.
+        var iJust = ctxSrc.indexOf('await this._justOpenedProjectName(ctx, folderPath, progKey)');
+        var iGate = ctxSrc.indexOf('else if (!wots.ok)');
+        ok('#WOTT/64 checkContext: el projecte acabat de crear/obrir compta ABANS del gate CREA/MASSA',
+            iJust > 0 && iGate > iJust &&
+            ctxSrc.indexOf('_justOpenedProjectName: async function (ctx, folderPath, progKey)') > 0 &&
+            ctxSrc.indexOf('Scan.matchesProjectName(last, progKey, ctx.bloque)') > 0 &&
+            ctxSrc.indexOf('lockFile = (projectFiles || []).find(') > 0,
+            'just=' + iJust + ' gate=' + iGate +
+            ' guard=' + (ctxSrc.indexOf('lockFile = (projectFiles || []).find(') > 0));
+
+        // Etiqueta del botó MAIN: «OBRIR» per a GO/LOAD i «ACTUAL.» només per a UPDATE.
+        var iUpd = ctxSrc.indexOf("case 'UPDATE':");
+        var iMassa = ctxSrc.indexOf("case 'MASSA':");
+        var blkBtn = (iUpd > 0 && iMassa > iUpd) ? ctxSrc.slice(iUpd, iMassa) : '';
+        ok('#WOTT/65 botó MAIN: «OBRIR» per a GO/LOAD i «ACTUAL.» només per a UPDATE (#239)',
+            blkBtn.indexOf('btn.innerText = "ACTUAL."') > 0 &&
+            blkBtn.indexOf('btn.innerText = "OBRIR"') > 0 &&
+            blkBtn.indexOf("case 'GO':") > 0 && blkBtn.indexOf("case 'LOAD':") > 0 &&
+            (ctxSrc.split('btn.innerText = "ACTUAL."').length - 1) === 1,
+            'actual=' + (ctxSrc.split('btn.innerText = "ACTUAL."').length - 1) +
+            ' obrir=' + (ctxSrc.indexOf('btn.innerText = "OBRIR"') > 0));
+
+        // La data de treball no torna a HOY si el projecte d'AHIR s'ha creat/obert.
+        ok('#WOTT/66 Ctrl+clic: la data es queda a AHIR si eixe projecte s ha creat/obert (#238)',
+            ctxSrc.indexOf('const _doneTarget = !!(St && St.projectDateDir && St.projectDateDir === targetY);') > 0 &&
+            ctxSrc.indexOf("St.workTarget = _doneTarget ? 'yesterday' : 'today';") > 0 &&
+            mainSrc.indexOf("StA.workTarget = 'today';") > 0,
+            'done=' + ctxSrc.indexOf('_doneTarget') +
+            ' main=' + (mainSrc.indexOf("StA.workTarget = 'today';") > 0));
 
         } finally {
             UI.Utils.readFolder = realReadFolder;
