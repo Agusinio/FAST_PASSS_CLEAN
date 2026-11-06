@@ -178,6 +178,7 @@ i `fp_probe_setup_ui.ps1` (`-FailOnly`, només els `FAIL` + el `TOTAL`).
 | Bugs (pendents i resolts) | [`BUGS.md`](BUGS.md) |
 | Implementacions (validades / per validar / en cua) | [`FEATURES.md`](FEATURES.md) |
 | Historial de canvis | [`docs/CHANGELOG.md`](docs/CHANGELOG.md) |
+| Traspàs de sessió (foto, no estat) | [`docs/HANDOFF.md`](docs/HANDOFF.md) |
 | Especificacions tècniques | [`docs/specs/`](docs/specs/) |
 | Referències (keyframes, parser, TITOLET…) | [`docs/reference/`](docs/reference/) |
 

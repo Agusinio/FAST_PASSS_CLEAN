@@ -5,7 +5,7 @@
     Ús:
       powershell -NoProfile -ExecutionPolicy Bypass -File ".\bin\merge_md.ps1" `
           -Title "ARXIU · SESSIONS" -Out "docs\archive\SESSIONS.md" `
-          -Src ".roo\progress\2026-09-15.md",".roo\progress\2026-09-16.md"
+          -Src "docs\archive\sessio_A.md","docs\archive\sessio_B.md"
 
     Paràmetres:
       -Out    fitxer destí (relatiu a l'arrel del repo o absolut)
@@ -13,6 +13,10 @@
       -Title  títol H1 de l'arxiu (opcional)
 
     IMPORTANT: NO esborra els originals. Esborrar-los després de verificar el resultat.
+
+    NOTA (2026-11-06): este .ps1 NO porta BOM i PS 5.1 el llig com ANSI (CP850): els literals
+    d'este fitxer NO poden portar accents ni simbols no-ASCII, o eixiran corruptes al desti.
+    Per aixo la capcalera de l'arxiu es genera en ASCII.
 #>
 param(
     [Parameter(Mandatory = $true)][string]$Out,
@@ -31,14 +35,14 @@ $buf = New-Object System.Text.StringBuilder
 if ($Title) {
     [void]$buf.AppendLine('# ' + $Title)
     [void]$buf.AppendLine('')
-    [void]$buf.AppendLine('> Documentació tancada · fusionada el ' + (Get-Date -Format 'yyyy-MM-dd') + ' · els originals són a l''historial de git.')
+    [void]$buf.AppendLine('> Documentacio tancada - fusionada el ' + (Get-Date -Format 'yyyy-MM-dd') + ' - els originals son a l''historial de git.')
 }
 
 $ok = 0
 $total = 0
 foreach ($s in $Src) {
     $p = if ([System.IO.Path]::IsPathRooted($s)) { $s } else { Join-Path $root $s }
-    if (!(Test-Path -LiteralPath $p)) { Write-Host ('⚠️ no trobat: ' + $s); continue }
+    if (!(Test-Path -LiteralPath $p)) { Write-Host ('AVIS: no trobat: ' + $s); continue }
     $txt = [System.IO.File]::ReadAllText($p, [System.Text.Encoding]::UTF8)
     $n = @($txt -split "`n").Count
     [void]$buf.AppendLine('')

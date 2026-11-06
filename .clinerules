@@ -41,6 +41,8 @@
 - Capa JS a `js/**` (compatible amb `check_js_v8.ps1`); DOM de Premiere a `jsx/**`.
 - Bug nou → `BUGS.md` (número + una línia); implementació nova → `FEATURES.md`;
   canvi rellevant de codi → `docs/CHANGELOG.md` (data + estat).
+- **Traspàs de sessió → només `docs/HANDOFF.md`** (una foto; l'estat viu a `BUGS.md`/
+  `FEATURES.md`). Prohibit crear diaris a `.roo/`, `plans/HANDOFF_*` o llistes de pendents a `INFO/`.
 
 ## 5 · Tancar tasca
 
