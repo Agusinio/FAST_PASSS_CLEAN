@@ -400,42 +400,174 @@
         },
 
         /**
+         * alignmentCredible (BUG #224 · 2026-11-06): la mesura d'eix entre el SRT
+         * NORMAL i el SINT és prou bona per a fusionar-los?
+         *
+         * PER QUE CAL: `estimateOffsetSec` ja mesurava el desfasament, pero si no
+         * hi havia CAP frase en comú (SINT d'un ALTRE bloc del mateix programa) el
+         * 🧩 continuava fusionant amb eix 0 i omplia els buits amb frases que no hi
+         * tocaven: mesurat el 06/11 amb TN_MIGDIA, `TN_MIGDIA_V3_*` tenia 0/74
+         * frases en comú amb el SRT del bloc V4 i eixien «Querida Xaric…» dins d'un
+         * buit del rotatiu dels Estats Units. Amb esta guarda el REOMLIR no
+         * col·loca RES si no pot demostrar que el SINT és d'eixos buits.
+         *
+         * @param {Object} est - resultat de `estimateOffsetSec`
+         * @param {number} [minPairs=3] - frases en comú que s'exigixen
+         * @returns {{ok:boolean, reason:string, pairs:number, used:number}}
+         */
+        alignmentCredible: function (est, minPairs) {
+            var min = (minPairs != null && isFinite(Number(minPairs))) ? Number(minPairs) : 3;
+            if (!est) return { ok: false, reason: 'sense-mesura', pairs: 0, used: 0 };
+            var pairs = Number(est.pairs) || 0;
+            var used = Number(est.used) || 0;
+            if (est.method === 'fora-de-rang') return { ok: false, reason: 'fora-de-rang', pairs: pairs, used: used };
+            if (pairs < min || used < min) {
+                return { ok: false, reason: (pairs === 0 ? 'cap-frase' : 'poques-frases'), pairs: pairs, used: used };
+            }
+            return { ok: true, reason: 'ok', pairs: pairs, used: used };
+        },
+
+        /**
+         * fitClipsToGap (BUG #224 · 2026-11-06): col·loca una llista de clips dins
+         * d'un buit amb els MATEIXOS criteris que el SRT OFICIAL.
+         *
+         * MESURAT EN VIU (06/11) als SRT oficials del NAS: entre dos clips
+         * consecutius sempre hi ha 3 frames = 0,12 s (63/68, 62/79 i 51/64 mostres
+         * a tres SRT de blocs distints). El 🧩 antic no ho feia: deixava cada frase
+         * al TC que li tocava i RETALLAVA la que eixia del buit (0,8 s màxim) o la
+         * llençava («no-cab») → el buit quedava mig ple, amb forats a dins i el text
+         * desquadrat. Ara el segment SINT del buit s'ESTIRA (o s'arrangona) fins a
+         * omplir-lo, deixant eixa separació de 3 frames també amb els veïns.
+         *
+         * @param {Array} clips - {startSec,endSec} del segment, en ordre cronològic
+         * @param {number} gapStartSec - vora esquerra del buit (fi del clip anterior)
+         * @param {number} gapEndSec - vora dreta del buit (inici del clip seguent)
+         * @param {Object} [opts] { gapSec=0.12, minDurSec=0.4, maxStretch=2 }
+         * @returns {{clips:Array<{startSec:number,endSec:number}>, factor:number,
+         *            dropped:number, total:number, reason:string}}
+         *   reason: 'buit' (omplit sencer) · 'no-omplit' (factor topat a
+         *   `maxStretch`: la cua del buit queda buida) · 'retallat' (no hi cabien
+         *   tots els clips) · 'massa-curt' (el buit no dona ni per a un clip) ·
+         *   'cap-clip'
+         */
+        fitClipsToGap: function (clips, gapStartSec, gapEndSec, opts) {
+            var o = opts || {};
+            var GAP = (o.gapSec != null && isFinite(Number(o.gapSec))) ? Number(o.gapSec) : 0.12;
+            var minDur = (o.minDurSec != null && isFinite(Number(o.minDurSec))) ? Number(o.minDurSec) : 0.4;
+            var maxStretch = (o.maxStretch != null && isFinite(Number(o.maxStretch))) ? Number(o.maxStretch) : 2;
+            if (GAP < 0) GAP = 0;
+            if (minDur < 0) minDur = 0;
+            if (maxStretch < 1) maxStretch = 1;
+            var src = [], i;
+            for (i = 0; i < (clips || []).length; i++) {
+                var d0 = (Number(clips[i].endSec) || 0) - (Number(clips[i].startSec) || 0);
+                src.push(d0 > 0 ? d0 : 0);
+            }
+            var out = { clips: [], factor: 0, dropped: 0, total: src.length, reason: 'cap-clip' };
+            if (src.length === 0) return out;
+            var gs = Number(gapStartSec) || 0, ge = Number(gapEndSec) || 0;
+            var dur = ge - gs;
+            // Quants clips hi caben amb la durada MÍNIMA i la separació de cada vora:
+            //   n*minDur + (n+1)*GAP <= dur
+            var maxN = Math.floor((dur - GAP) / (minDur + GAP) + 0.000001);
+            if (maxN < 1) {
+                out.reason = 'massa-curt';
+                out.dropped = src.length;
+                return out;
+            }
+            if (src.length > maxN) {
+                out.dropped = src.length - maxN;
+                src = src.slice(0, maxN);
+            }
+            var n = src.length;
+            var available = dur - (n + 1) * GAP;   // espai per a les DURADES
+            var sum = 0;
+            for (i = 0; i < n; i++) sum += src[i];
+            if (!(sum > 0)) {
+                out.reason = 'massa-curt';
+                out.dropped = n;
+                return out;
+            }
+            var f = available / sum;
+            var capped = false;
+            var frozen = [];
+            for (i = 0; i < n; i++) frozen.push(false);
+            if (f > maxStretch) { f = maxStretch; capped = true; }
+            if (!capped) {
+                // Water-filling: les durades que caurien per davall del mínim es
+                // fixen a `minDur` i el que queda es repartix entre les altres.
+                for (var iter = 0; iter <= n; iter++) {
+                    var fixed = 0, freeSum = 0;
+                    for (i = 0; i < n; i++) { if (frozen[i]) fixed += minDur; else freeSum += src[i]; }
+                    if (freeSum <= 0) break;
+                    f = (available - fixed) / freeSum;
+                    if (f > maxStretch) { f = maxStretch; capped = true; break; }
+                    var changed = false;
+                    for (i = 0; i < n; i++) {
+                        if (!frozen[i] && src[i] * f < minDur) { frozen[i] = true; changed = true; }
+                    }
+                    if (!changed) break;
+                }
+            }
+            var durs = [];
+            for (i = 0; i < n; i++) durs.push(frozen[i] ? minDur : Math.max(minDur, src[i] * f));
+            // Col·locació: separació GAP també amb els veïns OFICIALS (cap i cua).
+            var t = gs + GAP, res = [];
+            for (i = 0; i < n; i++) {
+                res.push({ startSec: t, endSec: t + durs[i] });
+                t = t + durs[i] + GAP;
+            }
+            out.clips = res;
+            out.factor = Math.round(f * 1000) / 1000;
+            out.reason = capped ? 'no-omplit' : (out.dropped ? 'retallat' : 'buit');
+            return out;
+        },
+
+        /**
          * mergeSyntheticGaps: fusiona el SRT normal amb els SINTETICS.
          * Nomes AFEGEIX; les entrades existents MAI es toquen (start/end/text).
          *
-         * (2026-10-23 · BUG #188) RETALL: un sintetic que no cap EXACTE dins del
-         * buit no es descarta — s'ENCOGEIX fins a la vora del buit (com fa un
-         * subtitulador a ma), sempre que el retall no passe de `maxTrimSec` ni la
-         * durada final quede per davall de `minDurSec`. Els que se solapen de ple
-         * amb un subtitol existent (o que no hi caben) es descarten amb el motiu.
+         * (2026-11-06 · BUG #224) ENCAIX AL BUIT: abans cada sintetic anava al TC
+         * que li tocava i, si no hi cabia, es retallava (0,8 s) o es descartava
+         * («no-cab»): el buit quedava a mitges i el text desquadrat. Ara, per a
+         * cada buit, es prenen els sintetics que hi cauen i es RE-COL·LOQUEN amb
+         * `fitClipsToGap` (separació de 3 frames com els oficials + estirament per
+         * a omplir-lo). Els que cauen damunt d'un subtitol existent es descarten
+         * («solapa») i els que ja hi són amb el mateix text («duplicat-text»).
          *
          * @param {Array} baseEntries - SRT normal
          * @param {Array} sintEntries - SRT sintetic (font de les entrades noves)
-         * @param {Object} [opts] { tolSec=0.2, minDurSec=0.4, maxTrimSec=0.8,
-         *                         includeEdges=false, textNearSec=10 }
+         * @param {Object} [opts] { tolSec=0.2, minDurSec=0.4, gapSec=0.12,
+         *                         maxStretchSec=2, textNearSec=10 }
          * @returns {{entries:Array, added:Array, rejected:Array, gaps:Array,
-         *            tolSec:number, minDurSec:number, maxTrimSec:number,
-         *            trimmed:number, sintCount:number}}
-         *   added:    {startSec,endSec,texts,reason:'buit'|'buit-ajustada',trimSec}
-         *   rejected: {startSec,endSec,texts,reason:'solapa'|'duplicat'|'duplicat-text'|
+         *            tolSec:number, minDurSec:number, gapSec:number,
+         *            maxStretchSec:number, trimmed:number, sintCount:number,
+         *            filledGaps:number, dropped:number}}
+         *   added:    {startSec,endSec,texts,reason:'buit'|'buit-ajustada',trimSec,
+         *              factor,gapStartSec,gapEndSec}
+         *   rejected: {startSec,endSec,texts,reason:'solapa'|'duplicat-text'|
          *              'fora-del-tram'|'massa-curt'|'no-cab'}
          */
         mergeSyntheticGaps: function (baseEntries, sintEntries, opts) {
             var o = opts || {};
             var tol = (o.tolSec != null && isFinite(Number(o.tolSec))) ? Number(o.tolSec) : 0.2;
             if (tol < 0) tol = 0;
-            // (BUG #188) Quants segons pot ENCOGIR-SE un sintetic per encabir-lo al
-            // buit i quina durada minima ha de conservar despres del retall.
+            // Durada MÍNIMA llegible d'un subtitol i SEPARACIÓ entre clips: els SRT
+            // oficials del NAS porten sempre 3 frames (0,12 s a 25 fps) entre dos
+            // clips consecutius → el reomplit ha de deixar la mateixa separació.
             var minDur = (o.minDurSec != null && isFinite(Number(o.minDurSec))) ? Number(o.minDurSec) : 0.4;
-            var maxTrim = (o.maxTrimSec != null && isFinite(Number(o.maxTrimSec))) ? Number(o.maxTrimSec) : 0.8;
+            var GAP = (o.gapSec != null && isFinite(Number(o.gapSec))) ? Number(o.gapSec) : 0.12;
+            var maxStretch = (o.maxStretchSec != null && isFinite(Number(o.maxStretchSec))) ? Number(o.maxStretchSec) : 2;
             if (minDur < 0) minDur = 0;
-            if (maxTrim < 0) maxTrim = 0;
+            if (GAP < 0) GAP = 0;
+            if (maxStretch < 1) maxStretch = 1;
             var base = this.cloneEntries(baseEntries).sort(function (a, b) { return a.startSec - b.startSec; });
             var sint = this.cloneEntries(sintEntries).sort(function (a, b) { return a.startSec - b.startSec; });
             var info = this.findGaps(base);
             var out = {
                 entries: base, added: [], rejected: [], gaps: info.gaps, tolSec: tol,
-                minDurSec: minDur, maxTrimSec: maxTrim, trimmed: 0, sintCount: sint.length
+                minDurSec: minDur, gapSec: GAP, maxStretchSec: maxStretch,
+                trimmed: 0, sintCount: sint.length, filledGaps: 0, dropped: 0
             };
             if (sint.length === 0) return out;
             if (base.length === 0) return out;   // sense SRT normal no hi ha res a reomplir
@@ -443,16 +575,6 @@
             var fromSec = (o.includeEdges) ? -Infinity : info.firstSec;
             var toSec = (o.includeEdges) ? Infinity : info.lastSec;
 
-            // (BUG #188) BUITS LLIURES: els que hi ha entre les entrades existents.
-            // Es van retallant a mesura que s'hi col·loca un sintetic, aixi el
-            // seguent ja no pot envair el que s'acaba d'afegir.
-            var free = info.gaps.map(function (g) { return { startSec: g.startSec, endSec: g.endSec }; });
-            if (o.includeEdges && info.firstSec != null) {
-                free.unshift({ startSec: info.firstSec - 36000, endSec: info.firstSec });
-                free.push({ startSec: info.lastSec, endSec: info.lastSec + 36000 });
-            }
-
-            var accepted = [];   // intervals ja afegits (anti-duplicat)
             // (2026-10-23) INDEX de TEXTOS del SRT normal: el sintètic que ja hi és
             // (mateix text, TC a ±textNearSec) no s'afegeix encara que els TC no
             // solapen. Comparar només TC duplicava subtítols quan els dos motors
@@ -466,92 +588,121 @@
                 if (!baseTextIdx[kb]) baseTextIdx[kb] = [];
                 baseTextIdx[kb].push(base[bt]);
             }
-            for (var i = 0; i < sint.length; i++) {
-                var s = sint[i];
-                var rec = { startSec: s.startSec, endSec: s.endSec, texts: s.texts.slice(), reason: '', trimSec: 0 };
-                // 1) Fora del tram amb contingut real
-                if (s.startSec < fromSec - tol || s.endSec > toSec + tol) {
-                    rec.reason = 'fora-del-tram';
-                    out.rejected.push(rec);
+
+            // 1) FILTRE previ: fora del tram amb contingut real i frases que ja hi
+            //    són (mateix text a prop) → no són candidates.
+            var cands = [];
+            for (var i0 = 0; i0 < sint.length; i0++) {
+                var s0 = sint[i0];
+                var rec0 = {
+                    startSec: s0.startSec, endSec: s0.endSec, texts: s0.texts.slice(),
+                    reason: '', trimSec: 0,
+                    srcDurSec: (Number(s0.endSec) || 0) - (Number(s0.startSec) || 0)
+                };
+                if (s0.startSec < fromSec - tol || s0.endSec > toSec + tol) {
+                    rec0.reason = 'fora-del-tram';
+                    out.rejected.push(rec0);
                     continue;
                 }
-                // 2) El MATEIX TEXT ja existeix al SRT normal (TC a ±`near` s) → és el
-                //     mateix subtítol dit d'una altra manera de comptar → no s'afegeix.
-                var kS = this._normText((s.texts || []).join(' '));
+                var kS = this._normText((s0.texts || []).join(' '));
                 var hits = kS ? baseTextIdx[kS] : null;
                 if (hits) {
                     var dupText = false;
                     for (var hh = 0; hh < hits.length; hh++) {
-                        if (Math.abs(hits[hh].startSec - s.startSec) <= near ||
-                            Math.abs(hits[hh].endSec - s.endSec) <= near) { dupText = true; break; }
+                        if (Math.abs(hits[hh].startSec - s0.startSec) <= near ||
+                            Math.abs(hits[hh].endSec - s0.endSec) <= near) { dupText = true; break; }
                     }
                     if (dupText) {
-                        rec.reason = 'duplicat-text';
-                        out.rejected.push(rec);
+                        rec0.reason = 'duplicat-text';
+                        out.rejected.push(rec0);
                         continue;
                     }
                 }
-                // 3) Duplicat respecte d'una altra sintetica ja acceptada (els .srt
-                //    sintetics no se solapen entre ells: si ho fan, és la mateixa frase).
-                var clash = false;
-                for (var a = 0; a < accepted.length; a++) {
-                    if (this._overlaps(s.startSec, s.endSec, accepted[a].startSec, accepted[a].endSec, tol)) { clash = true; break; }
+                cands.push(rec0);
+            }
+            if (cands.length === 0) return out;
+            // 2) BUITS a omplir. Els de 0,12 s (3 frames) són la SEPARACIÓ oficial
+            //    entre dos subtítols: no es toquen mai — si no, s'ompliria cada
+            //    juntura del SRT oficial amb una frase sintètica.
+            var minGap = minDur + 2 * GAP;
+            var gapsToFill = [];
+            for (var gi = 0; gi < info.gaps.length; gi++) {
+                if (info.gaps[gi].durSec >= minGap - 0.0001) gapsToFill.push(info.gaps[gi]);
+            }
+            var usedFlags = [];   // candidates ja col·locades (o descartades) per un buit
+            for (var g0 = 0; g0 < gapsToFill.length; g0++) {
+                var gap = gapsToFill[g0];
+                // QUINS sintetics cauen dins d'eixe buit (solapament real, no el toc).
+                var sel = [];
+                for (var ci = 0; ci < cands.length; ci++) {
+                    if (usedFlags[ci]) continue;
+                    var ov = Math.min(cands[ci].endSec, gap.endSec) - Math.max(cands[ci].startSec, gap.startSec);
+                    if (ov > Math.max(tol, 0.0001)) sel.push(ci);
                 }
-                if (clash) {
-                    rec.reason = 'duplicat';
-                    out.rejected.push(rec);
-                    continue;
+                if (sel.length === 0) continue;
+                sel.sort(function (a, b) { return cands[a].startSec - cands[b].startSec; });
+                // Dins del MATEIX buit, dos sintetics que se solapen són la mateixa
+                // frase comptada dos voltes: es queda el primer.
+                var selOk = [];
+                for (var so = 0; so < sel.length; so++) {
+                    var candRec = cands[sel[so]];
+                    var dupSel = false;
+                    for (var sd = 0; sd < selOk.length; sd++) {
+                        if (this._overlaps(candRec.startSec, candRec.endSec,
+                            cands[selOk[sd]].startSec, cands[selOk[sd]].endSec, tol)) { dupSel = true; break; }
+                    }
+                    if (dupSel) {
+                        candRec.reason = 'duplicat';
+                        out.rejected.push(candRec);
+                        usedFlags[sel[so]] = true;
+                        continue;
+                    }
+                    selOk.push(sel[so]);
                 }
-                // 4) (BUG #188) QUIN BUIT HI HA DAVALL: el buit lliure que més hi
-                //    encaixa. Si el sintetic el sobreïx una mica, s'ENCOGEIX fins a
-                //    la vora (mai més de `maxTrimSec`) en lloc de llençar-lo.
-                var best = null, bestOv = 0, bestIdx = -1;
-                for (var f = 0; f < free.length; f++) {
-                    var ov = Math.min(s.endSec, free[f].endSec) - Math.max(s.startSec, free[f].startSec);
-                    if (ov > bestOv) { bestOv = ov; best = free[f]; bestIdx = f; }
+                if (selOk.length === 0) continue;
+                sel = selOk;
+                var segs = sel.map(function (ix) {
+                    return { startSec: cands[ix].startSec, endSec: cands[ix].endSec };
+                });
+                // 3) ENCAIX: el segment s'estira (o s'arrangona) per a omplir el
+                //    buit amb la separació de 3 frames, com qualsevol clip oficial.
+                var fit = this.fitClipsToGap(segs, gap.startSec, gap.endSec,
+                    { gapSec: GAP, minDurSec: minDur, maxStretch: maxStretch });
+                for (var q = 0; q < sel.length; q++) {
+                    var rec = cands[sel[q]];
+                    usedFlags[sel[q]] = true;
+                    if (fit.clips.length === 0 || q >= fit.clips.length) {
+                        // El buit no dona per a tants clips (o per a cap).
+                        rec.reason = (fit.reason === 'massa-curt') ? 'massa-curt' : 'no-cab';
+                        out.rejected.push(rec);
+                        continue;
+                    }
+                    var nc = fit.clips[q];
+                    var newDur = nc.endSec - nc.startSec;
+                    rec.startSec = nc.startSec;
+                    rec.endSec = nc.endSec;
+                    rec.trimSec = Math.round(Math.abs(rec.srcDurSec - newDur) * 1000) / 1000;
+                    rec.factor = fit.factor;
+                    rec.gapStartSec = gap.startSec;
+                    rec.gapEndSec = gap.endSec;
+                    rec.reason = (Math.abs(fit.factor - 1) > 0.005) ? 'buit-ajustada' : 'buit';
+                    if (rec.trimSec > 0.005) out.trimmed++;
+                    out.added.push(rec);
                 }
-                if (!best || bestOv <= 0.0001) {
-                    rec.reason = 'solapa';
-                    out.rejected.push(rec);
-                    continue;
-                }
-                var cs = Math.max(s.startSec, best.startSec);
-                var ce = Math.min(s.endSec, best.endSec);
-                var durOk = (ce - cs);
-                var trim = (s.endSec - s.startSec) - durOk;
-                if (durOk + 0.0001 < minDur) {
-                    rec.reason = 'massa-curt';
-                    rec.freeSec = durOk;
-                    out.rejected.push(rec);
-                    continue;
-                }
-                if (trim > maxTrim + 0.0001) {
-                    rec.reason = 'no-cab';
-                    rec.trimSec = trim;
-                    out.rejected.push(rec);
-                    continue;
-                }
-                // 5) Acceptada: es queda amb els temps RETALLATS al buit
-                rec.startSec = cs;
-                rec.endSec = ce;
-                rec.trimSec = (trim > 0.0005) ? trim : 0;
-                rec.reason = rec.trimSec > 0 ? 'buit-ajustada' : 'buit';
-                if (rec.trimSec > 0) out.trimmed++;
-                // El buit queda partit (o esgotat) pel que s'acaba de col·locar.
-                // Es reemplaça el buit TRIAT (bestIdx), no el darrer del bucle.
-                free.splice(bestIdx, 1, { startSec: best.startSec, endSec: cs }, { startSec: ce, endSec: best.endSec });
-                var free2 = [];
-                for (var f2 = 0; f2 < free.length; f2++) {
-                    if (free[f2].endSec - free[f2].startSec > 0.0001) free2.push(free[f2]);
-                }
-                free = free2;
-                accepted.push({ startSec: cs, endSec: ce });
-                out.added.push(rec);
+                if (fit.clips.length > 0) out.filledGaps++;
+                out.dropped += fit.dropped;
+            }
+            // 4) Les que no han caigut en cap buit: van damunt d'un subtitol
+            //    existent (o entre dos que ja es toquen) → no s'hi posen.
+            for (var nx = 0; nx < cands.length; nx++) {
+                if (usedFlags[nx]) continue;
+                cands[nx].reason = 'solapa';
+                out.rejected.push(cands[nx]);
             }
 
             if (out.added.length === 0) return out;
 
-            // 6) Fusionar i reindexar (les existents conserven start/end/texts).
+            // 5) Fusionar i reindexar (les existents conserven start/end/texts).
             //    `sint: true` marca les que venen del SINT per poder-les pintar
             //    diferents a l'editor (marcades d'origen, no modificables per error).
             var merged = base.concat(out.added.map(function (r) {

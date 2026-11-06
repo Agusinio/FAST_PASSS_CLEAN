@@ -1,7 +1,7 @@
 {
-  "name": "getem-0.1",
-  "version": "8.0.0",
-  "description": "",
+  "name": "fast-pass",
+  "version": "0.9.8",
+  "description": "FAST >>> PASS — panell CEP per a Adobe Premiere Pro",
   "main": "index.js",
   "directories": {
     "lib": "lib"

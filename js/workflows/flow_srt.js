@@ -572,12 +572,19 @@
         },
 
         /**
-         * runSrtFillGaps (F3.3 · opcio B): reomple els BUITS del SRT normal amb
-         * les entrades sintetiques que hi cauen (tolerancia
-         * `general.srtSyntheticGapTolSec`; retall maxim `general.srtSyntheticMaxTrimSec`
-         * i durada minima `general.srtSyntheticMinDurSec`). El resultat es una vista
-         * MOD **dins del mateix editor**: el SRT normal no es modifica, el fitxer
-         * original no es toca mai i el TIMELINE queda igual.
+         * runSrtFillGaps (F3.3 · opcio B · BUG #224 2026-11-06): reomple els BUITS
+         * del SRT normal amb les entrades sintetiques que hi cauen. El resultat es
+         * una vista MOD **dins del mateix editor**: el SRT normal no es modifica, el
+         * fitxer original no es toca mai i el TIMELINE queda igual.
+         *
+         * (BUG #224 · 2026-11-06) QUIN SINT I ON: abans es carregava el PRIMER .srt
+         * del programa i de la data (nivell N2 del Scanner, «qualvol bloc») i el 🧩
+         * omplia els buits amb eixes frases encara que no hi tocaren (mesurat el
+         * 06/11: 0/74 frases en comú → «Querida Xaric…» dins del rotatiu dels EUA).
+         * Ara s'envia al editor TOTA la llista de candidats (`Scanner.srtSynthetic`
+         * → `all`), el reomplit MESURA cada un contra el SRT carregat i només
+         * col·loca el que quadra (`SrtEditor._pickSintForFill`); si cap quadra, no
+         * es toca res i el motiu queda al panell i al log.
          *
          * (BUG #188 · 2026-10-23) El 🧩 NO exporta res: deixa la taula MOD a l'editor
          * (els SINT encaixats es pinten amb un to propi) i és l'usuari qui decidix si
@@ -593,33 +600,38 @@
             const ed = window.SrtEditor;
             if (!ed || !ed.mergeSyntheticGaps) { getUtils().status("Error: SrtEditor no disponible", "error"); return false; }
             try {
-                // (2026-10-23) AUTOCARREGA: si els SINT no estan en memòria (l'usuari no
-                // ha fet Ctrl+clic a ⬇️), es carreguen ARA de `rutas.subtitulosSinteticos`.
-                // Així 🧩 va amb un sol clic i, si no hi ha res a la carpeta, el motiu
-                // queda escrit al log pel propi Scanner.
                 const ctx = await this._srtCtx();
                 if (!ctx) { getUtils().status("Selecciona un programa", "warn"); return false; }
+                // (BUG #187) El SINT que hi haja en memòria ha de ser del MATEIX programa.
                 const mem = this._sintBelongsTo(ed, ctx.progData);
                 if (mem.name && !mem.ok) {
                     log("⚠️ SRT_FILL: el SINT en memòria «" + mem.name + "» " + mem.motivo +
-                        " → es descarta i es rellegeix de la carpeta", "WARN");
+                        " → es descarta i es busca entre els de la carpeta", "WARN");
+                    try {
+                        if (String(ed._kind || '').toUpperCase() === 'SINT' && ed.hasView('NORMAL')) ed.switchView('NORMAL');
+                    } catch (eSw) { log("⚠️ SRT_FILL: no s'ha pogut tornar al NORMAL: " + eSw.message); }
+                    try { if (ed._views) delete ed._views['SINT']; } catch (eDel) { }
                 }
-                const hasSint = mem.ok;
-                if (!hasSint) {
-                    log("🧩 SRT_FILL: sense SINT del programa en memoria → carregant de la carpeta de sintetics...");
-                    const okSint = await this.runSrtLoadSynthetic();
-                    if (!okSint) {
-                        // (2026-10-23 · BUG #190) El motiu REAL (programa, data i què hi
-                        // ha eixe dia) en compte del genèric «revisa les rutes», que feia
-                        // pensar que el botó no responia.
-                        const motiu = this._sintMissText(ctx);
-                        getUtils().status("SINT: " + motiu + " → res a reomplir", "warn");
-                        getUtils().log("⚠️ SRT_FILL: " + motiu + " → no es reomple res (traces [SCAN:srtSynthetic])", "WARN");
-                        return false;
-                    }
+                // (BUG #224) CANDIDATS: tots els .srt del programa i de la data (el del
+                // bloc primer). El reomplit decidix amb la MESURA de frases en comú.
+                const cand = await getScanner().srtSynthetic(ctx);
+                const lista = (cand && cand.all && cand.all.length)
+                    ? cand.all
+                    : (cand ? [{ name: cand.name, path: cand.path, level: cand.level }] : []);
+                if (!lista.length) {
+                    // (2026-10-23 · BUG #190) El motiu REAL (programa, data i què hi
+                    // ha eixe dia) en compte del genèric «revisa les rutes», que feia
+                    // pensar que el botó no responia.
+                    const motiu = this._sintMissText(ctx);
+                    getUtils().status("SINT: " + motiu + " → res a reomplir", "warn");
+                    log("⚠️ SRT_FILL: " + motiu + " → no es reomple res (traces [SCAN:srtSynthetic])", "WARN");
+                    return false;
                 }
+                log("🧩 SRT_FILL: " + lista.length + " candidat(s) → " +
+                    lista.slice(0, 4).map(function (c) { return 'N' + c.level + ' ' + c.name; }).join(' | ') +
+                    (lista.length > 4 ? ' …' : '') + ' (es mesura cada un contra el SRT carregat)');
                 log("🧩 SRT_FILL: reomplint buits amb els SINT (només taula, sense tocar el timeline)...");
-                const merged = await ed.mergeSyntheticGaps();
+                const merged = await ed.mergeSyntheticGaps({ candidates: lista });
                 if (!merged) return false;
                 // (BUG #188) ACÍ S'ACABA: el timeline NO es toca. Els clips entren al
                 // timeline només amb 💾 (o 💾+Ctrl = només el que falta, a S2 amb color).

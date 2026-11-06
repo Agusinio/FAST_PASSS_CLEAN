@@ -1166,6 +1166,23 @@
                         ' ni pel seu codi alternatiu)', 'INFO');
                 }
                 var hasBoth = function (f) { return !!bloqueUp && (f.name || '').toUpperCase().indexOf(pBoth) !== -1; };
+                // (BUG #224 · 2026-11-06) TOTS els candidats del programa i de la data,
+                // el del BLOC primer. El 🧩 no es queda amb el primer de la carpeta: els
+                // MESURA contra el SRT carregat i tria el que hi quadra
+                // (`SrtEditor._pickSintForFill`). Abans, quan el bloc no tenia SINT propi,
+                // s'agafava el primer de la carpeta (N2) i s'omplien buits amb frases d'un
+                // altre bloc («Querida Xaric…» dins del rotatiu dels EUA, 0/74 en comú).
+                var allList = delProg.slice().sort(function (a, b) {
+                    var ba = hasBoth(a) ? 0 : 1, bb = hasBoth(b) ? 0 : 1;
+                    if (ba !== bb) return ba - bb;
+                    return String(a.name).localeCompare(String(b.name));
+                }).map(function (f) {
+                    return {
+                        name: f.name,
+                        path: String(dir).replace(/[\\/]+$/, '') + '\\' + f.name,
+                        level: hasBoth(f) ? 1 : 2
+                    };
+                });
                 var levels = [
                     { level: 1, reason: 'prefix ' + pBoth + ' + data de treball', list: delProg.filter(hasBoth) },
                     { level: 2, reason: 'prefix ' + pProg + ' + data de treball (qualsevol bloc)', list: delProg.slice() }
@@ -1175,7 +1192,8 @@
                     if (L.list.length === 0) continue;
                     var pick = L.list[0];
                     utils.log('[SCAN:srtSynthetic] N' + L.level + ' (' + L.reason + '): ' + L.list.length +
-                        ' candidat(s) · triat "' + pick.name + '" (' + (self._fileDateYYYYMMDD(pick) || 'sense data') + ')', 'INFO');
+                        ' candidat(s) · triat "' + pick.name + '" (' + (self._fileDateYYYYMMDD(pick) || 'sense data') + ')' +
+                        ' · el 🧩 mesura els ' + allList.length + " del programa i de la data", 'INFO');
                     // Els altres candidats DEL MATEIX PROGRAMA tambe queden al log: si
                     // el triat no és el bloc correcte es pot veure d'on vindria.
                     if (L.list.length > 1) {
@@ -1194,7 +1212,8 @@
                         path: String(dir).replace(/[\\/]+$/, '') + '\\' + pick.name,
                         level: L.level,
                         reason: L.reason,
-                        candidates: L.list.length
+                        candidates: L.list.length,
+                        all: allList
                     };
                 }
                 return null;

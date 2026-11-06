@@ -65,7 +65,7 @@
             ok('#F3/6 fusio: resultat ordenat i reindexat 1..n',
                 res.entries.length === 4 &&
                 res.entries[0].index === 1 && res.entries[3].index === 4 &&
-                near(res.entries[2].startSec, 5) && near(res.entries[3].startSec, 10),
+                near(res.entries[2].startSec, 4.12) && near(res.entries[3].startSec, 10),
                 JSON.stringify(res.entries.map(function (e) { return e.index + '@' + e.startSec; })));
             ok('#F3/7 fusio: les existents queden IDENTIQUES (sols s\'hi afegeix)',
                 near(res.entries[0].startSec, 0) && near(res.entries[0].endSec, 2) &&
@@ -84,44 +84,45 @@
                 dup.added.length === 1 && dup.rejected.length === 1 && dup.rejected[0].reason === 'duplicat',
                 dup.added.length + '/' + dup.rejected.length + ':' + (dup.rejected[0] || {}).reason);
 
-            // (BUG #188 · 2026-10-23) RETALL: ja no es descarta el sintetic que toca
-            // un subtitol existent — s'ENCOGEIX fins a la vora del buit. Però si del
-            // buit només en queda un tros inservible (< minDurSec) s'ha de descartar.
+            // (BUG #224 · 2026-11-06) Un sintetic que NOMÉS toca el buit (0,1 s) no
+            // és dins: va damunt d'un subtitol existent → no s'hi posa.
             var touch = P.mergeSyntheticGaps(base, [E(3.9, 4.1, 'toca')], { tolSec: 0.2, minDurSec: 0.4 });
-            ok('#F3/10 retall: un sintetic del qual només cap un tros < minDur → fora («massa-curt»)',
+            ok('#F3/10 solapament: un sintetic que només TOCA el buit (< tol) no s\'hi posa',
                 touch.added.length === 0 && touch.rejected.length === 1 &&
-                touch.rejected[0].reason === 'massa-curt',
+                touch.rejected[0].reason === 'solapa',
                 touch.added.length + '/' + touch.rejected.length + ':' + (touch.rejected[0] || {}).reason);
 
-            // (BUG #188) Si hi cap gairebé tot, s'encongeix i s'accepta amb els temps
-            // del BUIT (era el cas real: el SINT passava 0,4 s del buit i es perdia).
-            var fit = P.mergeSyntheticGaps(base, [E(3.6, 5.2, 'sobreïx')], { tolSec: 0.2, minDurSec: 0.4, maxTrimSec: 0.8 });
-            ok('#F3/49 retall: el sintetic que sobreïx el buit entra ENCOGIT fins a la vora',
+            // (BUG #224 · 2026-11-06) ENCAIX: el sintetic que sobreïx el buit entra
+            // igual — s'ESTIRA/ARRANGONA fins a omplir el buit amb la separació de
+            // 3 frames dels oficials, començant a vora+0,12 s.
+            var fit = P.mergeSyntheticGaps(base, [E(3.6, 5.2, 'sobreïx')], { tolSec: 0.2, minDurSec: 0.4 });
+            ok('#F3/49 encaix: el sintetic que sobreïx el buit s\'hi col·loca començant a la vora + separació',
                 fit.added.length === 1 && fit.added[0].reason === 'buit-ajustada' &&
-                near(fit.added[0].startSec, 4) && near(fit.added[0].endSec, 5.2) &&
-                near(fit.added[0].trimSec, 0.4, 0.001) && fit.trimmed === 1 &&
-                near(fit.entries[2].startSec, 4) && fit.entries[2].sint === true,
-                JSON.stringify(fit.added.map(function (a) { return a.startSec + '-' + a.endSec + ':' + a.reason + ':trim' + a.trimSec; })));
+                near(fit.added[0].startSec, 4.12) && near(fit.added[0].endSec, 7.32) &&
+                near(fit.added[0].factor, 2, 0.001) && fit.trimmed === 1 &&
+                near(fit.entries[2].startSec, 4.12) && fit.entries[2].sint === true,
+                JSON.stringify(fit.added.map(function (a) { return a.startSec + '-' + a.endSec + ':' + a.reason + ':x' + a.factor; })));
 
-            // (BUG #188b) Dos sintetics al MATEIX buit: el buit s'ha d'anar partint amb
-            // el que es col·loca (índex del buit TRIAT, no el darrer del bucle) i les
-            // entrades afegides no es poden solapar entre elles.
+            // (BUG #224) Dos sintetics al MATEIX buit: es col·loquen en ORDRE, sense
+            // solapar-se, amb la separació de 3 frames i estirats per omplir-lo.
             var two = P.mergeSyntheticGaps(base, [E(3.6, 5.2, 'a'), E(5.6, 6.6, 'b')],
-                { tolSec: 0.2, minDurSec: 0.4, maxTrimSec: 0.8 });
-            ok('#F3/52 retall: dos sintetics al mateix buit → es col·loquen en ordre i no se solapen',
-                two.added.length === 2 && near(two.added[0].endSec, 5.2) &&
-                near(two.added[1].startSec, 5.6) && two.added[1].startSec >= two.added[0].endSec &&
-                two.trimmed === 1 && two.entries.length === 5 &&
+                { tolSec: 0.2, minDurSec: 0.4 });
+            ok('#F3/52 encaix: dos sintetics al mateix buit → en ordre, amb 3 frames i sense solapar',
+                two.added.length === 2 && near(two.added[0].startSec, 4.12) &&
+                near(two.added[0].endSec, 7.32) && near(two.added[1].startSec, 7.44) &&
+                near(two.added[1].startSec - two.added[0].endSec, 0.12, 0.001) &&
+                two.trimmed === 2 && two.entries.length === 5 &&
                 two.entries.filter(function (e) { return e.sint === true; }).length === 2,
                 JSON.stringify(two.added.map(function (a) { return a.startSec + '-' + a.endSec + ':' + a.reason; })) +
                 ' * n=' + two.entries.length + ' * trimmed=' + two.trimmed);
 
-            // (BUG #188) Massa llarg per al buit: retallar-lo el deixaria sense sentit.
-            var noCab = P.mergeSyntheticGaps(base, [E(2.5, 8, 'massa-llarg')], { tolSec: 0.2, minDurSec: 0.4, maxTrimSec: 0.8 });
-            ok('#F3/50 retall: si cal retallar més de maxTrimSec → NO s\'afegeix («no-cab»)',
-                noCab.added.length === 0 && noCab.rejected.length === 1 &&
-                noCab.rejected[0].reason === 'no-cab' && near(noCab.rejected[0].trimSec, 1.5, 0.001),
-                (noCab.rejected[0] || {}).reason + ':trim' + (noCab.rejected[0] || {}).trimSec);
+            // (BUG #224) Una frase MOLT més llarga que el buit ja no es descarta: es
+            // comprimix dins del buit (era el cas «no-cab» de BUG #188).
+            var noCab = P.mergeSyntheticGaps(base, [E(2.5, 8, 'massa-llarg')], { tolSec: 0.2, minDurSec: 0.4 });
+            ok('#F3/50 encaix: la frase més llarga que el buit s\'hi comprimix (ja no es descarta)',
+                noCab.added.length === 1 && near(noCab.added[0].startSec, 4.12) &&
+                near(noCab.added[0].endSec, 9.88) && noCab.added[0].factor < 1.5,
+                JSON.stringify(noCab.added.map(function (a) { return a.startSec + '-' + a.endSec + ':x' + a.factor; })));
 
             ok('#F3/11 fusio: sense SRT normal o sense SINT no fa res',
                 P.mergeSyntheticGaps([], [E(1, 2)], {}).added.length === 0 &&
@@ -167,8 +168,8 @@
             var rawFus = P.mergeSyntheticGaps(baseAx2, sintAx2, { tolSec: 0.2 });
             ok("#F3/56 ajust+fusió: desplaçat cau al BUIT correcte (sense ajust, al d'abans)",
                 near(estAx2.offsetSec, 10, 0.001) &&
-                aligned.added.length === 1 && near(aligned.added[0].startSec, 15) &&
-                rawFus.added.length === 1 && near(rawFus.added[0].startSec, 5),
+                aligned.added.length === 1 && near(aligned.added[0].startSec, 12.12) &&
+                rawFus.added.length === 1 && near(rawFus.added[0].startSec, 2.12),
                 'Δ=' + estAx2.offsetSec + ' * alineat=' + JSON.stringify(aligned.added.map(function (a) { return a.startSec; })) +
                 ' * sense-ajust=' + JSON.stringify(rawFus.added.map(function (a) { return a.startSec; })));
 
@@ -176,6 +177,61 @@
             ok("#F3/57 estimateOffsetSec: sense frases en comú no s'inventa cap desfasament",
                 noPair.offsetSec === 0 && noPair.pairs === 0 && noPair.method === 'cap',
                 JSON.stringify(noPair));
+
+            // ── BUG #224 (2026-11-06) · ENCAIX AL BUIT I SELECCIO DEL SINT ──────
+            // Els SRT oficials del NAS porten SEMPRE 3 frames (0,12 s) entre dos
+            // clips seguits (mesurat: 63/68, 62/79 i 51/64 a tres blocs). El 🧩 ha
+            // de deixar eixa separació i ESTIRAR el text per a omplir el buit.
+            var fg1 = P.fitClipsToGap([{ startSec: 2, endSec: 4 }, { startSec: 5, endSec: 7 }, { startSec: 8, endSec: 10 }], 1, 11);
+            ok('#F3/62 fitClipsToGap: ompli el buit de vora a vora amb 3 frames de separació',
+                fg1.clips.length === 3 && near(fg1.clips[0].startSec, 1.12) &&
+                near(fg1.clips[2].endSec, 10.88) &&
+                near(fg1.clips[1].startSec - fg1.clips[0].endSec, 0.12, 0.001) &&
+                near(fg1.clips[2].startSec - fg1.clips[1].endSec, 0.12, 0.001) &&
+                near(fg1.factor, 1.5867, 0.002) && fg1.reason === 'buit' && fg1.dropped === 0,
+                JSON.stringify(fg1));
+
+            var fg2 = P.fitClipsToGap([{ startSec: 2, endSec: 3 }], 1, 31, { maxStretch: 2 });
+            ok('#F3/63 fitClipsToGap: no estira més de maxStretch (deixa la cua del buit buida)',
+                fg2.clips.length === 1 && near(fg2.factor, 2, 0.001) &&
+                near(fg2.clips[0].startSec, 1.12) && near(fg2.clips[0].endSec, 3.12) &&
+                fg2.reason === 'no-omplit',
+                JSON.stringify(fg2));
+
+            var fg3 = P.fitClipsToGap([{ startSec: 0, endSec: 1 }], 0, 0.5);
+            ok('#F3/64 fitClipsToGap: un buit massa curt (no cap ni un clip) → «massa-curt»',
+                fg3.clips.length === 0 && fg3.reason === 'massa-curt' && fg3.dropped === 1,
+                JSON.stringify(fg3));
+
+            // El buit ha de quedar PLE (sense forats a dins) amb les frases que hi cauen.
+            // (3 clips de 2 s en un buit de 10 s → factor 1,59: s'estiren per omplir-lo.)
+            var fillBase = [E(0, 1, 'a'), E(11, 12, 'b')];
+            var fillSint = [E(2, 4, 's1'), E(5, 7, 's2'), E(8, 10, 's3')];
+            var filled = P.mergeSyntheticGaps(fillBase, fillSint, { tolSec: 0.2 });
+            var fillGaps = P.findGaps(filled.entries);
+            var innerGaps = fillGaps.gaps.filter(function (g) { return g.durSec > 0.13; });
+            ok('#F3/65 fusio: el buit queda PLE (cap forat a dins) i les existents no es toquen',
+                filled.added.length === 3 && filled.filledGaps === 1 && innerGaps.length === 0 &&
+                near(filled.added[0].startSec, 1.12) &&
+                near(filled.added[2].endSec, 10.88) &&
+                near(filled.added[0].factor, 1.5867, 0.002) &&
+                near(filled.entries[0].endSec, 1) && near(filled.entries[filled.entries.length - 1].startSec, 11) &&
+                near(filled.gapSec, 0.12) && near(filled.maxStretchSec, 2),
+                'afegides=' + filled.added.length + ' · forats>0.13s=' + innerGaps.length +
+                ' · ' + JSON.stringify(fillGaps.gaps));
+
+            // SELECCIO: si el SINT no compartix CAP frase amb el SRT no es pot saber
+            // que siga d'eixos buits → el 🧩 no ha de col·locar res.
+            var credNo = P.alignmentCredible({ pairs: 0, used: 0, method: 'cap' }, 3);
+            var credOk = P.alignmentCredible({ pairs: 4, used: 3, spreadSec: 1, method: 'text' }, 3);
+            var credFar = P.alignmentCredible({ pairs: 10, used: 10, method: 'fora-de-rang' }, 3);
+            var credFew = P.alignmentCredible({ pairs: 2, used: 2, method: 'text-febol' }, 3);
+            ok('#F3/66 alignmentCredible: exigix frases en comú (0 → NO; 3 → SÍ; fora de rang → NO)',
+                credNo.ok === false && credNo.reason === 'cap-frase' &&
+                credOk.ok === true && credFar.ok === false && credFar.reason === 'fora-de-rang' &&
+                credFew.ok === false && credFew.reason === 'poques-frases' &&
+                P.alignmentCredible(null, 3).ok === false,
+                JSON.stringify([credNo, credOk, credFar, credFew]));
 
         } catch (eA) {
             ok('#F3 parser: la prova no ha llancat cap excepcio', false, eA && (eA.message + ' | ' + eA.stack));
@@ -218,15 +274,18 @@
                 /switchView:\s*function/.test(ed) && /hasView:\s*function/.test(ed));
             ok('#F3/18 editor: mergeSyntheticGaps llig la tolerància de la config',
                 /mergeSyntheticGaps:\s*async function/.test(ed) && /srtSyntheticGapTolSec/.test(ed));
-            // (BUG #188 · 2026-10-23) El 🧩 NOMÉS ompli la taula: la fusió llig els
-            // marges de RETALL de la config, les entrades encaixades es pinten amb un
-            // to propi (`e.sint`) i l'exportació al timeline ja no penja del 🧩.
+            // (BUG #188 · 2026-10-23 · BUG #224 2026-11-06) El 🧩 NOMÉS ompli la
+            // taula: la fusió llig la config (durada mínima, separació de 3 frames i
+            // estirament màxim), les entrades encaixades es pinten amb un to propi
+            // (`e.sint`) i l'exportació al timeline ja no penja del 🧩.
             if (ed.indexOf('exportGapClips') !== -1) {
-                ok('#F3/51 editor: fusió amb RETALL (minDur/maxTrim) + pintat de les SINT (sense exportGapClips)', false, 'exportGapClips encara hi és');
+                ok('#F3/51 editor: fusió amb encaix al buit (minDur/gapSec/maxStretch) + pintat SINT', false, 'exportGapClips encara hi és');
             } else {
-                ok('#F3/51 editor: fusió amb RETALL (minDur/maxTrim) + pintat de les SINT (sense exportGapClips)',
-                    /srtSyntheticMinDurSec/.test(ed) && /srtSyntheticMaxTrimSec/.test(ed) &&
-                    /minDurSec: minDur/.test(ed) && /maxTrimSec: maxTrim/.test(ed) &&
+                ok('#F3/51 editor: fusió amb encaix al buit (minDur/gapSec/maxStretch) + pintat SINT',
+                    /srtSyntheticMinDurSec/.test(ed) && /srtSyntheticGapSec/.test(ed) &&
+                    /srtSyntheticMaxStretch/.test(ed) &&
+                    /minDurSec: minDur/.test(ed) && /gapSec: gapSec/.test(ed) &&
+                    /maxStretchSec: maxStretch/.test(ed) &&
                     /fillSint/.test(ed) && /e\.sint/.test(ed));
             }
             ok('#F3/19 editor: esborrar del timeline NOMES clips de subtítol (sense ripple)',
@@ -242,8 +301,10 @@
             ok('#F3/20 flux: runSrtLoadSynthetic (Scanner.srtSynthetic + kind SINT + alternar)',
                 /runSrtLoadSynthetic:\s*async function/.test(flow) && /srtSynthetic\(ctx\)/.test(flow) &&
                 /\{ kind: 'SINT' \}/.test(flow) && /switchView\('NORMAL'\)/.test(flow));
-            ok('#F3/21 flux: runSrtFillGaps → SrtEditor.mergeSyntheticGaps',
-                /runSrtFillGaps:\s*async function/.test(flow) && /ed\.mergeSyntheticGaps\(\)/.test(flow));
+            ok('#F3/21 flux: runSrtFillGaps → SrtEditor.mergeSyntheticGaps amb els candidats mesurables',
+                /runSrtFillGaps:\s*async function/.test(flow) &&
+                /ed\.mergeSyntheticGaps\(\{\s*candidates:\s*lista\s*\}\)/.test(flow) &&
+                /cand\.all/.test(flow));
 
             var sc = noComments(await readRepo('js/logic/Scanner.js'));
             ok('#F3/22 Scanner.srtSynthetic: ruta de sintetics, filtre de data i prefix programa_bloc',
@@ -413,8 +474,9 @@
                 JSON.stringify(dupTxt.rejected.map(function (r) { return r.texts[0] + ':' + r.reason; })));
 
             var farTxt = P.mergeSyntheticGaps(baseTxt, [E(40, 42, 'hola mon')], { tolSec: 0.2 });
-            ok("#F3/33 fusio: el mateix TEXT MOLT lluny (±10 s) SÍ s'afegeix (repetició legítima)",
-                farTxt.added.length === 1 && farTxt.added[0].reason === 'buit',
+            ok("#F3/33 encaix: el mateix TEXT MOLT lluny (±10 s) SÍ que s'afegeix (repetició legítima)",
+                farTxt.added.length === 1 && near(farTxt.added[0].startSec, 12.12) &&
+                farTxt.added[0].reason === 'buit-ajustada',
                 JSON.stringify(farTxt.added.map(function (a) { return a.startSec + ':' + a.reason; })));
 
             var edSrc = noComments(await readRepo('js/editor/srt_editor.js'));
@@ -422,19 +484,38 @@
                 /ctx\.fillText\(String\(i \+ 1\), x \+ 3, by \+ bh - 4\)/.test(edSrc) &&
                 edSrc.indexOf('e.texts[0]).substring(0, 22)') === -1);
 
+            // (BUG #224 · 2026-11-06) El 🧩 ja NO es queda amb el primer .srt de la
+            // carpeta: envia TOTS els candidats del programa/data i el reomplit mesura
+            // cada un contra el SRT carregat (`_pickSintForFill`).
             ok('#F3/35 flux: 🧩 autocarrega els SINT si no estan en memòria (un sol clic)',
-                /hasSint/.test(flow) && /await this\.runSrtLoadSynthetic\(\)/.test(flow));
+                /srtSynthetic\(ctx\)/.test(flow) && /candidates:\s*lista/.test(flow) &&
+                /_pickSintForFill/.test(edSrc) && /alignmentCredible/.test(edSrc) &&
+                /const lista = \(cand && cand\.all/.test(flow));
 
             ok('#F3/36 Scanner: llista els altres sintètics (del programa) i els descartats per programa',
                 /altres del programa/.test(sc) && /descartats per programa/.test(sc));
+
+            // (BUG #224 · 2026-11-06) El Scanner torna TOTS els candidats del programa
+            // i de la data (`all`), el del BLOC primer: el 🧩 els mesura contra el SRT
+            // i tria el que hi quadra. Abans només en tornava un (N1 o, si el bloc no
+            // en tenia, el PRIMER de la carpeta → frases d'un altre bloc).
+            ok('#F3/67 Scanner.srtSynthetic: torna TOTS els candidats (`all`), el del bloc primer',
+                /all:\s*allList/.test(sc) && /var allList = delProg/.test(sc) &&
+                /level: hasBoth\(f\) \? 1 : 2/.test(sc) &&
+                /el 🧩 mesura els/.test(sc));
 
             // (2026-10-23) GUARDA DE PERTINENÇA: el SINT triat pot ser d'un altre bloc.
             var ov = P.textOverlap([E(0, 1, 'a b'), E(2, 3, 'c d')], [E(50, 51, 'A, B!'), E(60, 61, 'zzz')]);
             ok('#F3/37 textOverlap: mesura la pertinència del SINT al bloc (frases compartides, sense TC)',
                 ov.hits === 1 && ov.total === 2 && ov.pct === 50, JSON.stringify(ov));
-            ok('#F3/38 editor: avisa si el SINT no coincidix amb el SRT normal (<20%)',
-                /P\.textOverlap\(base, sint\)/.test(edSrc) && /ovl\.pct < 20/.test(edSrc) &&
-                /pot ser d'un ALTRE bloc/.test(edSrc));
+            // (BUG #224 · 2026-11-06) La guarda tova del 20 % s'ha substituït per una
+            // de DURA: si el SINT no quadra amb el SRT (frases en comú) no es
+            // col·loca res. Allà on hi havia l'avís hi ha ara la cancel·lació.
+            ok('#F3/38 editor: sense frases en comú NO es reomple (guarda dura, abans només avís)',
+                /alignmentCredible\(/.test(edSrc) && /srtSyntheticMinPairs/.test(edSrc) &&
+                /cap sintètic que quadre/.test(edSrc) &&
+                /REOMLIR cancel·lat/.test(edSrc) &&
+                edSrc.indexOf('pot ser d\'un ALTRE bloc') === -1);
 
             // (BUG #189 · 2026-10-23) El SINT es desplaça a l'eix de MEDIA del NORMAL
             // ABANS de fusionar (i tambe en carregar-lo o en restaurar els marcadors).

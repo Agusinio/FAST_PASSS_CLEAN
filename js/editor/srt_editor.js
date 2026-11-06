@@ -2119,6 +2119,100 @@
         },
 
         /**
+         * _readSrtEntries (BUG #224 · 2026-11-06): llig un .srt i torna les seues
+         * entrades SENSE tocar l'editor (per a poder MESURAR candidats abans de
+         * triar-ne un).
+         * @param {string} srtPath
+         * @returns {Promise<Array>} entrades (buida si no es pot llegir)
+         */
+        _readSrtEntries: async function (srtPath) {
+            var P = window.FASTPASS_UI.Logic.SrtParser;
+            if (!P || !srtPath) return [];
+            var escaped = String(srtPath).replace(/\\/g, '\\\\');
+            var txt = getUtils()._fromMojibake(await callJSX("IO.readTxt('" + escaped + "')"), 'srt_editor');
+            if (!txt || txt.indexOf('ERR') === 0) return [];
+            return P.srtToEntries(txt);
+        },
+
+        /**
+         * _pickSintForFill (BUG #224 · 2026-11-06): tria el SINT que CORRESPON al
+         * SRT carregat abans de reomplir buits.
+         *
+         * PER QUE CAL: `Scanner.srtSynthetic` triava el PRIMER .srt del programa i
+         * de la data (nivell N2, «qualvol bloc») quan el del bloc no existia. Amb
+         * eixa tria el 🧩 va omplir un buit del rotatiu dels EUA amb «Querida
+         * Xaric…» (mesurat el 06/11: 0/74 frases en comú) — text que NO és d'eixe
+         * buit. Ara cada candidat es MESURA contra el SRT (frases en comú, vegeu
+         * `SrtParser.estimateOffsetSec` / `alignmentCredible`) i només passa el que
+         * quadra; si cap quadra, el 🧩 no toca res i ho diu.
+         *
+         * @param {Array} baseEntries - taula NORMAL (la que s'edita)
+         * @param {Array} [candidates] - [{name, path, level}] de `Scanner.srtSynthetic.all`
+         * @returns {Promise<{ok:boolean, name:string, est:Object|null,
+         *                    inMemory:boolean, tried:Array}>}
+         */
+        _pickSintForFill: async function (baseEntries, candidates) {
+            var P = window.FASTPASS_UI.Logic.SrtParser;
+            var out = { ok: false, name: '', est: null, inMemory: false, tried: [], minPairs: 3 };
+            if (!P || typeof P.estimateOffsetSec !== 'function' || typeof P.alignmentCredible !== 'function') return out;
+            var base = baseEntries || [];
+            if (!base.length) return out;
+            var cfg = (window.FASTPASS_UI.Config && window.FASTPASS_UI.Config.get) ? window.FASTPASS_UI.Config.get() : null;
+            var minPairs = (cfg && cfg.srtSyntheticMinPairs != null) ? Number(cfg.srtSyntheticMinPairs) : 3;
+            out.minPairs = minPairs;
+
+            // 1) SINT ja en memòria (Ctrl+clic a ⬇️ o una fusió anterior)
+            var holder = (this._kind === 'SINT') ? this : (this._views['SINT'] || null);
+            if (holder && holder.entries && holder.entries.length) {
+                var nm = holder.name || this._srtName || '?';
+                var estMem = P.estimateOffsetSec(base, holder.entries);
+                var crMem = P.alignmentCredible(estMem, minPairs);
+                out.tried.push({ name: nm, where: 'memòria', est: estMem, ok: crMem.ok, reason: crMem.reason });
+                if (crMem.ok) {
+                    out.ok = true; out.est = estMem; out.name = nm; out.inMemory = true;
+                    return out;
+                }
+                log("⚠️ SRT_FILL: el SINT en memòria «" + nm + "» NO quadra amb el SRT (" +
+                    crMem.reason + " · " + estMem.pairs + " frases en comú) → es proven els de la carpeta", "WARN");
+            }
+
+            // 2) Candidats de la carpeta: es MESURA cada un i guanya el que més
+            //    frases compartix amb el SRT (el bloc mana només en cas d'empat).
+            var list = (candidates || []).slice();
+            if (!list.length) return out;
+            var best = null;
+            for (var i = 0; i < list.length; i++) {
+                var cnd = list[i];
+                if (!cnd || !cnd.path) continue;
+                var ents = null;
+                try { ents = await this._readSrtEntries(cnd.path); } catch (eR) { ents = null; }
+                if (!ents || !ents.length) {
+                    out.tried.push({ name: cnd.name || '?', where: 'fitxer', est: null, ok: false, reason: 'buit/il·legible', level: cnd.level });
+                    continue;
+                }
+                var est = P.estimateOffsetSec(base, ents);
+                var cr = P.alignmentCredible(est, minPairs);
+                out.tried.push({ name: cnd.name || '?', where: 'fitxer', est: est, ok: cr.ok, reason: cr.reason, level: cnd.level });
+                if (!cr.ok) continue;
+                var score = Number(est.used) || 0;
+                var better = !best || score > best.score ||
+                    (score === best.score && Number(cnd.level) === 1 && Number(best.cand.level) !== 1) ||
+                    (score === best.score && Number(cnd.level) === Number(best.cand.level) &&
+                        Number(est.spreadSec) < Number(best.est.spreadSec));
+                if (better) best = { cand: cnd, est: est, score: score, entries: ents };
+            }
+            if (!best) return out;
+            // 3) Es carrega el GUANYADOR com a vista SINT (loadSrt hi aplica l'ajust)
+            var okLoad = await this.loadSrt(best.cand.path, { kind: 'SINT' });
+            if (!okLoad) return out;
+            out.ok = true;
+            out.est = best.est;
+            out.name = best.cand.name || '';
+            out.path = best.cand.path;
+            return out;
+        },
+
+        /**
          * _applySintAlignment (BUG #189 · 2026-10-23): porta les entrades SINT a
          * l'eix del SRT NORMAL (temps de MEDIA del clip).
          *
@@ -2188,75 +2282,116 @@
         },
 
         /**
-         * mergeSyntheticGaps (F3.3 · opcio B): reomple els BUITS del SRT normal
-         * amb les entrades SINTETIQUES que hi cauen.
+         * mergeSyntheticGaps (F3.3 · opcio B · BUG #224 2026-11-06): reomple els
+         * BUITS del SRT normal amb les entrades SINTETIQUES que hi cauen.
          *   - MAI toca les entrades existents (start/end/text queden igual).
          *   - El resultat viu en una vista MOD, en la MATEIXA pista de la taula
          *     (el NORMAL es conserva intacte) i NO s'exporta al timeline: allo es
          *     fa a posta amb 💾 (BUG #188).
-         *   - (BUG #188) Si un SINT no hi cap exacte, s'ENCOGEIX fins a la vora del
-         *     buit (`general.srtSyntheticMaxTrimSec`, defecte 0,8 s) sense quedar-se
-         *     per davall de `general.srtSyntheticMinDurSec` (0,4 s).
-         *   - Sense SINT carregat (Ctrl+clic a CARREGAR) o sense buits → avisa.
+         *   - SELECCIO MESURADA: el SINT ha de quadrar amb el SRT (frases en comu);
+         *     si no, NO es col·loca res (`_pickSintForFill` + `alignmentCredible`).
+         *   - ENCAIX: el segment SINT de cada buit s'estira (o s'arrangona) per a
+         *     omplir-lo amb la separació de 3 frames dels oficials
+         *     (`SrtParser.fitClipsToGap`, `gapSec`/`maxStretchSec` de la config).
+         * @param {Object} [opts] { candidates:[{name,path,level}] } - de
+         *        `Scanner.srtSynthetic(ctx).all` (el 🧩 els passa des del flux)
          * @returns {Promise<boolean>} true si s'ha afegit alguna entrada
          */
-        mergeSyntheticGaps: async function () {
+        mergeSyntheticGaps: async function (opts) {
             var P = window.FASTPASS_UI.Logic.SrtParser;
-            // (BUG #189) Les dos taules s'han de creuar en el MATEIX eix de temps:
-            // el SINT es desplaça a l'eix de MEDIA del NORMAL abans de fusionar.
-            this._applySintAlignment();
+            var cfg = (window.FASTPASS_UI.Config && window.FASTPASS_UI.Config.get) ? window.FASTPASS_UI.Config.get() : null;
             var baseView = this._views['NORMAL'] || null;
             var base = baseView ? baseView.entries : (this._kind === 'NORMAL' ? this._entries : null);
-            var sint = (this._kind === 'SINT') ? this._entries : (this._views['SINT'] ? this._views['SINT'].entries : null);
-            // (2026-10-23) Nom del .srt sintètic en ús: al log ha de quedar clar D'ON
-            // surten les entrades afegides (cal poder verificar la càrrega dels SINT).
-            var sintName = (this._kind === 'SINT') ? (this._srtName || '')
-                : (this._views['SINT'] ? (this._views['SINT'].name || '') : '');
             if (!base || base.length === 0) {
                 getUtils().status("Cal el SRT NORMAL carregat per reomplir buits", "warn");
                 return false;
             }
+            // (BUG #224) QUIN SINT: es mesura el de memoria i, si no quadra, TOTS els
+            // candidats de la carpeta. Si cap quadra no es toca res (abans s'omplia
+            // amb el primer .srt del programa i eixia text d'un altre bloc).
+            var pick = await this._pickSintForFill(base, (opts && opts.candidates) || null);
+            if (pick.tried && pick.tried.length) {
+                log("📝 SRT_EDIT: SINT mesurats (" + pick.tried.length + ", mínim " + pick.minPairs + " frases en comú): " +
+                    pick.tried.map(function (t) {
+                        return "«" + String(t.name).slice(0, 28) + "»[" + t.where + "] " +
+                            (t.est ? (t.est.pairs + "p/" + t.est.used + "u Δ" + Number(t.est.offsetSec).toFixed(2) + "s") : '-') +
+                            " → " + (t.ok ? 'OK' : t.reason);
+                    }).join(' | '));
+            }
+            if (!pick.ok) {
+                var t0 = (pick.tried && pick.tried.length) ? pick.tried[0] : null;
+                var motiu = t0 ? (t0.reason + (t0.est ? " (" + t0.est.pairs + " frases en comú de " + (t0.est.sintCount || '?') + ")" : '')) : 'cap candidat';
+                getUtils().status("SINT: cap sintètic que quadre amb este SRT (" + motiu + ") → no es reomple res", "warn");
+                log("⚠️ SRT_EDIT: REOMLIR cancel·lat · cap SINT que quadre amb el SRT (" + motiu +
+                    ") · candidats provats: " + ((pick.tried || []).length), "WARN");
+                return false;
+            }
+            // (BUG #189) Les dos taules s'han de creuar en el MATEIX eix de temps:
+            // el SINT es desplaça a l'eix de MEDIA del NORMAL abans de fusionar.
+            this._applySintAlignment();
+            base = baseView ? baseView.entries : (this._kind === 'NORMAL' ? this._entries : base);
+            var sint = (this._kind === 'SINT') ? this._entries : (this._views['SINT'] ? this._views['SINT'].entries : null);
+            var sintName = (this._kind === 'SINT') ? (this._srtName || '')
+                : (this._views['SINT'] ? (this._views['SINT'].name || '') : '');
             if (!sint || sint.length === 0) {
                 getUtils().status("Cal carregar els SINT abans (Ctrl+clic a CARREGAR)", "warn");
                 return false;
             }
-            var cfg = (window.FASTPASS_UI.Config && window.FASTPASS_UI.Config.get) ? window.FASTPASS_UI.Config.get() : null;
+            // GUARDA FINAL: si la mesura no és creïble no es fusiona res.
+            var minPairs = (cfg && cfg.srtSyntheticMinPairs != null) ? Number(cfg.srtSyntheticMinPairs) : 3;
+            var crFinal = P.alignmentCredible(P.estimateOffsetSec(base, sint), minPairs);
+            if (!crFinal.ok) {
+                getUtils().status("SINT «" + (sintName || '?') + "» no quadra amb el SRT (" + crFinal.reason + ") → no es reomple", "warn");
+                log("⚠️ SRT_EDIT: REOMLIR cancel·lat · «" + (sintName || '?') + "» no quadra (" +
+                    crFinal.reason + " · " + crFinal.pairs + " frases en comú)", "WARN");
+                return false;
+            }
             var tol = (cfg && cfg.srtSyntheticGapTolSec != null) ? Number(cfg.srtSyntheticGapTolSec) : 0.2;
-            // (BUG #188) Marge de RETALL: el sintetic s'encongeix fins al buit si el
-            // retall no passa de `maxTrim` i la durada final no baixa de `minDur`.
             var minDur = (cfg && cfg.srtSyntheticMinDurSec != null) ? Number(cfg.srtSyntheticMinDurSec) : 0.4;
-            var maxTrim = (cfg && cfg.srtSyntheticMaxTrimSec != null) ? Number(cfg.srtSyntheticMaxTrimSec) : 0.8;
-            var res = P.mergeSyntheticGaps(base, sint, { tolSec: tol, minDurSec: minDur, maxTrimSec: maxTrim });
-            // (2026-10-23) GUARDA DE PERTINENÇA: el Scanner ja només deixa passar
-            // sintètics del MATEIX PROGRAMA (BUG #187), però pot ser el d'un ALTRE
-            // BLOC d'eixe programa (N2) i ompliria buits amb frases d'un altre guió.
-            // Mirem quin % de frases compartixen (sense mirar TC) i avisem si és molt baix.
+            // (BUG #224) Criteris dels OFICIALS: separació de 3 frames (0,12 s) i
+            // estirament fins a `srtSyntheticMaxStretch` (2×) com a molt.
+            var gapSec = (cfg && cfg.srtSyntheticGapSec != null) ? Number(cfg.srtSyntheticGapSec) : 0.12;
+            var maxStretch = (cfg && cfg.srtSyntheticMaxStretch != null) ? Number(cfg.srtSyntheticMaxStretch) : 2;
+            var res = P.mergeSyntheticGaps(base, sint, {
+                tolSec: tol, minDurSec: minDur, gapSec: gapSec, maxStretchSec: maxStretch
+            });
+            // (2026-10-23) QUANTES frases compartixen (informatiu)
             var ovl = (typeof P.textOverlap === 'function') ? P.textOverlap(base, sint) : null;
             if (ovl) {
                 log("📝 SRT_EDIT: SINT↔NORMAL comparteixen " + ovl.hits + "/" + ovl.total +
                     " frases (" + ovl.pct + "%) · SINT=" + (sintName || '?'));
-                if (sint.length >= 10 && ovl.pct < 20) {
-                    log("⚠️ SRT_EDIT: el SINT «" + (sintName || '?') + "» només coincidix en el " + ovl.pct +
-                        "% de les frases → pot ser d'un ALTRE bloc/guio del mateix programa", "WARN");
-                    getUtils().status("⚠️ SINT poc coincident amb el SRT (" + ovl.pct + "%): mira el log abans de guardar", "warn");
-                }
             }
             if (!res.added.length) {
-                // (2026-10-23) Desglossem els motius: 'solapa' = TC xocat; 'duplicat-text'
-                // = la mateixa frase ja hi era (comparació de text); 'fora-del-tram' = fora;
-                // (BUG #188) 'massa-curt' / 'no-cab' = el buit no dona per al sintetic.
+                // Desglossem els motius: 'solapa' = la frase cau damunt d'un subtitol
+                // que ja hi és; 'duplicat-text' = la mateixa frase ja hi era;
+                // 'fora-del-tram' = fora del bloc; 'massa-curt' / 'no-cab' = el buit
+                // no dona per a tants sintetics.
                 var rTxt = res.rejected.filter(function (x) { return x.reason === 'duplicat-text'; }).length;
                 var rSol = res.rejected.filter(function (x) { return x.reason === 'solapa'; }).length;
                 var rCurt = res.rejected.filter(function (x) { return x.reason === 'massa-curt'; }).length;
                 var rNoCab = res.rejected.filter(function (x) { return x.reason === 'no-cab'; }).length;
+                var rFora = res.rejected.filter(function (x) { return x.reason === 'fora-del-tram'; }).length;
                 getUtils().status("SINT: cap buit a reomplir (" + res.rejected.length + " entrades descartades)", "warn");
                 log("📝 SRT_EDIT: fusio SINT sense canvis · SINT=" + (sintName || '?') +
                     " · base=" + base.length + " · sint=" + sint.length +
                     " · buits=" + res.gaps.length + " · descartades=" + res.rejected.length +
-                    " (solapa=" + rSol + ", duplicat-text=" + rTxt + ", massa-curt=" + rCurt + ", no-cab=" + rNoCab + ")" +
-                    " · tol=" + res.tolSec + "s · retall màx=" + res.maxTrimSec + "s · durada mín=" + res.minDurSec + "s");
+                    " (solapa=" + rSol + ", duplicat-text=" + rTxt + ", massa-curt=" + rCurt +
+                    ", no-cab=" + rNoCab + ", fora-del-tram=" + rFora + ")" +
+                    " · tol=" + res.tolSec + "s · separació=" + res.gapSec + "s · estirament màx=" +
+                    res.maxStretchSec + "× · durada mín=" + res.minDurSec + "s");
                 return false;
             }
+            // (BUG #224) Resum per BUIT: quants clips hi entren i amb quin factor.
+            var perGap = {};
+            res.added.forEach(function (a) {
+                var k = Number(a.gapStartSec || 0).toFixed(2) + '→' + Number(a.gapEndSec || 0).toFixed(2);
+                if (!perGap[k]) perGap[k] = { n: 0, f: a.factor };
+                perGap[k].n++;
+            });
+            log("🧩 SRT_EDIT: buits reomplerts (" + res.filledGaps + ") → " +
+                Object.keys(perGap).map(function (k) {
+                    return k + ': ' + perGap[k].n + ' clip(s) ×' + perGap[k].f;
+                }).join(' | ') + (res.dropped ? ' · ' + res.dropped + ' clip(s) que no hi cabien' : ''));
             // Guardar la taula viva abans de canviar de vista
             this._stashCurrentView();
             if (baseView) {
@@ -2285,11 +2420,16 @@
             var detall = res.added.slice(0, 6).map(function (a) {
                 return this._secToTimeStr(a.startSec) + '→' + this._secToTimeStr(a.endSec) + ' «' + (a.texts || []).join(' ').substring(0, 40) + '»';
             }, this).join(' | ');
-            log("📝 SRT_EDIT: fusio SINT → " + res.added.length + " entrades afegides (" + res.trimmed + " retallades · tol " + res.tolSec + "s, retall màx " + res.maxTrimSec + "s, durada mín " + res.minDurSec + "s) · " +
-                "SINT=" + (sintName || '?') + " (" + sint.length + " entrades) · " +
-                res.rejected.length + " descartades · " + (res.entries.length - base.length) + " noves de " + res.entries.length + " · " + detall);
-            getUtils().status("Reomplert: " + res.added.length + " entrades SINT en " + res.gaps.length + " buits" +
-                (res.trimmed ? " (" + res.trimmed + " retallades)" : "") + " · MOD (prem 💾 per al timeline)", "exito");
+            log("📝 SRT_EDIT: fusio SINT → " + res.added.length + " entrades afegides (" + res.trimmed +
+                " ajustades · tol " + res.tolSec + "s, separació " + res.gapSec + "s, estirament màx " +
+                res.maxStretchSec + "×, durada mín " + res.minDurSec + "s) · " +
+                "SINT=" + (sintName || '?') + " (Δ" + Number(pick.est ? pick.est.offsetSec : 0).toFixed(2) +
+                "s, " + (pick.est ? pick.est.pairs : 0) + " frases en comú · " + sint.length + " entrades) · " +
+                res.rejected.length + " descartades · " + (res.entries.length - base.length) + " noves de " +
+                res.entries.length + " · " + detall);
+            getUtils().status("Reomplert: " + res.added.length + " entrades SINT en " + res.filledGaps + "/" +
+                res.gaps.length + " buits" + (res.dropped ? " (" + res.dropped + " no hi cabien)" : "") +
+                " · MOD (prem 💾 per al timeline)", "exito");
             return true;
         },
 

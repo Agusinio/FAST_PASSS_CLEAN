@@ -9,6 +9,7 @@
  * Mètodes:
  *   - _getHandleSecs()
  *   - ITEM_DURATION_OVERRIDES
+ *   - ITEM_PLANTILLES / plantillaDeTitol()  (mapa MESURAT item -> WAV)
  *   - _detectProgramKey(data)
  *   - _isWeekend(data)
  *   - _getCorrectedDuration(item, data)
@@ -123,6 +124,66 @@
                 'EF-CUC': 2
             }
         }
+    };
+
+    // ----------------------------------------------------------------
+    // 2.1 MAPA MESURAT «item d'escaleta -> plantilla d'Audios\»
+    // ----------------------------------------------------------------
+    //
+    // QUÈ ÉS: quina de les 8 plantilles d'`Audios\` sona en cada família
+    // d'item (careta / molinet / anada / tornada de publi). NO s'endevina pel
+    // nom: es MESURA. L'eina és `bin\map_plantilles.ps1`, que agafa els items
+    // de l'escaleta del dia, els situa dins del cleanFeed (TC - mediaStart) i
+    // busca A CEGUES les 8 plantilles amb `bin\cmp_samples.ps1` (lag a la
+    // mostra, guany, cancel·lació per finestres). Mana la CANCEL·LACIÓ (si la
+    // música hi és, cancel·la; si no, es queda a ~0 dB); `r` sola enganya.
+    //
+    // MESURA (06/11/2026 · TNV 05/11 · media
+    // `52795488_20261105205921_TN_VESPRE_senyal_net.MP4` · 230 items):
+    //
+    //   21:11:04  MOLINET 1B               -> 3CatInfo_TN_molinet_01.WAV   r=0,998  24,7 dB
+    //   21:22:06  MOLINET 1                -> 3CatInfo_TN_molinet_01.WAV   r=0,999  27,8 dB
+    //   21:28:28  MOLINET ANADA A PUBLI 1  -> 3CatInfo_TN_anada_publi.WAV  r=0,999  25,7 dB
+    //   21:36:39  MOLINET TORNADA PUBLI 1  -> 3CatInfo_TN_tornada_publi_.WAV r=0,999 25,6 dB
+    //   21:50:27  MOLINET ANADA A PUBLI 2  -> 3CatInfo_TN_anada_publi.WAV  r=0,998  24,9 dB
+    //
+    //   21:01:52  CARETA TNV               -> CAP de les 8                r=0,505   1,3 dB
+    //   21:44:02  CARETA ESPORTS           -> CAP de les 8                r=0,177   0,1 dB
+    //   21:56:54  CARETA MÉTEO TARDOR 2    -> CAP de les 8                r=0,495   1,2 dB
+    //   22:01:50  MOLINET ANADA PUBLI 3    -> CAP de les 8                r=0,116   0,1 dB
+    //
+    // (les 4 «CAP» també s'han mirat amb ±15 s de marge de lag, per si era un
+    //  desfasament de rellotge: la seua música NO és a `Audios\`. Si algun dia
+    //  cal netejar-ne una, caldrà afegir el WAV de referència.)
+    //
+    // DADA CLAU PER A L'A1: la música del molinet COMENÇA ~1,1-1,4 s després
+    // del TC de l'item (capçalera del molinet) i dura ~5 s. Per això un tall
+    // just a l'inici de l'item encara arrossega cua dins del clip.
+    //
+    // L'ordre de la taula importa: es compara amb `indexOf`, així que les claus
+    // més específiques van primer (TORNADA abans que MOLINET).
+    ER.ITEM_PLANTILLES = [
+        { titol: 'TORNADA PUBLI', wav: '3CatInfo_TN_tornada_publi_.WAV', r: 0.999, db: 25.6 },
+        { titol: 'TORNADA DE PUBLI', wav: '3CatInfo_TN_tornada_publi_.WAV', r: 0.999, db: 25.6 },
+        { titol: 'ANADA A PUBLI', wav: '3CatInfo_TN_anada_publi.WAV', r: 0.999, db: 25.7 },
+        { titol: 'ANADA PUBLI', wav: '3CatInfo_TN_anada_publi.WAV', r: 0.999, db: 25.7 },
+        { titol: 'MOLINET', wav: '3CatInfo_TN_molinet_01.WAV', r: 0.999, db: 27.8 }
+    ];
+
+    /**
+     * plantillaDeTitol: Plantilla d'`Audios\` que sona en un item, segons el
+     * MAPA MESURAT (no pel nom). Retorna el registre {titol, wav, r, db} o null.
+     * @param {string} titol - títol de l'item d'escaleta
+     * @returns {Object|null}
+     */
+    ER.plantillaDeTitol = function (titol) {
+        var t = String(titol || '').toUpperCase();
+        if (!t) return null;
+        var mapa = this.ITEM_PLANTILLES || [];
+        for (var i = 0; i < mapa.length; i++) {
+            if (t.indexOf(mapa[i].titol) !== -1) return mapa[i];
+        }
+        return null;
     };
 
     // ----------------------------------------------------------------

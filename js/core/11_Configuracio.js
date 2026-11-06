@@ -310,7 +310,7 @@
     };
 
     let _activeConfig = {
-        general: { autor: "AGUS", guarda: 22, debug: false, handles: 20, tcOffset: 0, clipInOffset: 10, zonaInOffset: 10, srtEmergencyTailSec: 120, snapWindowDeducedSec: 2.5, snapWindowFaroSec: 2.5, clipOutMarginSec: 0, clipExtraTailSec: 60, srtEditMarginLeftSec: 0.4, srtSyntheticGapTolSec: 0.2, srtSyntheticMinDurSec: 0.4, srtSyntheticMaxTrimSec: 0.8, srtGapColorLabel: 7 },
+        general: { autor: "AGUS", guarda: 22, debug: false, handles: 20, tcOffset: 0, clipInOffset: 10, zonaInOffset: 10, srtEmergencyTailSec: 120, snapWindowDeducedSec: 2.5, snapWindowFaroSec: 2.5, clipOutMarginSec: 0, clipExtraTailSec: 60, srtEditMarginLeftSec: 0.4, srtSyntheticGapTolSec: 0.2, srtSyntheticMinDurSec: 0.4, srtSyntheticMaxTrimSec: 0.8, srtSyntheticGapSec: 0.12, srtSyntheticMaxStretch: 2, srtSyntheticMinPairs: 3, srtGapColorLabel: 7 },
         // Hora d'inici d'emissió de cada programa (font ÚNICA per a tota l'extensió:
         // guardes de temps, peticions a l'API d'escaletes i OFFSET del MP4).
         programStartHours: { TNV: 21.0, TNM: 14.5, TNC: 13.8333, MAT: 7.9167 },
@@ -660,8 +660,24 @@
                 srtSyntheticMinDurSec: (cfg.general.srtSyntheticMinDurSec != null) ? cfg.general.srtSyntheticMinDurSec : 0.4,
                 // - srtSyntheticMaxTrimSec (BUG #188, 2026-10-23): retall MAXIM (segons)
                 //   que se li pot llevar a un SINT per encabir-lo al buit. Si en cal més,
-                //   es descarta («no-cab»): millor sense subtitol que tallat a la meitat.
+                //   es descarta («no-cab»). OBSOLET des del BUG #224: ara el segment
+                //   SINT s'ESTIRA fins al buit (`srtSyntheticMaxStretch`) en lloc de
+                //   retallar-lo; el valor es conserva només per compatibilitat.
                 srtSyntheticMaxTrimSec: (cfg.general.srtSyntheticMaxTrimSec != null) ? cfg.general.srtSyntheticMaxTrimSec : 0.8,
+                // - srtSyntheticGapSec (BUG #224, 2026-11-06): SEPARACIO (segons) entre
+                //   dos clips SINT col·locats al mateix buit i amb els veïns oficials.
+                //   Mesurat als SRT oficials del NAS: sempre 3 frames = 0,12 s a 25 fps.
+                srtSyntheticGapSec: (cfg.general.srtSyntheticGapSec != null) ? cfg.general.srtSyntheticGapSec : 0.12,
+                // - srtSyntheticMaxStretch (BUG #224, 2026-11-06): factor MAXIM
+                //   d'estirament del segment SINT per a omplir el buit (1 = no estirar).
+                //   Si el buit és molt més llarg que el text, es deixa la cua buida en
+                //   compte d'inflar un subtitol 4× (defecte 2).
+                srtSyntheticMaxStretch: (cfg.general.srtSyntheticMaxStretch != null) ? cfg.general.srtSyntheticMaxStretch : 2,
+                // - srtSyntheticMinPairs (BUG #224, 2026-11-06): frases en comú MÍNIMES
+                //   entre el SINT i el SRT per a acceptar que el sintètic és d'eixe bloc.
+                //   Per davall d'això el 🧩 no col·loca res (abans omplia els buits amb
+                //   el primer .srt del programa encara que no hi tocara: 0/74 en comú).
+                srtSyntheticMinPairs: (cfg.general.srtSyntheticMinPairs != null) ? cfg.general.srtSyntheticMinPairs : 3,
                 // - srtGapColorLabel (F3.6, 2026-10-23): índex de l'etiqueta de COLOR de
                 //   Premiere (0-15) amb què es pinten els clips SINT col·locats als BUITS
                 //   (pista S2). Defecte 7 = Mango (taronja): es distingix a simple vista

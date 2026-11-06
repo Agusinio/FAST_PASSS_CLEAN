@@ -150,6 +150,11 @@ $files = @(
     # El prova la prova 28-a1clean (fp_probe_a1clean.js).
     (Join-Path $repo 'js\logic\23_A1_Clean_Logic.js'),
     (Resolve-Harness 'fp_probe_a1clean.js'),
+    # (2026-11-06 - A1_ITEM_PLANTILLA) MAPA MESURAT item d'escaleta -> plantilla
+    # d'Audios\ (`EscaletaReader.ITEM_PLANTILLES` / `plantillaDeTitol`): quin WAV
+    # sona en cada careta/molinet/anada/tornada. El prova 30-plantilles
+    # (fp_probe_plantilles.js), amb els numeros reals del TNV V4.
+    (Resolve-Harness 'fp_probe_plantilles.js'),
     # (2026-11-06 - BUG #246) TRADUCCIO QUE NO ARRIBA AL TIMELINE: l'insert que
     # falla es reintenta, l'error real de Premiere arriba al log (`rawError`) i la
     # reserva NO-DUPLICAR nomes es fa si el clip ha entrat de veritat.
