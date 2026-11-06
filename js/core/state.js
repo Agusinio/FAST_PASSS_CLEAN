@@ -17,6 +17,13 @@ FASTPASS_UI.State = {
     // MECÀNICA D'INICI (2026-09-04): data de treball explícita.
     //   'today' (defecte) | 'yesterday' (mode correcció amb Ctrl+clic a MAIN)
     workTarget: "today",
+    // (#245, 2026-11-06) DIA (YYYY_MM_DD) en què es va activar el mode correcció.
+    // `workTarget` viu a MEMÒRIA del panell: si el panell no es recarrega (Premiere
+    // obert des de la sessió anterior), el 'yesterday' d'ahir es quedava encés tota
+    // la jornada i el gate d'arrencada buscava els wotts d'AHIR → botó CREA per a
+    // un bloc encara no emés. Vegeu `Core.Context._correctionActive`.
+    // NO es reinicia a `reset()`: eixe reset conserva el mode HOY/AHIR.
+    workTargetDay: null,
     
     masterTheme: null,
     srt: null,

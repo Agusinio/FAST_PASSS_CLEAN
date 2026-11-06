@@ -298,9 +298,15 @@
         freezeTail: true,      // false → comportament antic (estirar el clip més enllà del mèdia)
         freezeMinSec: 0.12,    // cua mínima (s) que val la pena congelar: per sota d'això es deixa
                                //    estirat (3 frames a 25 fps: inapreciable)
-        freezeGrabFrac: 0.6    // instant del frame congelat (fracció del clip): amb el clip SENCER
+        freezeGrabFrac: 0.6,   // instant del frame congelat (fracció del clip): amb el clip SENCER
                                //    com a part viva, el darrer frame pot ser l'animació de sortida
                                //    (congelat invisible) → 60 % = estat estable del rètol
+        // (2026-11-06) Durada MÍNIMA per traducció col·locada. Si el clip de V1 de
+        // referència és tan curt que el repartiment deixa cada rètol per sota d'això,
+        // l'OUT del grup passa al SEGÜENT cort de V1 (i al següent, si encara no hi
+        // cap): detecció casolana del cas «la traducció anava a 2 clips de referència
+        // i el tall intermedi la partia». 0 = comportament antic (mai estendre).
+        minSlotSec: 2
     };
 
     let _activeConfig = {

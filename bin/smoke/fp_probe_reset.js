@@ -405,9 +405,9 @@
             var idx = await readRepo('index.html');
             ok('#175/20 index.html carrega `19_Fs_Wipe.js` i ha pujat els cache-busts',
                 /19_Fs_Wipe\.js\?v=2/.test(idx) && /utils\.js\?v=32/.test(idx) &&
-                /flow_mainButton\.js\?v=47/.test(idx) && /srt_editor\.js\?v=89/.test(idx),
+                /flow_mainButton\.js\?v=47/.test(idx) && /srt_editor\.js\?v=90/.test(idx),
                 'modul=' + /19_Fs_Wipe\.js\?v=2/.test(idx) + ' * utils=' + /utils\.js\?v=32/.test(idx) +
-                ' * main=' + /flow_mainButton\.js\?v=47/.test(idx) + ' * srt=' + /srt_editor\.js\?v=89/.test(idx));
+                ' * main=' + /flow_mainButton\.js\?v=47/.test(idx) + ' * srt=' + /srt_editor\.js\?v=90/.test(idx));
 
             // ── 5a-bis) #213 · LLANÇADOR OCULT (2026-11-02) ─────────────────────
             // `cep.process.createProcess` NO busca al PATH: amb 'wscript.exe' a
@@ -778,12 +778,12 @@
                 ok('#196 la prova de comportament de `_resolveDateDir` no ha llancat', false, eRD && eRD.message);
             }
 
-            ok('cache-busts: flow_render 40 · flow_mapa 34 · srt_editor 89 · 15_FFmpeg 14 · 21_GrafZonaGris 4',
-                /flow_render\.js\?v=40/.test(idx) && /flow_mapa\.js\?v=34/.test(idx) &&
-                /srt_editor\.js\?v=89/.test(idx) && /15_FFmpeg_Logic\.js\?v=14/.test(idx) &&
+            ok('cache-busts: flow_render 40 · flow_mapa 35 · srt_editor 90 · 15_FFmpeg 14 · 21_GrafZonaGris 4',
+                /flow_render\.js\?v=40/.test(idx) && /flow_mapa\.js\?v=35/.test(idx) &&
+                /srt_editor\.js\?v=90/.test(idx) && /15_FFmpeg_Logic\.js\?v=14/.test(idx) &&
                 /21_GrafZonaGris_Logic\.js\?v=4/.test(idx),
-                'render=' + /flow_render\.js\?v=40/.test(idx) + ' * mapa=' + /flow_mapa\.js\?v=34/.test(idx) +
-                ' * srt=' + /srt_editor\.js\?v=89/.test(idx) +
+                'render=' + /flow_render\.js\?v=40/.test(idx) + ' * mapa=' + /flow_mapa\.js\?v=35/.test(idx) +
+                ' * srt=' + /srt_editor\.js\?v=90/.test(idx) +
                 ' * ffmpeg=' + /15_FFmpeg_Logic\.js\?v=14/.test(idx) +
                 ' * gz=' + /21_GrafZonaGris_Logic\.js\?v=4/.test(idx));
 

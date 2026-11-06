@@ -249,8 +249,8 @@
                 /if \(placeEnd !== null && \(placeEnd - slot\.start\) > REV_FRAME \+ 0\.001\) \{/.test(chySrc) &&
                 /placeEnd = gridDown\(placeEnd - REV_FRAME\);/.test(chySrc));
             var idxW = await readRepo('index.html');
-            ok('#WOTT/24 cache-bust al dia (4_Context 35, flow_chyrons, Scanner 27)',
-                /4_Context\.js\?v=35/.test(idxW) && /flow_chyrons\.js\?v=99/.test(idxW) &&
+            ok('#WOTT/24 cache-bust al dia (4_Context 36, flow_chyrons 101, Scanner 27)',
+                /4_Context\.js\?v=36/.test(idxW) && /flow_chyrons\.js\?v=101/.test(idxW) &&
                 /Scanner\.js\?v=27/.test(idxW),
                 (idxW.match(/4_Context\.js\?v=\d+/) || '') + ' ' +
                 (idxW.match(/flow_chyrons\.js\?v=\d+/) || '') + ' ' +
@@ -502,9 +502,100 @@
                 /else if \(escReady\) \{/.test(ctxSrc) &&
                 ctxSrc.indexOf('CREA: escaleta local') > 0);
 
-            ok('#WOTT/39 cache-bust del #182 i del #238 (4_Context 35 · Scanner 27)',
-                /4_Context\.js\?v=35/.test(idxW) && /Scanner\.js\?v=27/.test(idxW),
+            ok('#WOTT/39 cache-bust del #182, #238 i #245 (4_Context 36 · Scanner 27)',
+                /4_Context\.js\?v=36/.test(idxW) && /Scanner\.js\?v=27/.test(idxW),
                 (idxW.match(/4_Context\.js\?v=\d+/) || '') + ' ' + (idxW.match(/Scanner\.js\?v=\d+/) || ''));
+
+            // ── O2. MODE CORRECCIÓ AMB CADUCITAT (2026-11-06 · #245) ──────────
+            // SÍMPTOMA (report d'usuari + log real del 06/11 a les 09:03): amb el
+            // panell encés des d'ahir (`State.workTarget='yesterday'` a MEMÒRIA) i
+            // el `.prproj` del 05/11 obert, canviar de programa o de bloc deixava
+            // el gate sondant els WOTTS DEL 05/11 (que sí que hi són) → botó CREA
+            // per a un bloc que encara no s'havia emés hui. Log de la causa:
+            //   [dateDir] Data de treball: 2026_11_05 (AHIR, mode correcció)
+            // REGLA nova: el mode correcció NOMÉS val si es va activar el mateix
+            // dia del rellotge (`State.workTargetDay`); si no, caduca → HOY.
+            var cD = srcMethods(ctxSrc, ['_ymdToday', '_correctionActive', '_targetDateDir']);
+            var ctxD = {
+                _ymdToday: cD._ymdToday,
+                _correctionActive: cD._correctionActive,
+                _targetDateDir: cD._targetDateDir
+            };
+            var stD = {
+                workTarget: UI.State.workTarget,
+                workTargetDay: UI.State.workTargetDay,
+                projectDateDir: UI.State.projectDateDir
+            };
+            var gfdD = UI.Utils.getFormattedDate;
+            try {
+                UI.Utils.getFormattedDate = function () { return '2026_11_06'; };
+                // (a) Mode correcció segellat AHIR: en canviar el dia, caduca.
+                UI.State.workTarget = 'yesterday';
+                UI.State.workTargetDay = '2026_11_05';
+                UI.State.projectDateDir = '2026_11_05';
+                var actCad = ctxD._correctionActive();
+                var tgtCad = ctxD._targetDateDir();
+                ok('#WOTT/69 _correctionActive: el mode correcció del dia ANTERIOR CADUCA hui → data de treball AVUI',
+                    actCad === false && UI.State.workTarget === 'today' &&
+                    UI.State.workTargetDay === null && tgtCad === '2026_11_06',
+                    'actiu=' + actCad + ' wt=' + UI.State.workTarget +
+                    ' tgt=' + tgtCad + ' (esperat 2026_11_06)');
+
+                // (b) Sessió ANTIGA (panell d'abans del #245): sense segell → caduca.
+                UI.State.workTarget = 'yesterday';
+                UI.State.workTargetDay = null;
+                UI.State.projectDateDir = '2026_11_05';
+                var actLeg = ctxD._correctionActive();
+                ok('#WOTT/70 _correctionActive: `workTarget` sense segell de dia CADUCA (mai AHIR per inèrcia)',
+                    actLeg === false && UI.State.workTarget === 'today' &&
+                    ctxD._targetDateDir() === '2026_11_06',
+                    'actiu=' + actLeg + ' wt=' + UI.State.workTarget);
+
+                // (c) Ctrl+clic fet AVUI → l'AHIR es conserva (#238 intacte).
+                UI.State.workTarget = 'yesterday';
+                UI.State.workTargetDay = '2026_11_06';
+                UI.State.projectDateDir = '2026_11_05';
+                var actOk = ctxD._correctionActive();
+                var tgtOk2 = ctxD._targetDateDir();
+                ok('#WOTT/71 _correctionActive: Ctrl+clic fet AVUI → es conserva AHIR (projecte del 05/11)',
+                    actOk === true && UI.State.workTarget === 'yesterday' &&
+                    UI.State.workTargetDay === '2026_11_06' && tgtOk2 === '2026_11_05',
+                    'actiu=' + actOk + ' tgt=' + tgtOk2);
+            } finally {
+                UI.Utils.getFormattedDate = gfdD;
+                UI.State.workTarget = stD.workTarget;
+                UI.State.workTargetDay = stD.workTargetDay;
+                UI.State.projectDateDir = stD.projectDateDir;
+            }
+
+            // (d) Canvi de programa o de bloc = OBJECTIU NOU → HOY, tret que estiga
+            //     en curs un Ctrl+clic (`_correctionClick`, guarda del #181).
+            ok('#WOTT/72 checkContext: canvi de prog/bloc torna a HOY (només el Ctrl+clic conserva AHIR)',
+                /const _resetTarget = this\._correctionClick \? 'yesterday' : 'today';/.test(ctxSrc) &&
+                !/_keepYest/.test(ctxSrc) &&
+                (ctxSrc.match(/workTargetDay = \(_resetTarget === 'yesterday'\) \? this\._ymdToday\(\) : null;/g) || []).length === 2,
+                'reset=' + /_correctionClick \? 'yesterday' : 'today'/.test(ctxSrc) +
+                ' keepYest=' + /_keepYest/.test(ctxSrc));
+
+            // (e) El guardià de 15 s (main.js) repinta quan el mode ha caducat: si no,
+            //     el panell es quedava amb l'estat d'AHIR tota la jornada perquè
+            //     l'escaneig es desviava pel projecte d'un altre dia.
+            var mainSrc = await readRepo('js/main.js');
+            ok('#WOTT/73 main.js: el guardià de 15 s repinta si el mode correcció ha caducat',
+                /if \(ctA\._correctionActive && !ctA\._correctionActive\(\)\) \{/.test(mainSrc) &&
+                /try \{ await ctA\.checkContext\(\); \} catch \(eCad\) \{ \}/.test(mainSrc) &&
+                /workTargetDay = _doneTarget \? this\._ymdToday\(\) : null;/.test(ctxSrc),
+                'guarda=' + /if \(ctA\._correctionActive && !ctA\._correctionActive\(\)\) \{/.test(mainSrc));
+
+            // (f) FOTO i MAPA també consulten el mode VIGENT (no el `workTarget`
+            //     encés des d'ahir): la FOTO no pot re-datar la baixada a la data del
+            //     projecte vell, i el fallback de data del MAPA ha de ser AVUI.
+            var mapaSrc = await readRepo('js/workflows/flow_mapa.js');
+            ok('#WOTT/74 FOTO (main.js) i MAPA (fallback de data) usen `_correctionActive` i no `workTarget` a pèl',
+                /_wtFotoOk = ctxCorr\._correctionActive\(\) \? 'yesterday' : 'today';/.test(mainSrc) &&
+                /_corr = !!\(_ctC && typeof _ctC\._correctionActive === 'function' && _ctC\._correctionActive\(\)\);/.test(mapaSrc) &&
+                !/St\.workTarget === 'yesterday'\) d\.setDate/.test(mapaSrc) &&
+                /flow_mapa\.js\?v=35/.test(idxW));
 
             // (2026-10-22 · #182) TESTIMONI al log: si el stat d'UNC no dóna cap data,
             // volem vore creationTime/mtime en compte de quedar-nos a cegues.
@@ -556,9 +647,9 @@
             ok('#WOTT/43 retall del clip sencer: 3 → 1 frame i un de 2 frames NO es toca (mai <1)',
                 rC === null && rD !== null && fN(rD) === 1,
                 '2f=' + (rC === null ? 'intacte' : fN(rC)) + ' 3f=' + (rD === null ? 'n/d' : fN(rD)));
-            ok('#WOTT/44 el retall del sencer deixa traça (✂️ CLIP SENCER) i cache-bust flow_chyrons 99',
+            ok('#WOTT/44 el retall del sencer deixa traça (✂️ CLIP SENCER) i cache-bust flow_chyrons 101',
                 chySrc.indexOf('✂️ [') > 0 && chySrc.indexOf('CLIP SENCER') > 0 &&
-                /flow_chyrons\.js\?v=99/.test(idxW),
+                /flow_chyrons\.js\?v=101/.test(idxW),
                 (idxW.match(/flow_chyrons\.js\?v=\d+/) || ''));
 
             // ── N2. CUA DE SEGURETAT DE TOTS ELS WOTTS (2026-11-02 · #218, 03/11) ──
@@ -685,11 +776,11 @@
                     /const LIMIT_PROGRAMA = 400 \* 1024/.test(stillSrc) &&
                     /const pngSospitos = cap\.ok && Number\(cap\.bytes\) > LIMIT_PROGRAMA/.test(stillSrc) &&
                     /if \(cap\.ok && !pngSospitos\)/.test(stillSrc) &&
-                    /flow_chyrons\.js\?v=99/.test(idxW),
+                    /flow_chyrons\.js\?v=101/.test(idxW),
                     'still=' + stillSrc.length +
                     ' zoneAvansCaptura=' + (stillSrc.indexOf('_freezeZone(needZone)') > -1 && stillSrc.indexOf('_freezeZone(needZone)') < stillSrc.indexOf('_capturePng(capBase')) +
                     ' v6=' + (stillSrc.indexOf('const TEMP_TC = await this._v6FreeTC') === -1 ? 'fora' : 'DINS') +
-                    ' v99=' + /flow_chyrons\.js\?v=99/.test(idxW));
+                    ' v100=' + /flow_chyrons\.js\?v=101/.test(idxW));
             } finally {
                 UI.Utils.callJSX = savedCJZ;
             }

@@ -1250,7 +1250,19 @@ if (btnMarksC1) btnMarksC1.addEventListener('click', () => callWorkflow('Markers
                     // principal treballa amb el dia d'AVUI. Per a un projecte d'AHIR cal
                     // Ctrl (Ctrl+clic a MAIN o Ctrl+FOTO).
                     const _wtFoto = (window.FASTPASS_UI.State && window.FASTPASS_UI.State.workTarget) || 'today';
-                    if (!useYesterdayFoto && _wtFoto === 'yesterday') {
+                    // (#245, 2026-11-06) MODE CORRECCIÓ VIGENT (no el 'yesterday'
+                    // encés des d'ahir): amb el mode caducat la FOTO NO pot re-datar
+                    // la baixada a la data del projecte vell — ha de ser la d'AVUI.
+                    let _wtFotoOk = _wtFoto;
+                    if (_wtFoto === 'yesterday') {
+                        try {
+                            const ctxCorr = window.FASTPASS_UI.Core && window.FASTPASS_UI.Core.Context;
+                            if (ctxCorr && typeof ctxCorr._correctionActive === 'function') {
+                                _wtFotoOk = ctxCorr._correctionActive() ? 'yesterday' : 'today';
+                            }
+                        } catch (eCorr) { }
+                    }
+                    if (!useYesterdayFoto && _wtFotoOk === 'yesterday') {
                         let projDateDir = null;
                         try {
                             const ctxDate = window.FASTPASS_UI.Core && window.FASTPASS_UI.Core.Context;
@@ -2175,11 +2187,24 @@ setInterval(async function () {
                 // MODE CORRECCIÓ (Ctrl+clic = AHIR): si no, el panell es quedava
                 // escanejant el dia d'AHIR la resta de la sessió.
                 StA.workTarget = 'today';
+                StA.workTargetDay = null;
                 _projDateMissTicks = 0;
             }
         } else if (StA.lastOpenedProjectName && activeA === StA.lastOpenedProjectName) {
             var todayA = (FASTPASS_UI.Utils.getFormattedDate() || '').replace(/["\s]/g, '').trim();
-            if (todayA && StA.projectDateDir !== todayA) return;
+            if (todayA && StA.projectDateDir !== todayA) {
+                // (2026-11-06 · #245) El projecte obert és d'un altre dia: no hi ha
+                // res nou d'eixe dia al NAS i no cal escanejar… EXCEPTE si el MODE
+                // CORRECCIÓ ha CADUCAT (es va activar un altre dia). Aleshores el
+                // botó s'ha de repintar amb la data d'AVUI (MASSA D'HORA/CREA
+                // d'avui) en compte de quedar-se ensenyant l'estat d'AHIR tota la
+                // jornada: el gate llegia els wotts del dia anterior i deia CREA.
+                if (ctA._correctionActive && !ctA._correctionActive()) {
+                    _ctxRefreshBusy = true;
+                    try { await ctA.checkContext(); } catch (eCad) { } finally { _ctxRefreshBusy = false; }
+                }
+                return;
+            }
         }
     }
     var stA = ctA._lastConclusion;

@@ -1312,7 +1312,20 @@
             const span = Math.max(0.2, end - start);
             const media = (Number(p.mediaDur) > 0.1) ? Number(p.mediaDur) : 0;
             const minFreeze = (Number(TR.freezeMinSec) > 0) ? Number(TR.freezeMinSec) : 0.12;
-            const short = String(name).substring(0, 34);
+            // (2026-11-06 · BUG #246) El log ha de DISTINGIR les traduccions GERMANES: les
+            // d'un mateix ítem comparteixen els primers ~60 caràcters del nom i només
+            // canvien l'índex `[i-N]` i el text. Un retall cec de 34 caràcters les fa totes
+            // iguals al log («Wott_TNV_v2_17_00.58_VAGA GENERAL…») i no es pot saber quina
+            // de les N s'ha quedat sense col·locar.
+            const short = (function () {
+                const full = String(name);
+                const m = full.match(/\[\d+-\d+\]/);
+                if (m) {
+                    const i = full.indexOf(m[0]);
+                    return full.substring(i, Math.min(full.length, i + 40));
+                }
+                return full.substring(0, 34);
+            })();
             // 🛡️ (2026-10-30) NO-DUPLICAR (regla permanent): si la traducció ja ocupa este
             // slot, no es torna a col·locar (abans el segon clic la duplicava a V7/V8).
             await this._ensurePlacedGuard();
@@ -1328,12 +1341,29 @@
             // Insert SENSE endSec (el JSX l'aplicaria al DARRER clip de la pista: quirk de
             // l'API) i final fixat amb `Clips.endCoherent` (retall COHERENT: el clip queda
             // ESTIRABLE amb el ratolí — vegeu js/logic/6_Clips_Logic.js · 2026-10-16 · #171).
+            // (2026-11-06 · BUG #246) L'INSERT es reintenta UNA volta i amb `rawError`:
+            //   · `Utils.callJSX` convertix qualsevol «ERR:…» del motor en «[]» (llevat de
+            //     `rawError: true`) → l'error REAL de Premiere s'empassava i el fracàs
+            //     només s'endevinava pel `ERR_NO_CLIP` del retall posterior, sense cap
+            //     pista de la causa (cas TNV V2 06/11: la 3a traducció del grup no es va
+            //     col·locar i al log només hi havia el tall, no el motiu).
+            //   · La reserva NO-DUPLICAR es fa DESPRÉS de comprovar que el clip ha arribat
+            //     al timeline: si l'insert fallava, la reserva quedava òrfena i qualsevol
+            //     reintent es prenia per «ja col·locada» (dup) i no es tornava a provar.
             const insertLive = async () => {
-                // 🛡️ (2026-10-30) RESERVA NO-DUPLICAR abans de l'insert.
-                this._markPlaced(name, start, end);
-                const rIns = String(await callJSX(`Clips.insert('${escapedName}', ${track}, ${start.toFixed(4)}, null, 'video')`) || '');
-
+                let rIns = '';
+                for (let att = 0; att < 2; att++) {
+                    rIns = String(await callJSX(
+                        `Clips.insert('${escapedName}', ${track}, ${start.toFixed(4)}, null, 'video')`,
+                        { rawError: true }
+                    ) || '');
+                    if (!isErrRes(rIns)) break;
+                    log(`      ↻ [${tag}] «${short}…» insert FALLIT a ${start.toFixed(2)}s (${rIns})` +
+                        (att === 0 ? ' → reintent' : ''), 'WARN');
+                }
                 if (isErrRes(rIns)) return rIns;
+                // 🛡️ (2026-10-30) RESERVA NO-DUPLICAR: només si l'insert ha ANAT BÉ.
+                this._markPlaced(name, start, end);
                 return String(await getClipsLogic().endCoherent(track, start, end, 'video', tag) || '');
             };
             // ── Sense congelat: el mèdia ja cobreix el slot (o no s'ha pogut resoldre) ──
@@ -6020,6 +6050,78 @@
             );
         },
 
+        /**
+         * _tradRefSpan: Refina el tram de referència d'un grup de traduccions.
+         *
+         * (2026-11-06 · refinament demanat per l'usuari) Quan el clip de V1 de
+         * referència és molt CURT, `slotDur = (refEnd − refStart) / N` deixa cada
+         * rètol per sota del mínim (2 s per defecte) i el resultat és il·legible.
+         * Gairebé sempre passa el mateix: la traducció anava a **2 clips de
+         * referència** i el tall intermedi l'ha partida. Detecció i correcció
+         * «de casa»: si el slot no arriba al mínim, l'OUT passa al **cort de
+         * salida del clip següent de V1** —en un timeline continu, el seu IN és
+         * el mateix OUT que ja teníem i no aportaria res— saltant FLASHs, igual
+         * que fa el càlcul original, i si encara no hi cap, al següent (màxim
+         * `MAX_JUMPS` salts, per no menjar-se el programa si el tall no arriba).
+         *
+         * Funció PURA (cap JSX, cap estat): retorna el tram nou i el motiu, així
+         * es pot provar al harness (`bin/smoke/fp_probe_trad.js`).
+         *
+         * @param {Object} o
+         *   · refStart {number}  IN del clip de referència (s)
+         *   · refEnd   {number}  OUT del clip de referència (s)
+         *   · clips    {Array}   clips de V1 ordenats per inici ({start,end})
+         *   · refIdx   {number}  índex del clip de referència dins `clips` (-1 = no)
+         *   · N        {number}  traduccions del grup (slots a repartir)
+         *   · minSlotSec {number} mínim per slot (defecte 2 s; ≤0 = no estendre)
+         *   · flashSec   {number} clips més curts que això són FLASH (defecte 0,5 s)
+         * @returns {{refEnd:number, baseEnd:number, slotDur:number, baseSlot:number,
+         *            jumps:Array<number>, extes:boolean}}
+         */
+        _tradRefSpan: function (o) {
+            const opt = o || {};
+            const num = (v, d) => (isFinite(Number(v)) ? Number(v) : d);
+            const refStart = num(opt.refStart, 0);
+            const baseEnd = num(opt.refEnd, refStart);
+            const N = Math.max(1, Math.round(num(opt.N, 1)));
+            const minSlot = (opt.minSlotSec === undefined || opt.minSlotSec === null)
+                ? 2 : num(opt.minSlotSec, 2);
+            const flashSec = (opt.flashSec === undefined || opt.flashSec === null)
+                ? 0.5 : num(opt.flashSec, 0.5);
+            const clips = Array.isArray(opt.clips) ? opt.clips : [];
+            const MAX_JUMPS = 5;
+            const baseSlot = (baseEnd - refStart) / N;
+            const res = { refEnd: baseEnd, baseEnd: baseEnd, slotDur: baseSlot, baseSlot: baseSlot, jumps: [], extes: false };
+            if (!(minSlot > 0) || !(baseSlot < minSlot)) return res;
+            let idx = Math.round(num(opt.refIdx, -1));
+            if (!(idx >= 0)) return res;
+            let refEnd = baseEnd;
+            while (res.jumps.length < MAX_JUMPS) {
+                // Següent CORT de V1: s'avança fins al primer clip que no siga un FLASH
+                // (mateix criteri que el càlcul original de `placeChyronTraduccio`).
+                let nx = idx + 1;
+                while (nx < clips.length && (num(clips[nx].end, 0) - num(clips[nx].start, 0)) < flashSec) nx++;
+                if (nx >= clips.length) break;
+                // «El següent cort» = el cort de SALIDA del clip següent (el seu IN és,
+                // en un timeline continu, el mateix OUT que ja teníem: no aportaria res).
+                // Si el clip següent SOLAPA amb el de després, mana l'inici d'eixe.
+                let cand = num(clips[nx].end, NaN);
+                if (nx + 1 < clips.length) {
+                    const s2 = num(clips[nx + 1].start, NaN);
+                    if (isFinite(s2) && isFinite(cand) && s2 > refEnd + 0.05 && s2 < cand - 0.05) cand = s2;
+                }
+                if (!isFinite(cand) || !(cand > refEnd + 0.05)) break;   // sense cort útil
+                refEnd = cand;
+                res.jumps.push(cand);
+                idx = nx;
+                res.slotDur = (refEnd - refStart) / N;
+                if (!(res.slotDur < minSlot)) break;
+            }
+            res.refEnd = refEnd;
+            res.extes = res.jumps.length > 0;
+            return res;
+        },
+
         placeChyronTraduccio: async function () {
             if (!(await getUtils().validateActiveSequence())) return;
             // 🛡️ (2026-10-30) NO-DUPLICAR: es rellegeix el timeline a cada passada.
@@ -6100,6 +6202,10 @@
                         groups.get(tc).push(t);
                     }
                     log(`📌 [Traducció] Marcador ${mk.fullId}: ${traduccions.length} trad. en ${groups.size} grup(s)`);
+                    // (2026-11-06 · BUG #246) Traduccions del marcador que NO han arribat al
+                    // timeline: s'avisa amb el NOM SENCER (el log de cada slot el retalla i
+                    // les germanes comparteixen prefix), perquè l'operador sàpia quina falta.
+                    const tradMissing = [];
 
                     for (const [tc, group] of groups) {
                         const tcSeconds = getUtils().timeToSeconds(tc);
@@ -6150,13 +6256,32 @@
                             refWhy = `SENSE clip de referència a V1 (fallback ${clipStart.toFixed(2)}+10s)`;
                             log(`   ⚠️ [Traducció] TC=${tc}: cap clip de V1 al punt ${clipStart.toFixed(2)}s → fallback 10s (revisa el tall)`, "WARN");
                         }
-                        const clipDur = refEnd - refStart;
                         const extractSeq = (c) => {
                             const match = (c.rol || '').match(/\[(\d+)-\d+\]/);
                             return match ? parseInt(match[1], 10) : 999;
                         };
                         group.sort((a, b) => extractSeq(a) - extractSeq(b));
                         const N = group.length;
+                        // (2026-11-06 · refinament d'usuari) TRADUCCIÓ PARTIDA PEL TALL: si el
+                        // clip de referència és tan CURT que cada rètol quedaria per sota del
+                        // mínim (`traduccio.minSlotSec`, 2 s per defecte), l'OUT passa al
+                        // cort de SALIDA del clip següent de V1 (i al del següent si encara no
+                        // hi cap): detecció i correcció casolana del cas «la traducció anava a
+                        // 2 clips de referència i el tall intermedi la partia».
+                        const minSlotSec = (cfg.traduccio && cfg.traduccio.minSlotSec != null)
+                            ? Number(cfg.traduccio.minSlotSec) : 2;
+                        const spanTr = this._tradRefSpan({
+                            refStart, refEnd, clips, refIdx, N, minSlotSec
+                        });
+                        if (spanTr.extes) {
+                            log(`   ⤵️ [Traducció] TC=${tc}: ${N} slots de ${spanTr.baseSlot.toFixed(2)}s ` +
+                                `(< mínim ${minSlotSec}s) → OUT estés al següent cort de V1: ` +
+                                `${spanTr.baseEnd.toFixed(2)}s → ${spanTr.refEnd.toFixed(2)}s ` +
+                                `[${spanTr.jumps.map(j => j.toFixed(2) + 's').join(' · ')}] · slot ${spanTr.slotDur.toFixed(2)}s`);
+                            refEnd = spanTr.refEnd;
+                            refWhy += ` + OUT estés (${spanTr.jumps.length} cort(s))`;
+                        }
+                        const clipDur = refEnd - refStart;
                         const slotDur = clipDur / N;
                         log(`   📦 [Traducció] TC=${tc}: ${N} clips @ ${refStart.toFixed(2)}s (dur=${clipDur.toFixed(2)}s, slot ${slotDur.toFixed(2)}s) ← ${refWhy}`);
                         // (2026-10-12) Durada REAL del mèdia de cada traducció del grup (font
@@ -6195,6 +6320,7 @@
                             });
                             if (!rSlot || !rSlot.ok) {
                                 log(`      ⚠️ [${i+1}/${N}] NO col·locat (${rSlot ? rSlot.err : '?'})`, "WARN");
+                                tradMissing.push(String(group[i].name || ''));
                                 continue;
                             }
                             placedCount++;
@@ -6205,6 +6331,13 @@
                                 log(`      ✅ [${i+1}/${N}] → V${T_TRAD} @ ${placeTime.toFixed(2)}s→${placeEnd.toFixed(2)}s (${rSlot.trim})`);
                             }
                         }
+                    }
+                    // (2026-11-06 · BUG #246) Resum EXPLÍCIT de les traduccions que no han
+                    // arribat al timeline (abans el flux acabava dient «N trad. col·locades»
+                    // i la que faltava només es veia com un WARN perdut entre les línies).
+                    if (tradMissing.length > 0) {
+                        log(`❌ [Traducció] Marcador ${mk.fullId}: ${tradMissing.length} traducció(ns) NO col·locada(es): ` +
+                            tradMissing.join(' · '), 'ERROR');
                     }
                 }
                 // (2026-10-12) Reparació de veïns: només si algun slot ha necessitat el congelat

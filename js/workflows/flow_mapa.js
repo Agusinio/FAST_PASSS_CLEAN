@@ -477,13 +477,21 @@
                 L('⚠️ [MAPA] No puc traure la data del manifest: ' + eM.message, 'WARN');
             }
             // 4/5) Rellotge: últim recurs (pot ser el DIA SEGÜENT al del projecte!)
+            // (#245, 2026-11-06) MODO CORRECCIÓ VIGENT, no el `workTarget` encés des
+            // d'ahir: si ha caducat (`Core.Context._correctionActive`), la data
+            // d'últim recurs és la d'AVUI.
+            var _corr = false;
+            try {
+                var _ctC = window.FASTPASS_UI && window.FASTPASS_UI.Core && window.FASTPASS_UI.Core.Context;
+                _corr = !!(_ctC && typeof _ctC._correctionActive === 'function' && _ctC._correctionActive());
+            } catch (eCorr) { _corr = false; }
             var d = new Date();
-            if (St && St.workTarget === 'yesterday') d.setDate(d.getDate() - 1);
+            if (_corr) d.setDate(d.getDate() - 1);
             var dd = ('0' + d.getDate()).slice(-2);
             var mm = ('0' + (d.getMonth() + 1)).slice(-2);
             var fb = d.getFullYear() + '_' + mm + '_' + dd;
             L('⚠️ [MAPA] Data del projecte DESCONEGUDA → fallback rellotge: ' + fb +
-                (St && St.workTarget === 'yesterday' ? ' (mode correcció)' : ''), 'WARN');
+                (_corr ? ' (mode correcció)' : ''), 'WARN');
             return fb;
         },
 

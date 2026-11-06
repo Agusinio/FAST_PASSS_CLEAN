@@ -71,6 +71,55 @@
         // el poll pregunta cada 15 s i el fallback «acabat de crear» no ha de
         // costar una crida JSX per volta. `{ folder, at, name }`.
         _justOpenedCache: null,
+        // (2026-11-06 · #245) Ctrl+clic (mode correcció) EN CURS. Mentre valga,
+        // el canvi de programa/bloc dins de `checkContext` NO ha de desactivar
+        // l'AHIR demanat (#181): el clic acaba de fixar `workTarget='yesterday'`.
+        _correctionClick: false,
+
+        /**
+         * _ymdToday (#245): data del SISTEMA en format YYYY_MM_DD.
+         * Mateix format que `Utils.getFormattedDate()` i que `State.projectDateDir`.
+         * @returns {string} Ex. "2026_11_06" (cadena buida si no es pot resoldre)
+         */
+        _ymdToday: function () {
+            try {
+                return String(getUtils().getFormattedDate() || '').replace(/["\s]/g, '').trim();
+            } catch (eY) { return ''; }
+        },
+
+        /**
+         * _correctionActive (#245, 2026-11-06): el MODE CORRECCIÓ (Ctrl+clic → AHIR)
+         * continua viu EN ESTE MOMENT?
+         *
+         * PER QUÈ EXISTIX: `State.workTarget` és memòria del panell (no es desa a
+         * disc). Si el panell no es recarrega (Premiere obert des de la sessió
+         * anterior), el `workTarget='yesterday'` d'ahir es quedava encés tota la
+         * jornada i, amb ell, `_targetDateDir()` tornava el dia d'AHIR: el gate
+         * d'arrencada sondava els **WOTTS D'AHIR** (que sí que hi són) i el botó
+         * deia **CREA** per a un bloc que encara no s'havia emés hui.
+         * Log real del 06/11 a les 09:03, amb el `.prproj` del 05/11 obert:
+         * `[dateDir] Data de treball: 2026_11_05 (AHIR, mode correcció)` → CREA.
+         *
+         * REGLA: el mode només val si es va activar el MATEIX dia del rellotge
+         * (`State.workTargetDay`). En canviar el dia natural CADUCA i es torna a
+         * HOY: AHIR només amb Ctrl+clic, com demana l'operador.
+         * @returns {boolean}
+         */
+        _correctionActive: function () {
+            const St = (window.FASTPASS_UI && window.FASTPASS_UI.State) ? window.FASTPASS_UI.State : null;
+            if (!St || St.workTarget !== 'yesterday') return false;
+            const today = this._ymdToday();
+            const at = St.workTargetDay || '';
+            if (!at || (today && at !== today)) {
+                getUtils().log('🧯 [dateDir] Mode correcció CADUCAT (' +
+                    (at ? 'activat el ' + at + ', hui és ' + today : "sense dia d'activació") +
+                    ') → es torna a HOY', 'WARN');
+                St.workTarget = 'today';
+                St.workTargetDay = null;
+                return false;
+            }
+            return true;
+        },
 
         /**
          * _targetDateDir: Retorna la data de treball (YYYY_MM_DD).
@@ -79,7 +128,10 @@
          */
         _targetDateDir: function () {
             const St = (window.FASTPASS_UI && window.FASTPASS_UI.State) ? window.FASTPASS_UI.State : null;
-            const useYesterday = !!(St && St.workTarget === 'yesterday');
+            // (2026-11-06 · #245) El mode correcció CADUCA en canviar el dia natural:
+            // un 'yesterday' encés des d'ahir feia que el gate sondara els wotts
+            // d'AHIR i el botó diguera CREA abans de l'emissió del bloc d'avui.
+            const useYesterday = this._correctionActive();
             const d = new Date();
             const dd = ('0' + d.getDate()).slice(-2);
             const mm = ('0' + (d.getMonth() + 1)).slice(-2);
@@ -222,6 +274,12 @@
                 const St = window.FASTPASS_UI.State;
                 u.log('🔄 [MAIN] Ctrl+clic → mode correcció (AHIR).', 'INFO');
                 St.workTarget = 'yesterday';
+                // (#245, 2026-11-06) SEGELL del dia: el mode correcció només val
+                // mentres el rellotge siga el mateix dia en què es va activar
+                // (`_correctionActive`). Sense el segell, el panell obert d'ahir
+                // es quedava tota la jornada buscant els wotts del dia anterior.
+                St.workTargetDay = this._ymdToday();
+                this._correctionClick = true;
                 // ── (2026-10-22 · #181) DATA DEMANADA, capturada UNA vegada ───────
                 // Tota la resta del mode correcció es valida contra esta data: si
                 // l'escaneig que es llig no és d'esta data, no val (vegeu
@@ -261,7 +319,12 @@
                     // ha produït cap projecte (flux avortat o amb error), que és
                     // el cas que el #181 volia protegir.
                     const _doneTarget = !!(St && St.projectDateDir && St.projectDateDir === targetY);
+                    // (#245, 2026-11-06) Fi del Ctrl+clic: es deixa de protegir l'AHIR
+                    // davant d'un canvi de programa/bloc, i es re-sella el dia del mode
+                    // correcció (només si es conserva per a un projecte d'AHIR).
+                    this._correctionClick = false;
                     St.workTarget = _doneTarget ? 'yesterday' : 'today';
+                    St.workTargetDay = _doneTarget ? this._ymdToday() : null;
                     // Repintat de HOY (si `runMainAction` ha petat, el panell no es
                     // queda ensenyant l'estat d'AHIR ni un botó desactivat).
                     // (2026-10-22 · #181) `fresh:true`: el poll pot haver arrancat un
@@ -547,11 +610,15 @@
                 // BUG #1 FIX (2026-06-09): Resetear dateDir si el programa ha canviat.
                 // Evita contaminació creuada entre programes (ex: TNCOMARQUES → TN_VESPRE).
                 // (2026-10-22 · #181) Però el MODE CORRECCIÓ (Ctrl+clic) no es pot
-                // desactivar ací: canviar de programa o de bloc just abans del clic
-                // deixava `workTarget='today'` i el clic treballava amb el dia d'avui.
-                const _keepYest = !!(window.FASTPASS_UI && window.FASTPASS_UI.State &&
-                    window.FASTPASS_UI.State.workTarget === 'yesterday');
-                const _resetTarget = _keepYest ? 'yesterday' : 'today';
+                // desactivar MENTRES DURA el clic: canviar de programa o de bloc
+                // just abans del clic deixava `workTarget='today'` i el clic
+                // treballava amb el dia d'avui.
+                // (2026-11-06 · #245) FORA del clic, en canvi, un canvi de programa
+                // o de bloc és un OBJECTIU NOU i torna SEMPRE a HOY: abans es
+                // conservava el 'yesterday' i, amb el panell encés des d'ahir,
+                // canviar de bloc deixava el gate sondant els wotts d'AHIR →
+                // botó CREA per a un bloc encara no emés.
+                const _resetTarget = this._correctionClick ? 'yesterday' : 'today';
                 const progId = (config.mapeoProgramas[elProg.value] && config.mapeoProgramas[elProg.value].archivo) || '';
                 const lastProg = (window.FASTPASS_UI && window.FASTPASS_UI.State && window.FASTPASS_UI.State.lastProgram);
                 if (progId && lastProg && progId !== lastProg) {
@@ -560,6 +627,7 @@
                         window.FASTPASS_UI.State.dateDir = null;
                         window.FASTPASS_UI.State.projectDateDir = null;
                         window.FASTPASS_UI.State.workTarget = _resetTarget;
+                        window.FASTPASS_UI.State.workTargetDay = (_resetTarget === 'yesterday') ? this._ymdToday() : null;
                     }
                 }
                 // Resetear dateDir també si canvia el bloc dins del mateix programa.
@@ -572,6 +640,7 @@
                         window.FASTPASS_UI.State.dateDir = null;
                         window.FASTPASS_UI.State.projectDateDir = null;
                         window.FASTPASS_UI.State.workTarget = _resetTarget;
+                        window.FASTPASS_UI.State.workTargetDay = (_resetTarget === 'yesterday') ? this._ymdToday() : null;
                     }
                 }
                 // Guardar programa actual per a la següent comparació

@@ -654,7 +654,40 @@
                     : ((manifest.extractedClip && manifest.extractedClip.extractedWorldSecMediaStart != null)
                         ? Number(manifest.extractedClip.extractedWorldSecMediaStart)
                         : worldStart);
-                const refStartSec = baseMediaStart;
+                // ── (BUG #223, 06/11) REFERÈNCIA ÚNICA: EL CLIP REAL DEL TIMELINE ──
+                // Els subtítols es pinten en coordenades de MEDIA, igual que la WF, i
+                // l'eix x=0 és la media que cau al TL 0 (`_axisOrigin`). Si el manifest
+                // ve d'un extracte anterior (o el clip s'ha retallat/repartit després),
+                // `worldSecMediaStart` ja no quadra amb el clip i TOTS els subtítols
+                // queden desplaçats respecte de la WF: eixia un buit notable al cap
+                // (la WF començava a 0 i el primer clip de subtítol, uns segons més enllà).
+                // Referència bona: el bloc comença a `worldStart` i eixe instant cau a la
+                // media `_axisOrigin` → món(media 0) = worldStart − _axisOrigin.
+                // Es refresca el mapa de clips de Premiere abans de decidir-ho.
+                if (!this._waveformMediaTag && projFolder) {
+                    try {
+                        const wgA = window.FASTPASS_UI.Logic.WaveformGenerator;
+                        const bpA = wgA ? await wgA.getBinPath(projFolder) : null;
+                        if (bpA) {
+                            this._waveformMediaTag = String(bpA).split(/[\\/]/).pop().toUpperCase()
+                                .replace(/_AUDIO_REF\.BIN$/i, '').replace(/\.BIN$/i, '');
+                        }
+                    } catch (eTag) { /* sense tag nou: es fa servir el mapa anterior */ }
+                }
+                var segsOk = false;
+                if (this._waveformMediaTag) {
+                    try { segsOk = (await this._refreshWaveformSegments()) === true; } catch (eSeg) { segsOk = false; }
+                }
+                const mediaTl0 = segsOk ? Number(this._axisOrigin) : NaN;
+                const refTl = (isFinite(mediaTl0) && mediaTl0 > 0 && isFinite(worldStart))
+                    ? (worldStart - mediaTl0) : NaN;
+                var refStartSec = baseMediaStart;
+                if (isFinite(refTl) && Math.abs(refTl - baseMediaStart) > 0.25) {
+                    refStartSec = refTl;
+                    log("🔗 SRT_SYNC: referència ajustada al clip real · manifest " + baseMediaStart.toFixed(2) +
+                        "s → timeline " + refTl.toFixed(2) + "s (TL 0 = media " + mediaTl0.toFixed(2) +
+                        "s · desviació " + (baseMediaStart - refTl).toFixed(2) + "s)");
+                }
                 const blockInMedia = worldStart - refStartSec;
                 // Contrast amb el manifest: `tlBlockInPointSec` = on cau l'inici del bloc
                 // dins del MP4. Si no quadra amb la base calculada, ho deixem al log
@@ -769,6 +802,20 @@
                 }
                 all.sort(function (a, b) { return a.startSec - b.startSec; });
                 for (let n = 0; n < all.length; n++) all[n].index = n + 1;
+                // (BUG #223) Traça de SINCRONIA WF↔subtítols: la WF es pinta de
+                // `_axisOrigin`/`_wfMediaStart` ençà i els clips en temps de media; si
+                // el primer clip cau més enllà de l'inici de la WF, eixa diferència és
+                // el buit que es veu al cap del timeline.
+                const wf0 = Number(this._axisOrigin) || 0;
+                const capGap = all[0].startSec - wf0;
+                log("🔗 SRT_SYNC: " + all.length + " entrades · 1a a " + all[0].startSec.toFixed(2) +
+                    "s (tl " + capGap.toFixed(2) + "s) · darrera a " + all[all.length - 1].endSec.toFixed(2) +
+                    "s · eix=" + wf0.toFixed(2) + "s · WF [" + (Number(this._wfMediaStart) || 0).toFixed(2) +
+                    "→" + (Number(this._wfMediaEnd) || 0).toFixed(2) + "]s · buit al cap=" + capGap.toFixed(2) + "s");
+                if (capGap > 1) {
+                    log("⚠️ SRT_SYNC: el primer subtítol cau " + capGap.toFixed(2) + "s després de l'inici de la WF" +
+                        " (el bloc pot començar abans que el clip o faltar text al SRT origen)", "WARN");
+                }
                 const srtContent = FASTPASS_UI.Logic.SrtParser.entriesToSrt(all);
                 log("🚨 SRT_EMERGENCIA: " + all.length + " entrades extretes");
 
@@ -1455,7 +1502,7 @@
                     + "if(segs.length===0){mode='all';segs=all}"
                     + "return JSON.stringify({seqName:String(seq.name),segs:segs,mode:mode})}catch(e){return'ERR:'+e.message}})()";
                 var raw = await callJSX(jsx);
-                if (!raw || raw.indexOf('ERR') === 0) return;
+                if (!raw || raw.indexOf('ERR') === 0) return false;
                 var parsed = JSON.parse(raw);
                 var arr = parsed.segs || (Array.isArray(parsed) ? parsed : []);
                 var segs = [];
@@ -1487,7 +1534,15 @@
                 }
                 this._wfMediaStart = isFinite(wfStart) ? wfStart : 0;
                 this._wfMediaEnd = isFinite(wfEnd) ? wfEnd : 0;
-                this._axisOrigin = this._wfMediaStart;   // eix del timeline: x=0 = IN del primer clip
+                // (BUG #223, 06/11) L'EIX és la MEDIA QUE CAU AL TL 0, no el mínim
+                // inPoint de tots els clips. `segs` ve ordenat per pista i inici de
+                // timeline, així que `segs[0]` és el clip que ocupa el TL 0 i el seu
+                // `m − s` és la media d'eixe instant. Amb el mínim inPoint, una peça
+                // residual del mateix MP4 col·locada més endavant (retalls o
+                // «Repartir») baixava l'eix i separava els subtítols —que viuen en
+                // media— de l'inici de la WF: eixia un buit sense clips al davant.
+                var axisTl0 = segs.length ? (segs[0].m - segs[0].s) : NaN;
+                this._axisOrigin = isFinite(axisTl0) ? axisTl0 : this._wfMediaStart;
                 // DIAGNÒSTIC de l'origen del mapa: 'tag' = clips del MP4 triats pel nom;
                 // 'v1' = fallback a la pista V1 (el tag no ha coincidit amb cap clip);
                 // 'all' = totes les pistes (pitjor cas: l'eix pot baixar a 0 i el clip
@@ -1514,7 +1569,10 @@
                         log("📝 SRT_EDIT:   seg[" + d + "] v" + sg.v + " tl=" + sg.s.toFixed(2) + "-" + sg.e.toFixed(2) + "s (dur=" + (sg.e - sg.s).toFixed(2) + ") ← media=" + sg.m.toFixed(2) + "->" + mOut.toFixed(2) + "s r=" + sg.r.toFixed(3) + " \"" + (sg.n || "?") + "\"");
                     }
                 }
-            } catch(e) { }
+                // (BUG #223) true = el mapa s'ha refrescat DE VERITAT en este moment
+                // (qui cridi pot confiar en `_axisOrigin`; vegeu loadEmergencySrt).
+                return true;
+            } catch(e) { return false; }
         },
 
         stop: function () {

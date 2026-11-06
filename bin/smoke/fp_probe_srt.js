@@ -269,11 +269,11 @@
             ok('#F3/24 index: 🧩 a la fila SUBTÍTOLS i 🗑 RETIRAT (Supr ho fa)',
                 html.indexOf('btnSrtDel') === -1 && /id="btnSrtFill"/.test(html) &&
                 /Ctrl\+clic = SUBTÍTOLS SINTÈTICS/.test(html));
-            ok('#F3/25 index: cache-busts F3 (srt_editor 89, flow_srt 19, main ' +
-                '108, Scanner 27, Srt_Logic 23, Config 44)',
-                /srt_editor\.js\?v=89/.test(html) && /flow_srt\.js\?v=19/.test(html) &&
-                /main\.js\?v=108/.test(html) && /Scanner\.js\?v=27/.test(html) &&
-                /10_Srt_Logic\.js\?v=23/.test(html) && /11_Configuracio\.js\?v=44/.test(html));
+            ok('#F3/25 index: cache-busts F3 (srt_editor 90, flow_srt 19, main ' +
+                '109, Scanner 27, Srt_Logic 23, Config 45)',
+                /srt_editor\.js\?v=90/.test(html) && /flow_srt\.js\?v=19/.test(html) &&
+                /main\.js\?v=109/.test(html) && /Scanner\.js\?v=27/.test(html) &&
+                /10_Srt_Logic\.js\?v=23/.test(html) && /11_Configuracio\.js\?v=45/.test(html));
 
             var cfg = noComments(await readRepo('js/core/11_Configuracio.js'));
             ok('#F3/26 config: srtSyntheticGapTolSec (default 0,2 s + getter)',
@@ -321,11 +321,28 @@
             // `worldSecMediaStart + mp4ExpandedInPoint`; la segona xifra és una
             // coordenada DINS del MP4, NO un desplaçament de món → tot el bloc eixia
             // eixos segons ABANS del clip ("els subtítols ixen molt del principi").
+            // (2026-11-06 · BUG #223) I si eixe manifest no quadra amb el clip que hi
+            // ha al timeline, la base es reancora al clip real (vegeu #F3/70).
             ok('#F3/43 SRT_EMERGENCIA: base de temps = worldSecMediaStart (sense sumar mp4ExpandedInPoint)',
-                /const refStartSec = baseMediaStart;/.test(edt) &&
+                /(?:const|var) refStartSec = baseMediaStart;/.test(edt) &&
                 edt.indexOf('baseMediaStart + ((isFinite(theExIn)') === -1 &&
                 /tlBlockInPointSec/.test(edt) &&
                 /NO se suma: és coordenada de media/.test(edt));
+
+            // (2026-11-06 · BUG #223, 2a part: BUIT AL CAP) El primer subtítol eixia
+            // uns segons després de l'inici de la WF perquè (a) l'eix x=0 de l'editor
+            // era el MÍNIM inPoint dels clips del MP4 —una peça residual del mateix
+            // MP4 col·locada més endavant el baixa— i (b) la referència venia del
+            // manifest (`worldSecMediaStart`) i no del clip que ocupa el TL 0.
+            ok('#F3/70 editor: eix = media que cau al TL 0 (segs[0].m − segs[0].s) + reancoratge amb traça SRT_SYNC',
+                /axisTl0 = segs\.length \? \(segs\[0\]\.m - segs\[0\]\.s\) : NaN/.test(edt) &&
+                /worldStart - mediaTl0/.test(edt) &&
+                /Math\.abs\(refTl - baseMediaStart\) > 0\.25/.test(edt) &&
+                /🔗 SRT_SYNC/.test(edt) &&
+                /_refreshWaveformSegments\(\)\) === true/.test(edt) &&
+                /return true;\s*\} catch\(e\) \{ return false; \}/.test(edt),
+                'tl0=' + /axisTl0 = segs\.length/.test(edt) + ' * reanc=' + /Math\.abs\(refTl/.test(edt) +
+                ' * log=' + /🔗 SRT_SYNC/.test(edt) + ' * fresc=' + /=== true/.test(edt));
 
             // (2026-10-23 · BUG #186) EXPORTACIÓ NO DESTRUCTIVA: abans s'esborraven TOTS
             // els clips de la pista de destí ("ha eliminat els clips que hi havia");

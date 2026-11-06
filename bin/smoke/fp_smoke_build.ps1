@@ -150,6 +150,11 @@ $files = @(
     # El prova la prova 28-a1clean (fp_probe_a1clean.js).
     (Join-Path $repo 'js\logic\23_A1_Clean_Logic.js'),
     (Resolve-Harness 'fp_probe_a1clean.js'),
+    # (2026-11-06 - BUG #246) TRADUCCIO QUE NO ARRIBA AL TIMELINE: l'insert que
+    # falla es reintenta, l'error real de Premiere arriba al log (`rawError`) i la
+    # reserva NO-DUPLICAR nomes es fa si el clip ha entrat de veritat.
+    # El prova la prova 29-trad-retry (fp_probe_trad.js).
+    (Resolve-Harness 'fp_probe_trad.js'),
     (Resolve-Harness 'fp_smoke_runner.js')
 )
 
