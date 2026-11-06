@@ -3426,9 +3426,18 @@
          * _calcSeparacioSuperposats(entries, opts): CÀLCUL PUR (sense JSX ni estat)
          * de la separació de marcadors que compartixen posició.
          *
-         * @param {Array} entries [{ prefix, time, seq, comment, color, pinned }]
-         *        `seq` = número de `sequencia` de l'escaleta (mana l'orde);
-         *        `pinned` = true si el marcador és OnAir (no es mou mai: OnAir = veritat).
+         * JERARQUIA (2026-11-06 · BUG #248): dins d'un clúster mana, per este orde,
+         *   1) **OnAir** (`pinned`) — no es mou mai (OnAir = veritat);
+         *   2) **estructural** (ítem d'escaleta: color 1/6/7) — NO el desplaça cap gràfic:
+         *      el primer estructural del clúster es queda EXACTAMENT on és;
+         *   3) **gràfic** (color 4 / sufix gràfic) — cedeix sempre i se'n va darrere.
+         * Entre dos estructurals (o contra una àncora OnAir) sí que es desplacen, per a
+         * no deixar mai dos marcadors superposats (regla imperativa).
+         *
+         * @param {Array} entries [{ prefix, time, seq, comment, color, pinned, graf }]
+         *        `seq` = número de `sequencia` de l'escaleta (mana dins de cada nivell);
+         *        `pinned` = true si el marcador és OnAir (no es mou mai: OnAir = veritat);
+         *        `graf` = true si és gràfic (si falta, es deduïx de `prefix`/`color`).
          * @param {Object} [opts] { gap, tol } — `gap` per defecte `_GAP_SEPARACIO`,
          *        `tol` = distància (s) per davall de la qual dos marcadors estan superposats.
          * @returns {Array} placements [{ prefix, timeSec, comment, colorIdx }]
@@ -3446,13 +3455,16 @@
                 var t = Number(e.time);
                 var sq = Number(e.seq);
                 if (!isFinite(t) || !isFinite(sq)) continue;
+                var isGraf = (e.graf === true) || this._isGraphicByNum(String(e.prefix)) ||
+                    Number(e.color) === 4;
                 list.push({
                     prefix: String(e.prefix),
                     time: t,
                     seq: sq,
                     comment: e.comment || '',
                     color: e.color,
-                    pinned: e.pinned === true
+                    pinned: e.pinned === true,
+                    graf: isGraf
                 });
             }
             if (list.length < 2) return [];
@@ -3472,8 +3484,12 @@
                     cj++;
                 }
                 if (cluster.length > 1) {
-                    // ORDE D'ESCALETA dins del clúster
+                    // (#248) JERARQUIA dins del clúster: OnAir → estructura → gràfic.
+                    // L'orde d'escaleta només decidix DINS de cada nivell.
                     cluster.sort(function (a, b) {
+                        var ja = a.pinned ? 0 : (a.graf ? 2 : 1);
+                        var jb = b.pinned ? 0 : (b.graf ? 2 : 1);
+                        if (ja !== jb) return ja - jb;
                         if (a.seq !== b.seq) return a.seq - b.seq;
                         return a.time - b.time;
                     });
@@ -3498,7 +3514,15 @@
                     for (var k = 0; k < cluster.length; k++) {
                         var cur = cluster[k];
                         if (cur.pinned) continue;   // no es mou mai
-                        var target = (last === null) ? base : (last + step);
+                        var target;
+                        if (last === null) {
+                            // (#248) El PRIMER de la jerarquia no es desplaça:
+                            //  · estructural (o sense gràfics al clúster) → es queda ON ÉS;
+                            //  · gràfic → ocupa la base del clúster.
+                            target = cur.graf ? base : cur.time;
+                        } else {
+                            target = last + step;
+                        }
                         // No es pot trepitjar cap àncora OnAir: si hi cau, va darrere
                         for (var pz = 0; pz < pins.length; pz++) {
                             if (Math.abs(target - pins[pz]) <= TOL) target = pins[pz] + step;
@@ -3589,7 +3613,8 @@
                         seq: seqByNum[num],
                         comment: mks[m].comments || '',
                         color: col,
-                        pinned: onAirByNum[num] === true
+                        pinned: onAirByNum[num] === true,
+                        graf: this._isGraphicByNum(num) || col === 4
                     });
                 }
 
@@ -3599,7 +3624,8 @@
                     return { revisats: entries.length, moguts: 0 };
                 }
 
-                log('🔧 [F8·Separació] Marcadors superposats → separant en ORDE D\'ESCALETA (GAP ' +
+                log('🔧 [F8·Separació] Marcadors superposats → separant per JERARQUIA ' +
+                    '(OnAir → estructura → gràfic, GAP ' +
                     this._GAP_SEPARACIO + 's): ' +
                     placements.map(function (p) { return p.prefix + '@' + p.timeSec + 's'; }).join(', '));
 

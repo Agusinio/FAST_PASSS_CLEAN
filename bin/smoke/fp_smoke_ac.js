@@ -444,6 +444,8 @@ window.__runTests = async function () {
     // i es deixen en ORDE D'ESCALETA. Cas real TNM_V1 26/10: F2 va fer «01dir»
     // marcador d'inici a 00:00 i F7 hi va afegir «01 TE-1», «01 TD-1» i «01BT» al
     // MATEIX 0,00 s (4 marcadors superposats, i 01dir és el 4t de l'escaleta).
+    // (#248 · 06/11) DINS del clúster mana la JERARQUIA, no l'orde d'escaleta:
+    //   OnAir → estructura → gràfic. Un gràfic MAI desplaça un estructural.
     ph('12b-f8-separacio');
     ok('F8: separateOverlappingMarkers + _calcSeparacioSuperposats (GAP 3 s)',
         !!(FM && typeof FM.separateOverlappingMarkers === 'function' &&
@@ -458,15 +460,24 @@ window.__runTests = async function () {
         { prefix: '01 TD-1', time: 0, seq: 26, comment: '01 TD-1 - TD ALDARULLS', color: 4 }
     ];
     var f8a = FM._calcSeparacioSuperposats(f8Cluster, { gap: 3, tol: 0.20 });
-    ok('F8: 4 marcadors a 0,00 s → se n\'hi mouen 3 (el 1r d\'escaleta es queda)',
+    ok('F8: 4 marcadors a 0,00 s → se n\'hi mouen 3 (el 1r ESTRUCTURAL es queda)',
         f8a.length === 3, JSON.stringify(f8a));
-    ok('F8: ORDE D\'ESCALETA · 01 TD-1@3 · 01BT@6 · 01dir@9',
-        f8a.length === 3 && f8a[0].prefix === '01 TD-1' && f8a[0].timeSec === 3 &&
-        f8a[1].prefix === '01BT' && f8a[1].timeSec === 6 &&
-        f8a[2].prefix === '01dir' && f8a[2].timeSec === 9,
+    ok('F8·#248: JERARQUIA · estructura mana → 01dir@3 · 01 TE-1@6 · 01 TD-1@9',
+        f8a.length === 3 && f8a[0].prefix === '01dir' && f8a[0].timeSec === 3 &&
+        f8a[1].prefix === '01 TE-1' && f8a[1].timeSec === 6 &&
+        f8a[2].prefix === '01 TD-1' && f8a[2].timeSec === 9,
         JSON.stringify(f8a.map(function (p) { return p.prefix + '@' + p.timeSec; })));
-    ok('F8: el primer de l\'escaleta (01 TE-1) es queda al 00:00',
-        !f8a.some(function (p) { return p.prefix === '01 TE-1'; }));
+    ok('F8·#248: el marcador ESTRUCTURAL (01BT) es queda al 00:00',
+        !f8a.some(function (p) { return p.prefix === '01BT'; }));
+    // (#248) Cas real TNV_V4 06/11: un groc (gràfic) al 00:00 desplaçava el
+    // marcador estructural del 00:00 (i el treia de lloc). El gràfic cedix.
+    var f8V4 = FM._calcSeparacioSuperposats([
+        { prefix: '01dir', time: 0, seq: 28, color: 6 },
+        { prefix: '01 GF-1', time: 0, seq: 10, color: 4 }
+    ], { gap: 3, tol: 0.20 });
+    ok('F8·#248: el gràfic al 00:00 se\'n va a +3 s i l\'estructural es queda',
+        f8V4.length === 1 && f8V4[0].prefix === '01 GF-1' && f8V4[0].timeSec === 3,
+        JSON.stringify(f8V4));
     ok('F8: cap posició es repeteix (ni amb el marcador que es queda)',
         (function () {
             var ts = [0].concat(f8a.map(function (p) { return p.timeSec; }))

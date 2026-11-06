@@ -282,12 +282,16 @@
      * careta dins del tros, i en quina posició.
      *
      * @param {Object} corr - { hit, best:{ ref, r, lagSec, mixPosSec, overlapSec, windows[] }, all[] }
-     * @param {Object} o    - { minR, minRatio, maxSec }
+     * @param {Object} o    - { minR, minRatio, maxSec, inPoint, durSec }
+     *        `durSec` (opcional): durada del clip. Si es passa, NOMÉS compta la
+     *        música que cau DINS del clip (#249): la pre-finestra pot veure una
+     *        pista que acaba just abans del `inPoint` — llavors no hi ha res a
+     *        restar i no pot haver-hi `hit`.
      * @returns {{hit:boolean, ref:string, r:number, lagSec:number, atSec:number,
      *            ratio:number, cleanSec:number, why:string}}
      *   atSec    = posició dins del clip on comença la música (el que necessita la finestra)
      *   ratio    = fracció de finestres de 2 s per damunt del guard
-     *   cleanSec = quants segons de música es poden restar (solapament mesurat)
+     *   cleanSec = quants segons de música es poden restar (solapament mesurat DINS del clip)
      */
     function decision(corr, o) {
         var opt = o || {};
@@ -322,19 +326,60 @@
         var used = num(b.overlapSec, 0);
         if (!(used > 0)) used = wins.length * 2;
         used = Math.min(used, maxSec);
+        var over = num(b.overlapSec, 0);
         var avail = Math.max(0, used - refSkip);
+
+        // ─── (#249 · 06/11) NOMÉS compta la música DINS del clip ────────────
+        // Cas real TNV_V4: `tornada_publi` sona 17,08–21,80 s del media i el
+        // clip d'A1 comença en 21,92 s. La pre-finestra la veia (r=0,72, 2
+        // finestres a 0,99) i el motor deia "6,92 s de música", però dins del
+        // clip no n'hi havia cap: la resta no baixava res i el guard ho
+        // rebutjava. Les finestres es repartixen al llarg del solapament, així
+        // que cada una té el seu tros dins del clip i es pot comptar.
+        var durClip = num(opt.durSec, 0);
+        var dinsWin = -1;               // -1 = no comprovat (sense durSec)
+        if (durClip > 0 && havePos) {
+            var clipIni = num(opt.inPoint, 0);
+            var clipFi = clipIni + durClip;
+            var mixPos = num(b.mixPosSec, 0);
+            var overFi = Math.max(0, (mixPos + over) - clipFi);
+            avail = Math.max(0, Math.min(used, over - refSkip - overFi));
+            var wSec = wins.length ? (over / wins.length) : 0;
+            if (wSec > 0) {
+                var dins = 0, bonesDins = 0;
+                for (i = 0; i < wins.length; i++) {
+                    var wa = mixPos + i * wSec;
+                    var ovl = Math.min(wa + wSec, clipFi) - Math.max(wa, clipIni);
+                    if (ovl >= wSec * 0.5) {          // la majoria de la finestra, dins
+                        dins++;
+                        if (num(wins[i], -2) >= minR) bonesDins++;
+                    }
+                }
+                dinsWin = dins;
+                ratio = dins ? (bonesDins / dins) : 0;
+            } else {
+                dinsWin = 0;
+                ratio = 0;
+            }
+        }
 
         var hit = (r >= minR) && (ratio >= minRatio) && (avail >= 1);
         var why = (r < minR)
             ? 'r=' + fmt(r) + ' per davall del guard ' + fmt(minR, 2)
             : ((ratio < minRatio)
-                ? 'només ' + fmt(ratio * 100, 0) + '% de finestres bones (mínim ' + fmt(minRatio * 100, 0) + '%)'
+                ? 'només ' + fmt(ratio * 100, 0) + '% de finestres bones dins del clip (mínim ' +
+                  fmt(minRatio * 100, 0) + '%)'
                 : 'r=' + fmt(r) + ' · ' + fmt(ratio * 100, 0) + '% finestres · ' + fmt(avail, 2) + ' s de música' +
                   (refSkip > 0.05 ? ' (el so començava ' + fmt(refSkip, 2) + ' s abans del clip)' : ''));
+        if (dinsWin === 0) {
+            why = 'la música de «' + String(b.ref || '') + '» ACABA abans del tall' +
+                (refSkip > 0.05 ? ' (' + fmt(refSkip, 2) + ' s abans del clip)' : '') +
+                ': cap finestra bona dins del clip → res a restar';
+        }
         return {
             hit: hit, ref: String(b.ref || ''), r: r, lagSec: lag,
             atSec: atSec, refSkipSec: refSkip,
-            ratio: ratio,
+            ratio: ratio, dinsWin: dinsWin,
             cleanSec: Math.max(0, Math.round(avail * 100) / 100), why: why
         };
     }
@@ -1299,7 +1344,8 @@
             }
 
             var d = decision(corr, {
-                minR: o.minR, minRatio: o.minRatio, maxSec: o.maxSec, inPoint: inPt
+                minR: o.minR, minRatio: o.minRatio, maxSec: o.maxSec,
+                inPoint: inPt, durSec: dur
             });
             d.refPath = (corr.best && corr.best.path) ? String(corr.best.path) : '';
 
@@ -1314,6 +1360,7 @@
                 ' ref=' + String(bb.ref || '-') + ' lag=' + fmt(num(bb.lagSec, 0), 2) +
                 ' over=' + fmt(num(bb.overlapSec, 0), 2) +
                 ' at=' + fmt(d.atSec, 2) + ' skip=' + fmt(d.refSkipSec, 2) +
+                ' dins=' + (num(d.dinsWin, -1) < 0 ? '-' : num(d.dinsWin, 0)) +
                 ' net=' + fmt(d.cleanSec, 2) + (d.hit ? ' HIT' : ''));
             if (!d.hit) { log('cap música de careta/molinet dins del clip (' + d.why + ')', 'INFO'); continue; }
 

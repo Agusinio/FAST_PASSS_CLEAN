@@ -395,6 +395,48 @@
             a1src.indexOf('num(nj.tramsOk, 0) === 0') < 0,
             'usa=' + (a1src.indexOf('shouldMount(nj, o)') > 0) +
             ' vell=' + (a1src.indexOf('num(nj.tramsOk, 0) === 0') > 0));
+
+        // ── (#249 · 06/11) NOMÉS compta la música DINS del clip ─────────────
+        // Cas REAL TNV_V4 (05/11): `3CatInfo_TN_tornada_publi_` sona 17,08–21,80 s
+        // del media i el clip d'A1 comença en 21,92 s (inPoint). La pre-finestra
+        // (20 s) la veia i `decision` deia "6,92 s de música" → es pagava tota la
+        // correlació + extracció + resta, el motor no baixava res (0,1 dB) i la
+        // guarda ho rebutjava. El hit era FALS: dins del clip no hi ha cap
+        // finestra bona (les 2 bones cauen abans del tall).
+        var foraTall = A1.decision({
+            best: {
+                ref: '3CatInfo_TN_tornada_publi_.WAV', r: 0.7227, rMaxWin: 0.995,
+                lagSec: 15.1556, mixPosSec: 17.0756, overlapSec: 11.76,
+                windows: [0.995, 0.99, 0.297, 0.015, 0.007]
+            }
+        }, { minR: 0.7, minRatio: 0.25, maxSec: 30, inPoint: 21.92, durSec: 16.96 });
+        ok('#A1C/38 (#249) la música que ACABA abans del tall → cap hit (res a restar)',
+            foraTall.hit === false && foraTall.ratio === 0 && foraTall.dinsWin === 3 &&
+            foraTall.cleanSec >= 0,
+            'hit=' + foraTall.hit + ' ratio=' + foraTall.ratio +
+            ' dins=' + foraTall.dinsWin + ' why=' + foraTall.why);
+
+        // El filtre no pot trencar el cas bo: la pre-finestra troba l'atac FORA
+        // del clip però la música continua dins (cas #A1C/29, ara amb `durSec`).
+        var dinsAmbDur = A1.decision({
+            best: { ref: '3CatInfo_TNC_careta_sense_alpha.WAV', r: 0.8728, rMaxWin: 0.995,
+                    lagSec: 4.4909, mixPosSec: 14.4909, overlapSec: 17.6,
+                    windows: [0.831, 0.991, 0.992, 0.988, 0.995, 0.737, 0.168, 0.017] }
+        }, { minR: 0.7, minRatio: 0.25, maxSec: 30, inPoint: 10, durSec: 242 });
+        ok('#A1C/39 (#249) amb `durSec` la música que SÍ continua dins del clip seguix comptant',
+            dinsAmbDur.hit === true && Math.abs(dinsAmbDur.atSec - 4.4909) < 1e-9 &&
+            Math.abs(dinsAmbDur.cleanSec - 17.6) < 0.01 && dinsAmbDur.dinsWin === 8,
+            'hit=' + dinsAmbDur.hit + ' at=' + dinsAmbDur.atSec +
+            ' net=' + dinsAmbDur.cleanSec + ' dins=' + dinsAmbDur.dinsWin +
+            ' ratio=' + dinsAmbDur.ratio);
+
+        // El camí real passa `durSec` (la durada del clip) a `decision`.
+        ok('#A1C/40 el motor passa `durSec` a `decision` i el trau a `_last_run.txt`',
+            /inPoint:\s*inPt,\s*durSec:\s*dur/.test(a1src) &&
+            a1src.indexOf("' dins=' +") > 0,
+            'crida=' + /inPoint:\s*inPt,\s*durSec:\s*dur/.test(a1src) +
+            ' seen=' + (a1src.indexOf("' dins=' +") > 0));
+
     };
 })();
 
