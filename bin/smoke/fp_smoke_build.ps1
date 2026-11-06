@@ -85,6 +85,11 @@ $files = @(
     # sintetics (findGaps / mergeSyntheticGaps / removeEntryAt). El prova la
     # prova 24-srt (fp_probe_srt.js).
     (Join-Path $repo 'js\logic\10_Srt_Logic.js'),
+    # (2026-11-05 · BUG #223) EDITOR DE SRT: el mapa px -> peaks de la forma
+    # d'ona (`_computeWaveformPixels`) i l'origen del `.bin` (media 0 del clip,
+    # NO l'IN). Es nomes una definicio d'objecte (IIFE), no toca el DOM en
+    # carregar-se. El prova `fp_probe_srt.js` (#F3/62-#F3/69).
+    (Join-Path $repo 'js\editor\srt_editor.js'),
     # (2026-10-21) WOTTS DEL DIA: el desbloqueig del CREAR passa a ser un fet
     # físic (wotts del bloc d'avui, datats per birthtime amb Node). El prova la
     # prova 23-wotts.

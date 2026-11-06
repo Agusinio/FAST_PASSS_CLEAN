@@ -67,6 +67,10 @@
         // F4/D (2026-10-01): token del scan de fons en curs (evita que un scan
         // vell repinti per sobre d'un checkContext més nou).
         _bgProbeToken: 0,
+        // (2026-11-05 · #238 2a passada) Memòria curta (2 s) del `.prproj` obert:
+        // el poll pregunta cada 15 s i el fallback «acabat de crear» no ha de
+        // costar una crida JSX per volta. `{ folder, at, name }`.
+        _justOpenedCache: null,
 
         /**
          * _targetDateDir: Retorna la data de treball (YYYY_MM_DD).
@@ -381,10 +385,21 @@
          *      el projecte.
          *   2) El `.prproj` OBERT (`FASTPASS.Project.path()`): si viu EN ESTA
          *      carpeta (una carpeta = un bloc i una data), el projecte existix
-         *      encara que `State` haja perdut l'ancoratge. Només es pregunta si
-         *      la font (1) no decidix I hi ha senyals que algun projecte s'haja
-         *      obert (sense cap senyal no es gasta cap crida: és l'estat normal
-         *      del matí, quan el botó ha de poder dir MASSA D'HORA).
+         *      encara que `State` haja perdut l'ancoratge. 🔴 (2026-11-05, #238
+         *      2a passada) ABANS això només es preguntava si hi havia ancoratge
+         *      («sense cap senyal no es gasta cap crida»), i eixa guarda era el
+         *      forat: qualsevol camí que buida `State` (RESET, tancament, canvi
+         *      de PROG/BLOC) deixava el fallback MORT i el botó tornava a CREA
+         *      amb el projecte obert davant dels nassos. Ara es pregunta SEMPRE
+         *      (resultat memoritzat 2 s: el poll és de 15 s, o siga una crida
+         *      per volta) i, si llig el projecte, es RE-ANCORA `State` perquè
+         *      les voltes següents isquen pel camí gratuït.
+         *   3) Si el pont JSX està ocupat (el CREAR acaba de deixar-hi cua), un
+         *      reintent curt (450 ms) abans de rendir-se.
+         *
+         * QUAN DIU QUE NO, HO DIU: cada branca que retorna null deixa una línia
+         * al log amb el motiu i el nom que ha vist (si de cas el patró del bloc
+         * és el que no casa, es veu a la primera).
          * @param {Object} ctx - context de treball (`dateDir`, `bloque`, `progData`)
          * @param {string} folderPath - carpeta escanejada (la del bloc i la data)
          * @param {string} progKey - `ctx.progData.wott || ctx.progData.archivo`
@@ -403,20 +418,57 @@
                 return last;
             }
             // 2) El projecte OBERT en Premiere, si viu en esta carpeta.
-            if (!last && !(st && st.projectDateDir)) return null;
-            let raw = '';
-            try { raw = await getUtils().callJSX('FASTPASS.Project.path()'); } catch (e) { return null; }
-            if (!raw || String(raw).toLowerCase().indexOf('.prproj') === -1) return null;
-            // Barra invertida sense escapar-la al codi (el repo ja usa este recurs).
+            //    (2026-11-05, #238) Sense la guarda d'ancoratge: vegeu la capçalera.
             const BS = String.fromCharCode(92);
+            const folderNorm = String(folderPath || '').split(BS).join('/').replace(/\/+$/, '').toLowerCase();
+            if (!folderNorm) return null;
+            const now = Date.now();
+            if (this._justOpenedCache && this._justOpenedCache.folder === folderNorm &&
+                (now - this._justOpenedCache.at) < 2000) {
+                return this._justOpenedCache.name;
+            }
+            let raw = '';
+            for (let intent = 0; intent < 2; intent++) {
+                try { raw = await getUtils().callJSX('FASTPASS.Project.path()'); }
+                catch (e) { raw = ''; }
+                if (raw && String(raw).toLowerCase().indexOf('.prproj') !== -1) break;
+                if (intent === 0) { await getUtils().delay(450); }   // pont ocupat: reintent
+            }
+            if (!raw || String(raw).toLowerCase().indexOf('.prproj') === -1) {
+                this._justOpenedCache = { folder: folderNorm, at: now, name: null };
+                getUtils().log('🔎 [checkContext] Cap `.prproj` obert (ni ancoratge de sessió) → ' +
+                    "el gate d'inici decidix (CREA / ESPERA / MASSA D'HORA)", 'DEBUG');
+                return null;
+            }
             const norm = String(raw).split(BS).join('/');
             const cut = norm.lastIndexOf('/');
-            if (cut < 0) return null;
-            const dirNorm = norm.slice(0, cut).replace(/\/+$/, '').toLowerCase();
-            const folderNorm = String(folderPath || '').split(BS).join('/').replace(/\/+$/, '').toLowerCase();
-            if (!folderNorm || dirNorm !== folderNorm) return null;
-            const name = norm.slice(cut + 1);
-            return Scan.matchesProjectName(name, progKey, ctx.bloque) ? name : null;
+            let name = null;
+            if (cut >= 0) {
+                const dirNorm = norm.slice(0, cut).replace(/\/+$/, '').toLowerCase();
+                if (dirNorm === folderNorm) {
+                    const base = norm.slice(cut + 1);
+                    if (Scan.matchesProjectName(base, progKey, ctx.bloque)) {
+                        name = base;
+                        // Re-ancorar l'estat: les voltes següents no pagaran cap crida.
+                        if (st) {
+                            st.lastOpenedProjectName = base;
+                            st.projectDateDir = ctx.dateDir;
+                        }
+                        getUtils().log('🆕 [checkContext] Projecte OBERT a la carpeta del bloc (' +
+                            base + ') encara no al llistat → es tracta com a EXISTENT', 'INFO');
+                    } else {
+                        getUtils().log('⚠️ [checkContext] El projecte obert («' + base + '») és a la ' +
+                            'carpeta del bloc però NO casa amb el patró «' +
+                            Scan._projectPrefix(progKey, ctx.bloque) + '» (bloc=' + ctx.bloque +
+                            ', prog=' + progKey + ') → no compta com a projecte del bloc', 'WARN');
+                    }
+                } else {
+                    getUtils().log('🔎 [checkContext] El projecte obert («' + norm + '») NO és a la ' +
+                        'carpeta escanejada («' + folderNorm + '») → no compta per a este bloc', 'DEBUG');
+                }
+            }
+            this._justOpenedCache = { folder: folderNorm, at: now, name: name };
+            return name;
         },
 
 

@@ -269,10 +269,10 @@
             ok('#F3/24 index: 🧩 a la fila SUBTÍTOLS i 🗑 RETIRAT (Supr ho fa)',
                 html.indexOf('btnSrtDel') === -1 && /id="btnSrtFill"/.test(html) &&
                 /Ctrl\+clic = SUBTÍTOLS SINTÈTICS/.test(html));
-            ok('#F3/25 index: cache-busts F3 (srt_editor 88, flow_srt 19, main ' +
-                '107, Scanner 27, Srt_Logic 23, Config 44)',
-                /srt_editor\.js\?v=88/.test(html) && /flow_srt\.js\?v=19/.test(html) &&
-                /main\.js\?v=107/.test(html) && /Scanner\.js\?v=27/.test(html) &&
+            ok('#F3/25 index: cache-busts F3 (srt_editor 89, flow_srt 19, main ' +
+                '108, Scanner 27, Srt_Logic 23, Config 44)',
+                /srt_editor\.js\?v=89/.test(html) && /flow_srt\.js\?v=19/.test(html) &&
+                /main\.js\?v=108/.test(html) && /Scanner\.js\?v=27/.test(html) &&
                 /10_Srt_Logic\.js\?v=23/.test(html) && /11_Configuracio\.js\?v=44/.test(html));
 
             var cfg = noComments(await readRepo('js/core/11_Configuracio.js'));
@@ -456,6 +456,113 @@
                 /this\._sintMissText\(ctx\)/.test(flow) &&
                 flow.indexOf('revisa rutas.subtitulosSinteticos') === -1 &&
                 /eixe dia només n'hi ha de/.test(flow));
+            // ═══ (BUG #223 · 05/11) FORMA D'ONA: MÀXIM PER GRUP I ORIGEN DEL .bin ══
+            // (A) Reduir a la densitat de peaks ha de ser el MÀXIM del grup en volum
+            //     (|b-128|), no la primera mostra ni la mitjana: si no, les pauses
+            //     s'escurcen i els pics desapareixen de la silueta.
+            // (B) El `.bin` (AUDIO_REF) es genera amb ffmpeg des del PRIMER BYTE del
+            //     MP4 extret (`-i <CLIP>.mp4`, sense `-ss`), així que el seu índex 0
+            //     és el MEDIA 0 del clip (handle inclòs) i NO l'IN del clip: indexar
+            //     descomptant `_wfMediaStart` desplaçava tota la WF ~20 s.
+            try {
+                var WG = UI.Logic && UI.Logic.WaveformGenerator;
+                ok('#F3/62 Logic.WaveformGenerator carregat (10_Srt_Logic.js)', !!WG && !!WG.loadPeaksFromBin);
+
+                // WAV u8 480 Hz sintètic de 6 mostres: [128,200,128,128,100,128]
+                //   maxAbs = |200-128| = 72  →  200 = 1 · 100 = 28/72 = 0,3889
+                var samples223 = [128, 200, 128, 128, 100, 128];
+                function u32223(v) { return String.fromCharCode(v & 255, (v >> 8) & 255, (v >> 16) & 255, (v >> 24) & 255); }
+                function u16223(v) { return String.fromCharCode(v & 255, (v >> 8) & 255); }
+                var body223 = '';
+                for (var s223 = 0; s223 < samples223.length; s223++) body223 += String.fromCharCode(samples223[s223]);
+                var wav223 = 'RIFF' + u32223(36 + body223.length) + 'WAVE' +
+                    'fmt ' + u32223(16) + u16223(1) + u16223(1) + u32223(480) + u32223(480) + u16223(1) + u16223(8) +
+                    'data' + u32223(body223.length) + body223;
+
+                var cepPrev223 = window.cep;
+                var mem223 = { 'MEM://wf223a.bin': wav223, 'MEM://wf223b.bin': wav223, 'MEM://wf223c.bin': wav223 };
+                window.cep = {
+                    encoding: { Base64: 'Base64' },
+                    fs: { readFile: function (p) { return mem223[p] ? { err: 0, data: mem223[p] } : { err: 9, data: '' }; } }
+                };
+                if (WG) WG._peaksCache = {};
+
+                var full223 = WG ? await WG.loadPeaksFromBin('MEM://wf223a.bin', 480) : null;
+                ok('#F3/63 .bin 480 Hz: peaks 1:1 (`|b-128|` normalitzat pel màxim del fitxer)',
+                    !!full223 && full223.peaksPerSec === 480 && full223.peaks.length === 6 &&
+                    near(full223.peaks[1], 1) && near(full223.peaks[4], 28 / 72) && near(full223.durSec, 6 / 480),
+                    JSON.stringify(full223 && full223.peaks));
+
+                var half223 = WG ? await WG.loadPeaksFromBin('MEM://wf223b.bin', 240) : null;
+                ok('#F3/64 reducció 480→240 (step 2): MÀXIM del grup, no la 1a mostra ni la mitjana',
+                    !!half223 && half223.peaksPerSec === 240 && half223.peaks.length === 3 &&
+                    near(half223.peaks[0], 1) && near(half223.peaks[1], 0) && near(half223.peaks[2], 28 / 72),
+                    JSON.stringify(half223 && half223.peaks));
+
+                var third223 = WG ? await WG.loadPeaksFromBin('MEM://wf223c.bin', 160) : null;   // step 3
+                ok('#F3/65 reducció 480→160 (step 3): el pic del grup sobreviu (màxim)',
+                    !!third223 && third223.peaksPerSec === 160 && third223.peaks.length === 2 &&
+                    near(third223.peaks[0], 1) && near(third223.peaks[1], 28 / 72),
+                    JSON.stringify(third223 && third223.peaks));
+
+                if (cepPrev223 === undefined) delete window.cep; else window.cep = cepPrev223;
+                if (WG) WG._peaksCache = {};
+                // ── (B) Mapa px → peaks de la WF de l'editor ──────────────────
+                var SE = UI.Editor && UI.Editor.SrtEditor;
+                ok('#F3/66 Editor.SrtEditor carregat (js/editor/srt_editor.js al bundle)',
+                    !!SE && !!SE._computeWaveformPixels);
+                var utilsPrev223 = UI.Utils;
+                UI.Utils = { log: function () { }, callJSX: function () { return Promise.resolve(''); } };
+
+                // mkEd223: peaks sintètics amb UN sol pic a `markerBinSec` (índex del
+                // BIN), pps 480 i 100 px/s. El rang de MEDIA del clip és [start,end].
+                function mkEd223(o) {
+                    var e = Object.create(SE);
+                    var n = Math.round(o.lenSec * 480);
+                    var pk = new Array(n);
+                    for (var i0 = 0; i0 < n; i0++) pk[i0] = 0;
+                    pk[Math.round(o.markerBinSec * 480)] = 1;
+                    e._waveformPeaks = pk;
+                    e._waveformPPS = 480;
+                    e._wfMediaStart = o.start;
+                    e._wfMediaEnd = o.end;
+                    e._axisOrigin = o.origin;
+                    e._editWinStart = (o.winStart != null) ? o.winStart : null;
+                    e._editWinEnd = null;
+                    e._pixelsPerSec = 100;      // 1 px = 10 ms
+                    e._canvas = { width: 400 };
+                    e._computeWaveformPixels();
+                    return e;
+                }
+
+                // .bin del clip SENCER (285,3 s) amb el bloc a partir de media 20,2 s:
+                // el pic del bin a 22,0 s és media 22,0 → px (22−20,2)*100 = 180.
+                var e223a = mkEd223({ lenSec: 285, markerBinSec: 22, start: 20.2, end: 245.2, origin: 20.2 });
+                ok('#F3/67 WF: el .bin comença al MEDIA 0 (pic a 22,0 s → px 180, sense desfasament)',
+                    e223a._wfPixelHeights.length === 400 &&
+                    near(e223a._wfPixelHeights[180], 1) &&
+                    near(e223a._wfPixelHeights[179], 0) && near(e223a._wfPixelHeights[181], 0),
+                    'h[179]=' + e223a._wfPixelHeights[179] + ' h[180]=' + e223a._wfPixelHeights[180] +
+                    ' h[181]=' + e223a._wfPixelHeights[181]);
+
+                // .bin CURT (retallat a l'IN del clip, 20 s): es conserva el descompte
+                // de `_wfMediaStart`, així que el pic del bin a 1,8 s és media 22,0 → px 180.
+                var e223b = mkEd223({ lenSec: 20, markerBinSec: 1.8, start: 20.2, end: 40.2, origin: 20.2 });
+                ok("#F3/68 WF: .bin antic retallat a l'IN → sí es descompta _wfMediaStart (px 180)",
+                    e223b._wfPixelHeights.length === 400 && near(e223b._wfPixelHeights[180], 1),
+                    'h[180]=' + e223b._wfPixelHeights[180]);
+
+                // Finestra d'edició (#132): x=0 és `_editWinStart`, no l'origen de l'eix.
+                var e223c = mkEd223({ lenSec: 285, markerBinSec: 22, start: 20.2, end: 245.2, origin: 20.2, winStart: 21 });
+                ok("#F3/69 WF amb finestra d'edició: x=0 és _editWinStart (pic a 22,0 s → px 100)",
+                    near(e223c._wfPixelHeights[100], 1), 'h[100]=' + e223c._wfPixelHeights[100]);
+
+                if (utilsPrev223 === undefined) delete UI.Utils; else UI.Utils = utilsPrev223;
+            } catch (eWf) {
+                ok('#F3/62-69 forma d\'ona (#223): sense excepció', false, eWf && (eWf.message + ' | ' + eWf.stack));
+            }
+
+
         } catch (eC) {
             ok('#F3 guardes del flux/UI/config: sense excepció', false, eC && (eC.message + ' | ' + eC.stack));
         }

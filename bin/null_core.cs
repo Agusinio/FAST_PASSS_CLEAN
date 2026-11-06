@@ -67,8 +67,16 @@ public static class NullCore
     }
 
     /**
-     * Gap: diferencia d'energia (dB) entre mix i residu en una finestra.
+     * Profile: diferencia d'energia (dB) entre mix i residu en una finestra.
      * Servix per al perfil tram a tram; `len` pot ser 0 -> -200.
+     *
+     * El residu de cada tram es mesura amb el guany BO d'eixe tram (minims
+     * quadrats dins del tram), no amb el global: el motor que munta la senyal
+     * (`NetSpanAdaptLR`) tambe en gasta un per tram, i si no, el perfil diu que
+     * NO cancella res on si que ho fa (BUG #240: una cua de 0,36 s dins d'una
+     * finestra de 3,5 s plena de veu -> el guany global eixia 0,75 i el de la
+     * cua 0,89, i el tram de la cua no comptava com a cancel·lat). `g` nomes
+     * s'usa si el tram no te referencia (sbb ~ 0).
      */
     public static double[] Profile(float[] a, float[] b, int lag, double g, int bStart, int len, int winSamples)
     {
@@ -84,13 +92,20 @@ public static class NullCore
                 double x = a[lag + bStart + o + k];
                 double y = b[bStart + o + k];
                 saa += x * x; sbb += y * y; sab += x * y;
-                double e = x - g * y;
+            }
+            double gOpt = (sbb > 1e-20) ? (sab / sbb) : g;
+            if (gOpt > 1.2) gOpt = 1.2;
+            if (gOpt < 0.0) gOpt = 0.0;
+            for (int k = 0; k < winSamples; k++)
+            {
+                double x = a[lag + bStart + o + k];
+                double y = b[bStart + o + k];
+                double e = x - gOpt * y;
                 see += e * e;
             }
             double d = winSamples;
             double rmsMix = Math.Sqrt(saa / d);
             double rmsRes = Math.Sqrt(see / d);
-            double gOpt = (sbb > 1e-20) ? (sab / sbb) : 0.0;
             res[f * 3 + 0] = Db(rmsMix);
             res[f * 3 + 1] = Db(rmsRes);
             res[f * 3 + 2] = gOpt;
@@ -126,7 +141,40 @@ public static class NullCore
     }
 
     /**
-     * FitWindow: per a un lag donat, torna { g, r, rmsMix, rmsRes, rmsUnity }.
+     * BestRefShift: quantes MOSTRES cal desplaçar la REFERENCIA perque case
+     * amb la finestra. Torna `d` (positiu = la referencia entra mes tard, es a
+     * dir cal saltar-ne mes) i `r`.
+     *
+     * PER QUE NO `BestLagSample`: eixe busca desplacant la FINESTRA dins de `a`,
+     * i aqui `a` comenca al principi del tall, o siga que no te pre-rotllos cap
+     * a l'esquerra. Pero el desajust que deixa la correlacio (±1 mostra a 8 kHz
+     * = ±6 mostres a 48 kHz) pot demanar tambe la referencia MES AVANT, i eixa
+     * part de la plantilla si que existix: es pot saltar-ne menys. Amb una
+     * plantilla decodificada amb `span` de mon (index `bOff` = on cau
+     * `SkipRef`) es pot anar en les dos direccions i no cal inventar res.
+     *
+     * Cost: (2*span+1) x len comparacions, les mateixes que abans.
+     */
+    public static int BestRefShift(float[] a, int la, float[] b, int bOff, int span, int len, out double r)
+    {
+        int best = 0;
+        double bestR = -2.0;
+        r = -2.0;
+        if (a == null || b == null || len < MIN_LEN) return 0;
+        if (la < 0 || la + len > a.Length) return 0;
+        if (span < 0) span = 0;
+        for (int d = -span; d <= span; d++)
+        {
+            int q = bOff - d;
+            if (q < 0 || q + len > b.Length) continue;
+            double v = PearsonAt(a, la, b, q, len);
+            if (v > bestR) { bestR = v; best = d; }
+        }
+        r = bestR;
+        return best;
+    }
+
+    /**
      *   g        = <a,b>/<b,b>   (minims quadrats: el guany que millor cancela)
      *   rmsRes   = RMS de a - g*b
      *   rmsUnity = RMS de a - b  (resta a pel, sense ajustar guany)

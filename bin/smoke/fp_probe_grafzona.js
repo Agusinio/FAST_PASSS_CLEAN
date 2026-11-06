@@ -1,18 +1,27 @@
 /* ============================================================================
  * PROVA #199 (2026-10-28) · PALETA amb ZONA GRISA → grafisme a V2 + màscara a V3
+ * (+ #222, 2026-11-05: TIPUS de terç inferior → gris/buit/color, cada un a la
+ *  seua pista: gris → V3 (màscara quieta a V2) · buit → V4 (màscara quieta) +
+ *  PNG de fons a V3 · color → màscara V2→V3 i grafisme a V2)
  * ----------------------------------------------------------------------------
  * QUÈ ES PROVA
  *   A) El mòdul `js/logic/21_GrafZonaGris_Logic.js` (pures): color de la placa,
  *      recepta (no trenca llindars posats a 0), veredicte, clau de caché que
  *      DISTINGIX VERSIONS (data de creació), lectura del JSON de caché i la
  *      cobertura d'un buffer rgb24 sintètic.
+ *   A3) Les pures del TIPUS: `median`, `analyseRGBA`/`analyseSeriesRGBA` (sacs
+ *      gris/buit/altres amb el buit desglossat per ALFA i per NEGRE),
+ *      `decideKind` i `decideKindSeries` (majoria, i medianes si no n'hi ha).
  *   B) El flux de la paleta (`js/workflows/flow_mapa.js`):
  *      · `_itemRangeAt` = rang de l'ÍTEM d'escaleta (marcador de la LÍNIA → següent
  *        número de línia, o siga marcador a marcador; si no n'hi ha, corxet OUT);
  *      · `_mascaraAParking` = corta el troç de màscara de l'ítem i el puja, DEIXANT
  *        un forat net a la pista de la màscara per al grafisme i SENSE tocar cap
  *        altre clip (ni de V2 ni de V3);
- *      · la connexió real `_placeClips` → `_zonaGris` → `_mascaraAParking`.
+ *      · `_grafTipus` (classificació de la tongada, mana color>buit>gris),
+ *        `_trackFreeIn` (la pista és buida a l'ítem?) i `_placeFonsTerç` (PNG de
+ *        fons a V3 amb el mateix rang, mai damunt d'un altre bloc);
+ *      · la connexió real `_placeClips` → `_grafTipus`/`_zonaGris` → `_mascaraAParking`.
  *
  * MODEL: un `Utils.callJSX` de joguina amb dues pistes de vídeo (V2 màscara, V3
  * grafismes) i `Clips.at/get/retrim/removeAt`; IPD+ (`_ipdPlusPoner` i companyia)
@@ -135,6 +144,111 @@
             GZ.decideSeries([], d0).hasGrey === false && GZ.decideSeries(null, d0).n === 0);
         ok('#199 decideSeries: els valors no numerics queden fora del recompte',
             GZ.decideSeries([NaN, 100, 100], d0).n === 2 && GZ.decideSeries([NaN, 100, 100], d0).hasGrey === true);
+
+        // ── A3. TIPUS DE TERÇ INFERIOR (2026-11-05 · #222) ─────────────────
+        // El flux de la paleta ja no decidix només «té zona grisa?»: classifica el
+        // terç inferior en gris / buit / color i cada tipus va a una pista.
+        ok('#222 el mòdul exporta la classificació per TIPUS de terç inferior',
+            !!(GZ && GZ.KIND && typeof GZ.detectKind === 'function' &&
+                typeof GZ.analyseRGBA === 'function' && typeof GZ.analyseSeriesRGBA === 'function' &&
+                typeof GZ.decideKind === 'function' && typeof GZ.decideKindSeries === 'function' &&
+                typeof GZ.median === 'function'),
+            'detectKind=' + typeof (GZ && GZ.detectKind));
+        ok('#222 KIND: gris / buit / color (les tres classes del flux)',
+            !!GZ.KIND && GZ.KIND.GRIS === 'gris' && GZ.KIND.BUIT === 'buit' && GZ.KIND.COLOR === 'color',
+            JSON.stringify(GZ.KIND));
+
+        var RGB_PLACA = GZ.hexToRgb('#D9D9D9');
+        // 2x2 rgba: placa grisa · transparent (alfa 0) · negre de vídeo · vermell
+        var buf4 = [217, 217, 217, 255, 0, 0, 0, 0, 5, 5, 5, 255, 200, 10, 10, 255];
+        var a4 = GZ.analyseRGBA(buf4, 2, 2, RGB_PLACA, 25, 20);
+        ok('#222 analyseRGBA: gris 25 % · buit 50 % (1 alfa 0 + 1 negre) · altres 25 %',
+            !!a4 && a4.covGris === 25 && a4.covBuit === 50 && a4.covAltres === 25,
+            JSON.stringify(a4));
+        ok('#222 analyseRGBA: el buit es desglossa per ALFA i per NEGRE (diagnòstic)',
+            !!a4 && a4.buitAlpha === 25 && a4.buitNegre === 25, JSON.stringify(a4));
+        ok('#222 analyseRGBA: buffer massa curt → null (no inventa cap cobertura)',
+            GZ.analyseRGBA([1, 2, 3], 2, 2, RGB_PLACA, 25, 20) === null);
+        var s4 = GZ.analyseSeriesRGBA(buf4.concat(buf4), 2, 2, RGB_PLACA, 25, 20);
+        ok('#222 analyseSeriesRGBA: 2 frames rgba → 2 mostres', !!s4 && s4.length === 2);
+        ok('#222 analyseSeriesRGBA: els bytes solts del final queden fora (mai mig frame)',
+            (GZ.analyseSeriesRGBA(buf4.concat([9, 9]), 2, 2, RGB_PLACA, 25, 20) || []).length === 1);
+
+        var k1 = GZ.decideKind({ covGris: 92.2, covBuit: 0, covAltres: 7.8 });
+        ok('#222 decideKind: 92 % de placa grisa → GRIS', k1.kind === 'gris', JSON.stringify(k1));
+        ok('#222 decideKind: 0 % gris i 70 % buit → BUIT',
+            GZ.decideKind({ covGris: 0, covBuit: 70, covAltres: 30 }).kind === 'buit');
+        ok('#222 decideKind: 3 % gris i 97 % altres (foto) → COLOR',
+            GZ.decideKind({ covGris: 3, covBuit: 0, covAltres: 97 }).kind === 'color');
+        ok('#222 decideKind: el GRIS mana si gris i buit passen alhora',
+            GZ.decideKind({ covGris: 40, covBuit: 60, covAltres: 0 }).kind === 'gris');
+        ok('#222 decideKind: sense dades → COLOR (col·locació de sempre)',
+            GZ.decideKind(null).kind === 'color');
+
+        var kS1 = GZ.decideKindSeries([{ covGris: 90, covBuit: 0, covAltres: 10 },
+            { covGris: 88, covBuit: 0, covAltres: 12 }, { covGris: 1, covBuit: 0, covAltres: 99 }]);
+        ok('#222 decideKindSeries: majoria de mostres grises → GRIS', kS1.kind === 'gris' && kS1.votes.gris === 2,
+            JSON.stringify(kS1.votes));
+        ok('#222 decideKindSeries: 3 mostres buides → BUIT',
+            GZ.decideKindSeries([{ covBuit: 90 }, { covBuit: 88 }, { covBuit: 95 }]).kind === 'buit');
+        var kS3 = GZ.decideKindSeries([{ covGris: 90, covBuit: 0, covAltres: 10 },
+            { covGris: 0, covBuit: 90, covAltres: 10 }, { covGris: 0, covBuit: 0, covAltres: 100 }]);
+        ok('#222 decideKindSeries: sense majoria decidixen les MEDIANES (gris 0 · buit 0) → COLOR',
+            kS3.kind === 'color', JSON.stringify(kS3.kind));
+        ok('#222 decideKindSeries: sense mostres → null', GZ.decideKindSeries([]).kind === null);
+        ok('#222 median: nombre PARE de mostres → la BAIXA', GZ.median([1, 5, 9, 9]) === 5 && GZ.median([]) === null);
+
+        // ── A3-bis. PLACA GRISA CLARA **o** FOSCA (2026-11-05 · #222 · usuari) ──
+        // «El gris del tercio inferior puede ser claro u oscuro»: el peu del
+        // grafisme no sempre és #D9D9D9; també n'hi ha amb la placa FOSCA
+        // (#333–#808080). El filtre ha de comptar les DOS com a `gris`, sense
+        // confondre amb placa una foto fosca (que té TO: els canals no coincidixen).
+        var fD = { lo: GZ.DEFAULTS.foscLo, hi: GZ.DEFAULTS.foscHi, spread: GZ.DEFAULTS.foscSpread };
+        ok('#222 la recepta porta la banda del gris FOSC (36–128 · neutre ±20)',
+            fD.lo === 36 && fD.hi === 128 && fD.spread === 20, JSON.stringify(fD));
+        ok('#222 esGrisFosc: #4D4D4D (la placa fosca típica) SÍ que és placa',
+            GZ.esGrisFosc(77, 77, 77, fD) === true);
+        ok('#222 esGrisFosc: #333333 (el fosc més usual dels dissenys) SÍ que és placa',
+            GZ.esGrisFosc(51, 51, 51, fD) === true);
+        ok('#222 esGrisFosc: #808080 (el més clar de la família fosca) SÍ que és placa',
+            GZ.esGrisFosc(128, 128, 128, fD) === true);
+        ok('#222 esGrisFosc: el NEGRE de vídeo (5,5,5) NO és placa (ja compta com a BUIT)',
+            GZ.esGrisFosc(5, 5, 5, fD) === false);
+        ok('#222 esGrisFosc: un roig fosc 100/20/20 NO és placa (té to)',
+            GZ.esGrisFosc(100, 20, 20, fD) === false);
+        ok('#222 esGrisFosc: 40/40/65 NO és placa (desviació 25 > 20: té to)',
+            GZ.esGrisFosc(40, 40, 65, fD) === false);
+        ok('#222 esGrisFosc: el gris CLAR (#D9D9D9) NO passa per la banda fosca (té recepta pròpia ±25)',
+            GZ.esGrisFosc(217, 217, 217, fD) === false);
+        ok('#222 esGrisFosc: sense opcions cau als DEFAULTS i no peta amb valors rars',
+            GZ.esGrisFosc(77, 77, 77) === true && GZ.esGrisFosc('x', 1, 2) === false);
+        ok('#222 llum: promig dels tres canals', GZ.llum(0, 0, 255) === 85 && GZ.llum(217, 217, 217) === 217);
+
+        // 2x2 rgba: placa CLARA · placa FOSCA · negre de vídeo · transparent
+        var bufPF = [217, 217, 217, 255, 77, 77, 77, 255, 0, 0, 0, 255, 0, 0, 0, 0];
+        var aPF = GZ.analyseRGBA(bufPF, 2, 2, RGB_PLACA, 25, 20, fD);
+        ok('#222 analyseRGBA: la placa CLARA i la FOSCA compten igual (gris 50 %)',
+            !!aPF && aPF.covGris === 50, JSON.stringify(aPF));
+        ok('#222 analyseRGBA: desglòs clar 25 % · fosc 25 % (el que ix al log)',
+            !!aPF && aPF.covGrisClar === 25 && aPF.covGrisFosc === 25, JSON.stringify(aPF));
+        ok('#222 analyseRGBA: la placa fosca NO trenca el sac del buit (50 %: 25 negre + 25 alfa)',
+            !!aPF && aPF.covBuit === 50 && aPF.buitNegre === 25 && aPF.buitAlpha === 25, JSON.stringify(aPF));
+        // una foto fosca NO és placa: tots els píxels tenen to o cauen fora de la banda
+        var bufFoto = [100, 20, 20, 255, 40, 40, 65, 255, 200, 10, 10, 255, 250, 250, 250, 255];
+        var aFt = GZ.analyseRGBA(bufFoto, 2, 2, RGB_PLACA, 25, 20, fD);
+        ok('#222 analyseRGBA: una foto FOSCA no compta com a placa (0 % gris · 100 % altres)',
+            !!aFt && aFt.covGris === 0 && aFt.covAltres === 100, JSON.stringify(aFt));
+        ok('#222 decideKind: eixa foto és COLOR (la placa fosca no s\'inventa)',
+            GZ.decideKind(aFt).kind === 'color');
+        // una tongada amb la placa FOSCA (3 mostres) → GRIS
+        var bufPlFosc = [77, 77, 77, 255, 70, 72, 74, 255, 120, 120, 120, 255, 85, 85, 85, 255];
+        var sPF = GZ.analyseSeriesRGBA(bufPlFosc.concat(bufPlFosc, bufPlFosc), 2, 2, RGB_PLACA, 25, 20, fD);
+        var kPF = GZ.decideKindSeries(sPF || []);
+        ok('#222 placa FOSCA en 3 mostres → TIPUS gris (el flux la portarà a V3)',
+            kPF.kind === 'gris' && kPF.medGris === 100 && kPF.medBuit === 0,
+            JSON.stringify(kPF.votes));
+        ok('#222 analyseSeriesRGBA: el paràmetre de la placa fosca és OPCIONAL (defaults)',
+            (GZ.analyseRGBA(bufPF, 2, 2, RGB_PLACA, 25, 20) || {}).covGris === 50);
 
         // ── B. FLUX DE LA PALETA (flow_mapa) ───────────────────────────────
         var MAPA = UI.Workflows.Mapa;
@@ -412,10 +526,27 @@
                 !/if \(zona && zona\.hasGrey\) \{\s*var rng/.test(src) &&
                 /\} else \{\s*var mov = await this\._mascaraAParking\(rng, TRACK_MASCARA, TRACK_GRAF\);/.test(src),
                 'la pista es decidix només per si s\'ha pogut moure la màscara');
-            ok('#202 _placeClips: abans de moure la màscara neteja les restes del bloc a V2 i V3',
+            ok('#202 _placeClips: abans de moure la màscara neteja les restes del bloc a V2, V3 i V4',
                 /_cleanupTrack\(TRACK_MASCARA, gNums0\)/.test(src) &&
-                /_cleanupTrack\(TRACK_GRAF, gNums0\)/.test(src) &&
-                src.indexOf('_cleanupTrack(TRACK_GRAF, gNums0)') < src.indexOf('_mascaraAParking'));
+                /_cleanupTrack\(TRACK_GRAF, gNums0\.concat\(\[FONS_PNG\]\)\)/.test(src) &&
+                /_cleanupTrack\(TRACK_GRAF_ALT, gNums0\)/.test(src) &&
+                src.indexOf('_cleanupTrack(TRACK_GRAF_ALT, gNums0)') < src.indexOf('_mascaraAParking'));
+            ok('#222 _placeClips: el TIPUS es resol abans de decidir la pista (_grafTipus)',
+                /var tp = await this\._grafTipus\(items, ctx\);/.test(src) &&
+                src.indexOf('_grafTipus(items, ctx)') < src.indexOf('_mascaraAParking'));
+            ok('#222 _placeClips: gris → grafisme a V3 sense moure la màscara (GRAF_TERCIO_V3)',
+                /if \(tipus === 'gris'\) \{/.test(src) &&
+                /Terç gris → grafisme a V' \+ tGraf/.test(src) &&
+                /tGraf = TRACK_GRAF;/.test(src));
+            ok('#222 _placeClips: buit → grafisme a V4 (damunt la màscara) amb _trackFreeIn',
+                /if \(tipus === 'buit'\) \{/.test(src) &&
+                /_trackFreeIn\(TRACK_GRAF_ALT, rng, refSec\)/.test(src) &&
+                /tGraf = TRACK_GRAF_ALT;/.test(src));
+            ok('#222 _placeClips: V4 ocupada → el grafisme cau a V3 (no bloqueja el flux)',
+                /V' \+ TRACK_GRAF_ALT \+ ' ocupada a l/.test(src));
+            ok('#222 _placeClips: terç BUIT → PNG de fons amb el mateix rang [refSec, grafEnd]',
+                /if \(tipus === 'buit'\) \{/.test(src) &&
+                /_placeFonsTerç\(refSec, grafEnd, rng\)/.test(src));
             ok('#199 _freezeGrafEnd accepta la pista del grafisme (el congelat no cau sempre a V3)',
                 /var tG = \(trackIdx != null\) \? trackIdx : TRACK_GRAF;/.test(String(MAPA._freezeGrafEnd)) &&
                 /_freezeGrafEnd\(lastItem\.name, grafEnd, endLimit, tGraf\)/.test(src));
@@ -423,21 +554,69 @@
                 /tGraf === TRACK_MASCARA && rngGris && rngGris\.b != null/.test(src) &&
                 /endLimit = rngGris\.b;/.test(src) && /space = Math\.max\(0, endLimit - refSec\);/.test(src));
 
-            var savedDetect = GZ.detect;
-            GZ.detect = async function (p) {
-                return { ok: true, hasGrey: String(p).indexOf('ATUR') !== -1, cov: 99, cached: false };
+            var savedKind = GZ.detectKind;
+            GZ.detectKind = async function (p) {
+                var s = String(p);
+                if (s.indexOf('ATUR') !== -1) return { ok: true, kind: 'gris', covGris: 92.2, covBuit: 0, covAltres: 7.8, cached: false };
+                if (s.indexOf('BUIT') !== -1) return { ok: true, kind: 'buit', covGris: 0, covBuit: 88.4, covAltres: 11.6, cached: false };
+                if (s.indexOf('FOTO') !== -1) return { ok: true, kind: 'color', covGris: 3.1, covBuit: 0, covAltres: 96.9, cached: false };
+                return { ok: false, kind: null, err: 'mesura fallida' };
             };
-            var z1 = await MAPA._zonaGris([{ name: 'ATUR EPA CATALUNYA.mov' }],
-                { picked: [{ name: 'ATUR EPA CATALUNYA.mov', full: '\\\\nas\\27 OCTUBRE\\ATUR EPA CATALUNYA.mov' }] });
+            function pk(n) { return { picked: [{ name: n, full: '\\\\nas\\27 OCTUBRE\\' + n }] }; }
+            var t1 = await MAPA._grafTipus([{ name: 'ATUR EPA CATALUNYA.mov' }], pk('ATUR EPA CATALUNYA.mov'));
+            ok('#222 _grafTipus: placa grisa → tipus GRIS (la màscara no es mou)',
+                !!t1 && t1.kind === 'gris' && t1.covGris === 92.2, JSON.stringify(t1));
+            var t2 = await MAPA._grafTipus([{ name: 'TUITS BUIT.mov' }], pk('TUITS BUIT.mov'));
+            ok('#222 _grafTipus: terç transparent → tipus BUIT (cal PNG de fons a V3)',
+                !!t2 && t2.kind === 'buit', JSON.stringify(t2));
+            var t3 = await MAPA._grafTipus([{ name: 'FOTO SANG.mov' }], pk('FOTO SANG.mov'));
+            ok('#222 _grafTipus: foto/altres colors → tipus COLOR (màscara V2→V3)',
+                !!t3 && t3.kind === 'color', JSON.stringify(t3));
+            var t4 = await MAPA._grafTipus([{ name: 'ATUR EPA.mov' }, { name: 'FOTO SANG.mov' }], { picked: [
+                { name: 'ATUR EPA.mov', full: '\\\\nas\\27 OCTUBRE\\ATUR EPA.mov' },
+                { name: 'FOTO SANG.mov', full: '\\\\nas\\27 OCTUBRE\\FOTO SANG.mov' }] });
+            ok('#222 _grafTipus: tongada BARRREJADA → mana COLOR (el resultat continua bo per als altres)',
+                !!t4 && t4.kind === 'color', JSON.stringify(t4 && t4.kind));
+            var t5 = await MAPA._grafTipus([{ name: 'RAR.mov' }], { picked: [] });
+            ok('#222 _grafTipus: si no sap la ruta original → null (no inventa cap tipus)', t5 === null);
+            var t6 = await MAPA._grafTipus([{ name: 'ZERO.mov' }], pk('ZERO.mov'));
+            ok('#222 _grafTipus: mesura FALLIDA (ok:false) → null (col·locació de sempre)', t6 === null);
+
+            var z1 = await MAPA._zonaGris([{ name: 'ATUR EPA CATALUNYA.mov' }], pk('ATUR EPA CATALUNYA.mov'));
             ok('#199 _zonaGris: mesura el FITXER original (ruta del picked) → AMB zona grisa',
-                !!z1 && z1.hasGrey === true, JSON.stringify(z1));
-            var z2 = await MAPA._zonaGris([{ name: 'ALTRE GRAFISME.mov' }],
-                { picked: [{ name: 'ALTRE GRAFISME.mov', full: '\\\\nas\\27 OCTUBRE\\ALTRE GRAFISME.mov' }] });
+                !!z1 && z1.hasGrey === true && z1.kind === 'gris', JSON.stringify(z1));
+            var z2 = await MAPA._zonaGris([{ name: 'FOTO SANG.mov' }], pk('FOTO SANG.mov'));
             ok('#199 _zonaGris: sense zona grisa → hasGrey=false (ara només INFO al log)',
                 !!z2 && z2.hasGrey === false, JSON.stringify(z2));
             var z3 = await MAPA._zonaGris([{ name: 'RAR.mov' }], { picked: [] });
             ok('#199 _zonaGris: si no sap la ruta original → null (no inventa cap veredicte)', z3 === null);
-            GZ.detect = savedDetect;
+            GZ.detectKind = savedKind;
+
+            // ── B4. TIPUS: pista LLIURE + PNG de fons del terç transparent ──
+            setTrack(2, [{ name: 'MASCARA', start: 0, end: 100 }]);
+            setTrack(3, []);
+            setTrack(4, []);
+            var freeA = await MAPA._trackFreeIn(4, { a: 10, b: 40 }, 10);
+            ok('#222 _trackFreeIn: V4 buida a l\'ítem → true (el grafisme hi pot anar)', freeA === true);
+            setTrack(4, [{ name: 'ALTRE GRAFISME', start: 12, end: 20 }]);
+            var freeB = await MAPA._trackFreeIn(4, { a: 10, b: 40 }, 10);
+            ok('#222 _trackFreeIn: V4 ocupada DINS de l\'ítem → false (cau a V3)', freeB === false);
+            setTrack(4, [{ name: 'ALTRE GRAFISME', start: 50, end: 60 }]);
+            var freeC = await MAPA._trackFreeIn(4, { a: 10, b: 40 }, 10);
+            ok('#222 _trackFreeIn: material FORA de l\'ítem no bloqueja', freeC === true);
+            setTrack(4, []);
+            var fonsA = await MAPA._placeFonsTerç(10, 40, { a: 10, b: 40 });
+            ok('#222 _placeFonsTerç: V3 buida → desa el PNG de fons amb el rang del grafisme',
+                !!fonsA && fonsA.ok === true && fonsA.name === '3CatInfo_VERTICALITZACIO_Fons-per-videos.png' &&
+                fonsA.start === 10 && fonsA.end === 40, JSON.stringify(fonsA));
+            setTrack(3, [{ name: 'ALTRE BLOC', start: 20, end: 30 }]);
+            var fonsB = await MAPA._placeFonsTerç(10, 40, { a: 10, b: 40 });
+            ok('#222 _placeFonsTerç: V3 ocupada → DESTI_OCUPAT, mai pisa un altre bloc',
+                !!fonsB && fonsB.ok === false && fonsB.err === 'DESTI_OCUPAT', JSON.stringify(fonsB));
+            setTrack(3, []);
+            var fonsC = await MAPA._placeFonsTerç(10, 10.01, { a: 10, b: 40 });
+            ok('#222 _placeFonsTerç: rang massa curt → no col·loca res',
+                !!fonsC && fonsC.ok === false && fonsC.err === 'rang massa curt');
 
             // ── C. PALETA: CABEZAL + CARPETA DEL DIA (2026-11-03 · #233) ──────
             // (1) El flux manual ja NO ancora el grafisme a cap marcador: mana el cabezal.

@@ -198,6 +198,30 @@
                 /button\.btn-busy > \*\s*\{[^}]*display: none !important/.test(css) &&
                 /content: "\\23F3";/.test(css) &&
                 /button\.btn-busy\.icon-only/.test(css));
+
+            // ── C1b) #243 / #244 (2026-11-05) · EL BOTÓ DIU LA VERITAT ───────────
+            // Dos defectes que es van vore junts en obrir un projecte del NAS
+            // (TNC V1, log del 05/11 14:28: el log deia UPDATE i el botó, OBRIR):
+            //  · #243: `checkContext` repinta el botó MAIN a mig flux (`updateButton`
+            //    → «ACTUAL.») i el `clearBtnBusy` de tancament li tornava a posar
+            //    l'etiqueta VELLA («OBRIR», la del moment del clic) → el panell i el
+            //    log en desacord, i el clic següent tornava a obrir el projecte.
+            //  · #244: `Context.list()` (pont JSX `getOpenNames`) retorna un ARRAY
+            //    DE STRINGS; `project_registry.js` llegia `.name` → `_isCompatible
+            //    (undefined)` petava DINS del `try` del poll i el cicle moria en
+            //    silenci: mai ancorava el projecte (`activeProjectName` null → el
+            //    guardià de 15 s desancorava `State.projectDateDir`) i mai habilitava
+            //    els botons de flux.
+            ok('#243 main.js: `clearBtnBusy` NO trepitja un repintat fet mentres durava la tasca',
+                /repainted/.test(mj) && /if \(!repainted\) btn\.innerHTML = btn\.dataset\.busyHtml/.test(mj) &&
+                /btn\.dataset\.busyOff === '0' && !repainted/.test(mj));
+            var pr = noComments(SRCS['js/core/project_registry.js'] || '');
+            ok('#244 project_registry: llig els noms de `Context.list()` siguen STRINGS o objectes (`_nameOf`)',
+                /_nameOf: function/.test(pr) && /typeof p === 'string'/.test(pr) &&
+                /this\._nameOf\(p\)/.test(pr) && /this\._nameOf\(projects\[0\]\)/.test(pr) &&
+                !/_isCompatible\(p\.name\)/.test(pr) && !/projects\[0\]\.name/.test(pr));
+            ok('#244 project_registry: `_isCompatible` no pot petar amb un nom buit o no-string',
+                /typeof projectName !== 'string' \|\| !projectName/.test(pr));
             var html = String(SRCS['index.html'] || '');
             var verOf = function (rel) {
                 var m3 = new RegExp(rel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\?v=(\\d+)').exec(html);

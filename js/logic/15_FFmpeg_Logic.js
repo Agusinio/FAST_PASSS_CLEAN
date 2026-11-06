@@ -483,7 +483,9 @@
          * el PNG resultant és BYTE A BYTE IDÈNTIC (md5 igual a t = 74/75/76 i 27/142/160).
          *
          * @param {string} sourcePath - MP4 (cleanFeed)
-         * @param {Object} o - { tStart, tDur, roiY:[a,b], roiX:[a,b], w, h, fps, outPath }
+         * @param {Object} o - { tStart, tDur, roiY:[a,b], roiX:[a,b], w, h, fps, pixFmt, outPath }
+         *   `pixFmt` (2026-11-05): 'rgb24' per defecte (3 bytes/píxel) · 'rgba' per a mesurar
+         *   també l'ALFA (`GrafZonaGris.detectKind`, classificació del terç inferior).
          * @returns {Promise<{ok:boolean, path:string, w:number, h:number, fps:number, error?:string}>}
          */
         extractRoiSeries: async function (sourcePath, o) {
@@ -513,9 +515,15 @@
                 const vf = 'crop=iw*' + xW.toFixed(4) + ':ih*' + yH.toFixed(4) +
                     ':iw*' + x0.toFixed(4) + ':ih*' + y0.toFixed(4) +
                     ',scale=' + w + ':' + h + ':flags=area,fps=' + fps;
+                // (2026-11-05 · GRAF_TERCIO_TIPUS) `opts.pixFmt`: per defecte `rgb24` (3 bytes
+                // per píxel, el que esperen `TitoletDetect.analyzeRect` i `GrafZonaGris.detect`).
+                // La classificació per TIPUS de terç inferior (`GrafZonaGris.detectKind`) demana
+                // `rgba` per a poder mesurar el canal ALFA: un grafisme exportat AMB alpha té el
+                // terç inferior buit en alpha 0 i el `.raw` rgb24 l'amagaria.
+                const pixFmt = opts.pixFmt || 'rgb24';
                 let psContent = '& "' + ffmpegBin + '" -ss ' + (opts.tStart || 0) +
                     ' -t ' + opts.tDur + ' -i "' + sourcePath + '" -vf "' + vf +
-                    '" -pix_fmt rgb24 -f rawvideo -an -y "' + outPath + '"\r\n';
+                    '" -pix_fmt ' + pixFmt + ' -f rawvideo -an -y "' + outPath + '"\r\n';
                 psContent += 'if (Test-Path "' + outPath + '") { Write-Output "OK" > "' + doneFile +
                     '" } else { Write-Output "FAIL:exit=$LASTEXITCODE" > "' + doneFile + '" }\r\n';
 

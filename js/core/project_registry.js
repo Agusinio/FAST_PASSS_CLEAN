@@ -19,12 +19,36 @@
         activeProjectName: null,
 
         /**
+         * _nameOf: (2026-11-05 · #244) Nom d'un element de `Context.list()`.
+         *
+         * PER QUÈ EXISTIX: `Context.list()` (pont JSX → `Context.getOpenNames`)
+         * retorna un ARRAY DE STRINGS ('["Pruebas_TNC_V1_….prproj", …]'), però este
+         * mòdul llegia `p.name` i `projects[0].name` com si foren OBJECTES. Amb
+         * `p.name` = undefined, `_isCompatible(undefined)` petava a `.toLowerCase()`
+         * DINS del `try` del poll i el cicle moria **en silenci** cada 2 s:
+         *   · el projecte no s'ancorava mai (`activeProjectName` sempre null → el
+         *     guardià de 15 s de `main.js` desancorava `State.projectDateDir` i
+         *     `lastOpenedProjectName` just després d'obrir un projecte),
+         *   · els botons de flux no s'habilitaven (`_setWorkflowEnabled`),
+         *   · el botó MAIN no es repintava en canviar de projecte.
+         * S'accepten les dos formes (string o `{name}`) perquè el contracte el fixa
+         * el pont i no volem que torne a trencar-se en silenci.
+         */
+        _nameOf: function (p) {
+            if (!p) return null;
+            if (typeof p === 'string') return p;
+            return p.name || null;
+        },
+
+        /**
          * Comprova si un nom de projecte de Premiere és compatible.
          * "Compatible" = el nom conté el keyword de algun programa definit a config.
          */
         _isCompatible: function (projectName) {
             const cfg = FASTPASS_UI.Config.get();
             if (!cfg || !cfg.mapeoProgramas) return false;
+            // (#244) Guarda: un nom buit o no-string no pot arribar a `.toLowerCase()`.
+            if (typeof projectName !== 'string' || !projectName) return false;
             for (var key in cfg.mapeoProgramas) {
                 var prog = cfg.mapeoProgramas[key];
                 var tokenArchivo = prog.archivo.toLowerCase();
@@ -77,14 +101,15 @@
                 // 1. Actualitzar la taula de projectes compatibles
                 this.table = {};
                 for (const p of projects) {
-                    if (this._isCompatible(p.name)) {
-                        this.table[p.name] = p;
+                    const pName = this._nameOf(p);   // (#244) string o {name}
+                    if (pName && this._isCompatible(pName)) {
+                        this.table[pName] = p;
                     }
                 }
 
                 // 2. Detectar quin és l'actiu de Premiere (el primer de la llista des de l'API)
                 // Premiere retorna els projectes en l'ordre en que l'usuari hi ha fet focus
-                const currentPremiereFocusName = projects[0] ? projects[0].name : null;
+                const currentPremiereFocusName = this._nameOf(projects[0]);
 
                 // 3. Si el projecte en focus no ha canviat, no fem res
                 if (currentPremiereFocusName === this.activeProjectName) return;

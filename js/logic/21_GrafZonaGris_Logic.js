@@ -1,6 +1,34 @@
 /* ============================================================================
- * LOGIC: GRAF ZONA GRIS - v1.0.0 (2026-10-28)
- * Detecció de la ZONA GRISA del peu d'un grafisme (Paleta 🎨 → flow_mapa.js)
+ * LOGIC: GRAF ZONA GRIS - v1.1.1 (2026-11-05)
+ * Detecció del TIPUS de terç inferior d'un grafisme (Paleta 🎨 → flow_mapa.js)
+ * ----------------------------------------------------------------------------
+ * (2026-11-05 · GRAF_TERCIO_TIPUS) El mòdul ja no respon només «té zona grisa?»:
+ * classifica el grafisme en TRES tipus i el flux decidix la pista de cada un:
+ *   · `gris`  → el terç inferior és la franja grisa de la placa (CLARA #D9D9D9
+ *               o FOSCA #333–#808080) → el grafisme va a V4 (`graficos`+1), PER
+ *               DAMUNT de la màscara, que es queda a V2 sense moure's;
+ *   · `color` → el terç inferior porta FOTO o altres colors → la màscara puja de
+ *               V2 a V3 i el grafisme va a V2 (comportament des del 28/10);
+ *   · `buit`  → el terç inferior no té res (ALFA transparent o negre de vídeo) →
+ *               el grafisme va a V4 i davall mateix s'hi posa el PNG de fons a V3.
+ * Les receptes (`detect` rgb24 i `detectKind` rgba) són independents i tenen
+ * caché pròpia: `detect` continua sent el que fa servir el flux de TWITTS.
+ *
+ * (2026-11-05 · #222 · petició d'usuari) El GRIS del peu pot ser **CLAR**
+ * (`#D9D9D9`, la recepta de sempre) o **FOSC** (`#333`–`#808080`): hi ha dissenys
+ * del canal amb la placa fosca. La recepta del TIPUS compta les DOS com a placa
+ * (`covGris` = `covGrisClar` + `covGrisFosc`). El gris fosc NO es busca per color
+ * fix sinó per **neutre + banda de lluminositat** (`esGrisFosc`): una foto a
+ * fosques té milers de píxels al voltant de `#4D4D4D` i un color fix se la
+ * menjaria sencera.
+ *
+ * NOTA DE CAMP (05/11, confirmada per l'usuari): SÍ que hi ha grafismes amb
+ * transparència de veritat — QuickTime **Animation (qtrle) amb canal alfa**
+ * (`bgra`). Per això la recepta del TIPUS demana `rgba` a `extractRoiSeries`
+ * (`pixFmt:'rgba'`): mesurat amb un Animation sintètic, la franja inferior dóna
+ * **alfa 0 = 100 % → `buit`**, mentres que el MATEIX clip exportat sense alfa
+ * (`rgb24`, alfa opaca) dóna **alfa 0 = 0 % · altres 100 % → `color`** (cap fals
+ * positiu). El desglòs «alfa 0 / negre» ix al log de cada mesura.
  * ----------------------------------------------------------------------------
  * QUÈ RESOL: a la carpeta del dia hi ha DOS tipus de grafisme:
  *   · els que omplin el frame o porten un fons opac → van a la pista de
@@ -44,6 +72,15 @@
     var CACHE_FILE = 'C:\\temp\\fp_graf_zona_cache.json';
     var CACHE_MAX = 400;                       // entrades; en passar-ne, es buida
 
+    // ── (2026-11-05 · GRAF_TERCIO_TIPUS) Classificació per TIPUS de terç inferior ──
+    // Recepta PRÒPIA (rgba, per a vore l'alfa) i caché PRÒPIA: així `detect`
+    // (rgb24, el que fa servir el flux de TWITTS) no canvia gens ni mica.
+    // (2026-11-05 · #222) k2: la placa pot ser CLARA o FOSCA → la caché de k1
+    // (que només coneixia el gris clar) queda invalidada per la clau.
+    var KIND_VER = 'k2';
+    var KIND_CACHE_FILE = 'C:\\temp\\fp_graf_tipus_cache.json';
+    var KIND = { GRIS: 'gris', COLOR: 'color', BUIT: 'buit' };
+
     var DEFAULTS = {
         tSec: 3,            // instant CENTRAL de la finestra (només per als logs)
         tStart: 2,          // inici de la finestra de mostres (intro ja acabada)
@@ -51,9 +88,19 @@
         fps: 1,             // 1 mostra per segon → 3 frames (t = 2, 3 i 4 s)
         roiY: [0.60, 1.00], // FRANJA INFERIOR del frame
         roiX: null,         // null = tot l'ample
-        color: '#D9D9D9',   // gris de la placa (mesurat)
+        color: '#D9D9D9',   // gris CLAR de la placa (mesurat)
         tol: 25,            // ±25 per canal (igual que TitoletDetect)
+        // ── (#222 · 2026-11-05) PLACA FOSCA: la placa també pot ser grisa FOSCA ──
+        // No es busca per color fix (una foto a fosques és tota ella #4D4D4D) sinó
+        // per NEUTRE (desviació entre canals ≤ `foscSpread`) + BANDA de lluminositat
+        // [`foscLo`, `foscHi`]. `foscLo` va per damunt de `negreMax` perquè el negre
+        // de vídeo ja compta com a BUIT; `foscHi` es queda per davall del gris clar.
+        foscLo: 36,         // lluminositat mínima del gris fosc (#333333 ≈ 51)
+        foscHi: 128,        // lluminositat màxima del gris fosc (#808080 = 128)
+        foscSpread: 20,     // desviació MÀXIMA entre canals per dir «gris neutre»
         minCov: 30,         // % mínim de la franja per dir «té zona grisa»
+        minBuit: 50,        // % mínim de franja BUIDA (alfa 0 o negre) per dir «terç buit»
+        negreMax: 20,       // canal ≤ este valor (0-255) = negre de vídeo (alfa opaca)
         w: 64, h: 64        // graella de mostreig
     };
 
@@ -311,6 +358,186 @@
         return out.length ? out : null;
     }
 
+    // ════════════════════════════════════════════════════════════════════════
+    // TIPUS DE TERÇ INFERIOR (2026-11-05 · GRAF_TERCIO_TIPUS) — PURES
+    // ════════════════════════════════════════════════════════════════════════
+    /**
+     * median: (PURA) mediana d'una llista de nombres; amb un nombre PARE de
+     * mostres es pren la BAIXA (conservador, igual que `decideSeries`).
+     */
+    function median(list) {
+        var v = [];
+        for (var i = 0; i < ((list && list.length) || 0); i++) {
+            if (isFinite(list[i])) v.push(Number(list[i]));
+        }
+        if (!v.length) return null;
+        v.sort(function (a, b) { return a - b; });
+        return v[Math.floor((v.length - 1) / 2)];
+    }
+
+    /**
+     * llum: (PURA) lluminositat 0-255 d'un píxel (promig dels tres canals; per als
+     * grisos neutres coincidix amb qualsevol ponderació, que és el cas que ens
+     * interessa).
+     */
+    function llum(r, g, b) {
+        return (Number(r) + Number(g) + Number(b)) / 3;
+    }
+
+    /**
+     * esGrisFosc: (PURA) este píxel és la PLACA GRISA FOSCA del terç inferior?
+     *
+     * (2026-11-05 · #222 · petició d'usuari: «el gris del tercio inferior puede ser
+     * claro o oscuro») El peu del grafisme pot dur la placa CLARA (#D9D9D9, la
+     * recepta de sempre a `analyseRGBA`) o FOSCA (#333–#808080). El gris fosc no
+     * es pot buscar amb una tolerància a un color fix: una foto nocturna té
+     * milers de píxels al voltant de #4D4D4D i se la menjaria. Per això es demanen
+     * DUES coses alhora:
+     *   1. NEUTRE → `max(r,g,b) − min(r,g,b) ≤ spread`: un gris no té to; una foto
+     *      (encara que siga fosca) sí (un roig fosc 100/20/20 té 80 de desviació);
+     *   2. BANDA → `foscLo ≤ lluminositat ≤ foscHi`: per damunt del NEGRE de vídeo
+     *      (`negreMax`, que ja compta com a BUIT) i per davall del gris clar.
+     * @param {number} r
+     * @param {number} g
+     * @param {number} b
+     * @param {Object} [f] - { lo, hi, spread } (`DEFAULTS` si falta)
+     * @returns {boolean}
+     */
+    function esGrisFosc(r, g, b, f) {
+        if (!isFinite(r) || !isFinite(g) || !isFinite(b)) return false;
+        var c = f || {};
+        var lo = isFinite(c.lo) ? Number(c.lo) : DEFAULTS.foscLo;
+        var hi = isFinite(c.hi) ? Number(c.hi) : DEFAULTS.foscHi;
+        var sp = isFinite(c.spread) ? Number(c.spread) : DEFAULTS.foscSpread;
+        var mx = Math.max(r, g, b), mn = Math.min(r, g, b);
+        if (mx - mn > sp) return false;                 // té to → no és gris
+        var y = llum(r, g, b);
+        return (y >= lo && y <= hi);
+    }
+
+    /**
+     * analyseRGBA: (PURA) mesura d'UN frame en rgba cru (4 bytes per píxel).
+     * Reparteix la graella en tres sacs EXCLOUENTS:
+     *   · `covGris`   → píxels OPACS de la placa: CLARA (color `rgb` ±`tol` per
+     *                   canal) o FOSCA (`esGrisFosc`, #222 2026-11-05). Es
+     *                   desglossa en `covGrisClar` i `covGrisFosc` (diagnòstic);
+     *   · `covBuit`   → píxels BUIDS: alfa < 16 (grafisme exportat amb alpha) o
+     *                   negre de vídeo (les tres components ≤ `negreMax`), que és
+     *                   com queda un terç transparent quan l'export NO duu alfa;
+     *   · `covAltres` → la resta: foto, colors, text… (ni placa ni buit).
+     * Els tres percentatges sumen 100 (llevat d'arrodoniment).
+     *
+     * @param {Uint8Array|Array} buf - bytes RGBA (w*h*4)
+     * @param {Object} [fosc] - { lo, hi, spread } de la placa fosca (per defecte `DEFAULTS`)
+     * @returns {Object|null} { covGris, covGrisClar, covGrisFosc, covBuit, covAltres,
+     *                          buitAlpha, buitNegre, total }
+     */
+    function analyseRGBA(buf, w, h, rgb, tol, negreMax, fosc) {
+        if (!buf || !w || !h || !rgb) return null;
+        var need = w * h * 4;
+        if (buf.length < need) return null;
+        var nm = isFinite(negreMax) ? Number(negreMax) : DEFAULTS.negreMax;
+        var g = 0, gf = 0, b = 0, o = 0, a0 = 0, k0 = 0;
+        var total = w * h;
+        for (var p = 0; p < need; p += 4) {
+            var r = buf[p], gg = buf[p + 1], bb = buf[p + 2], al = buf[p + 3];
+            if (al < 16) { b++; a0++; continue; }                          // transparent
+            if (r <= nm && gg <= nm && bb <= nm) { b++; k0++; continue; }   // negre de vídeo
+            if (Math.abs(r - rgb.r) <= tol && Math.abs(gg - rgb.g) <= tol &&
+                Math.abs(bb - rgb.b) <= tol) { g++; continue; }             // placa CLARA
+            if (esGrisFosc(r, gg, bb, fosc)) { g++; gf++; continue; }       // placa FOSCA (#222)
+            o++;                                                           // foto / colors
+        }
+        return {
+            covGris: (g * 100) / total,
+            covGrisClar: ((g - gf) * 100) / total,
+            covGrisFosc: (gf * 100) / total,
+            covBuit: (b * 100) / total,
+            covAltres: (o * 100) / total,
+            buitAlpha: (a0 * 100) / total,
+            buitNegre: (k0 * 100) / total,
+            total: total
+        };
+    }
+
+    /**
+     * analyseSeriesRGBA: (PURA) `analyseRGBA` per a CADA frame del .raw rgba
+     * (diverses mostres encadenades). Els bytes que no completen un frame
+     * s'ignoren: mai es mesura mig frame.
+     * @returns {Array|null} [{ covGris, covGrisClar, covGrisFosc, covBuit, covAltres,
+     *                         buitAlpha, buitNegre }]
+     */
+    function analyseSeriesRGBA(buf, w, h, rgb, tol, negreMax, fosc) {
+        if (!buf || !w || !h || !rgb) return null;
+        var need = w * h * 4;
+        if (!need || buf.length < need) return null;
+        var n = Math.floor(buf.length / need);
+        var out = [];
+        for (var f = 0; f < n; f++) {
+            var from = f * need;
+            var part = (typeof buf.subarray === 'function')
+                ? buf.subarray(from, from + need)
+                : Array.prototype.slice.call(buf, from, from + need);
+            var a = analyseRGBA(part, w, h, rgb, tol, negreMax, fosc);
+            if (a) out.push(a);
+        }
+        return out.length ? out : null;
+    }
+
+    /**
+     * decideKind: (PURA) UN mostreig → tipus de terç inferior.
+     * ORDE DE PRIORITAT: gris → buit → color. El gris mana perquè la placa duu
+     * el text del disseny (si n'hi ha, el peu té contingut); i `color` és el
+     * destí per defecte (la col·locació de sempre, la més segura).
+     */
+    function decideKind(s, cfg) {
+        var c = cfg || DEFAULTS;
+        var minG = isFinite(c.minCov) ? Number(c.minCov) : DEFAULTS.minCov;
+        var minB = isFinite(c.minBuit) ? Number(c.minBuit) : DEFAULTS.minBuit;
+        var o = s || {};
+        var cg = Number(o.covGris) || 0;
+        var cb = Number(o.covBuit) || 0;
+        var co = Number(o.covAltres) || 0;
+        var kind = KIND.COLOR;
+        if (cg >= minG) kind = KIND.GRIS;
+        else if (cb >= minB) kind = KIND.BUIT;
+        return { kind: kind, covGris: cg, covBuit: cb, covAltres: co, minGris: minG, minBuit: minB };
+    }
+
+    /**
+     * decideKindSeries: (PURA) tipus de CADA mostra → tipus de la tongada.
+     * Mana la MAJORIA de les mostres (un frame de transició —un fundit— no canvia
+     * el veredicte). Si no hi ha majoria estricta, decidixen les MEDIANES de les
+     * tres cobertures, que és com mirar «el frame típic».
+     * @returns {Object} { kind, n, votes, medGris, medBuit, medAltres, samples }
+     */
+    function decideKindSeries(samples, cfg) {
+        var list = [];
+        for (var i = 0; i < ((samples && samples.length) || 0); i++) {
+            if (samples[i]) list.push(decideKind(samples[i], cfg));
+        }
+        if (!list.length) {
+            return { kind: null, n: 0, votes: {}, medGris: null, medBuit: null, medAltres: null, samples: [] };
+        }
+        var medGris = median(list.map(function (x) { return x.covGris; }));
+        var medBuit = median(list.map(function (x) { return x.covBuit; }));
+        var medAltres = median(list.map(function (x) { return x.covAltres; }));
+        var votes = { gris: 0, buit: 0, color: 0 };
+        for (var k = 0; k < list.length; k++) votes[list[k].kind]++;
+        var best = null, bestN = 0, kk;
+        for (kk in votes) {
+            if (!votes.hasOwnProperty(kk)) continue;
+            if (votes[kk] > bestN) { best = kk; bestN = votes[kk]; }
+        }
+        var kind;
+        if (bestN * 2 > list.length) kind = best;          // majoria estricta
+        else kind = decideKind({ covGris: medGris, covBuit: medBuit, covAltres: medAltres }, cfg).kind;
+        return {
+            kind: kind, n: list.length, votes: votes,
+            medGris: medGris, medBuit: medBuit, medAltres: medAltres, samples: list
+        };
+    }
+
     /** _base: nom del fitxer d'una ruta (només per als logs). */
     function _base(p) {
         var s = String(p || '');
@@ -424,6 +651,156 @@
         }
     }
 
+    /** logKind: una línia de log amb el veredicte de TIPUS (gris/buit/altres). */
+    function logKind(sourcePath, cfg, out, cached) {
+        var f = function (v) { return (isFinite(v) ? Number(v).toFixed(1) : '—'); };
+        var t0 = (cfg.tStart != null ? cfg.tStart : cfg.tSec);
+        // (2026-11-05) El «buit» pot vindre de l'ALFA (Animation/ProRes 4444 amb canal)
+        // o del NEGRE (un terç transparent exportat sense alfa). En viu cal saber-ho:
+        // si ix «buit» per negre en un grafisme que NO és transparent, el llindar
+        // `negreMax` s'ha de baixar. Es mostra el desglòs de la mostra TÍPICA.
+        var spl = '', sg = '';
+        try {
+            var ss = out.samples || [];
+            if (ss.length) {
+                var mid = ss[Math.floor((ss.length - 1) / 2)] || {};
+                spl = ' (alfa 0: ' + f(mid.buitAlpha) + ' % · negre: ' + f(mid.buitNegre) + ' %)';
+                // (2026-11-05 · #222) La placa pot ser CLARA (#D9D9D9) o FOSCA
+                // (#333–#808080): en viu cal vore de quina és, perquè si un grafisme
+                // amb placa fosca ix «altres» el que s'ha de tocar és `foscLo/Hi`.
+                if (isFinite(mid.covGrisFosc) && Number(mid.covGrisFosc) > 0) {
+                    sg = ' (clar: ' + f(mid.covGrisClar) + ' % · fosc: ' + f(mid.covGrisFosc) + ' %)';
+                }
+            }
+        } catch (eS) { spl = ''; sg = ''; }
+        log('🎨 [GRAF·tipus] «' + _base(sourcePath) + '» finestra ' + t0 + '→' + (t0 + cfg.tDur) +
+            's · franja y' + cfg.roiY[0].toFixed(2) + '→' + cfg.roiY[1].toFixed(2) +
+            ' · gris ' + f(out.covGris) + ' %' + sg + ' · buit ' + f(out.covBuit) + ' %' + spl +
+            ' · altres ' + f(out.covAltres) + ' %' +
+            ' → TIPUS ' + String(out.kind).toUpperCase() +
+            ' (gris≥' + cfg.minCov + ' · buit≥' + cfg.minBuit + ')' + (cached ? ' · caché' : ''));
+    }
+
+    /** kindCacheGet: entrada de la caché de TIPUS per a la clau donada (o null). */
+    async function kindCacheGet(key) {
+        var cTxt = null;
+        try { cTxt = await utils().callJSX('IO.readTxt(' + JSON.stringify(KIND_CACHE_FILE) + ')'); } catch (eC) { cTxt = null; }
+        var hit = cacheRead(cTxt)[key];
+        return (hit && typeof hit === 'object' && typeof hit.kind === 'string') ? hit : null;
+    }
+
+    /** kindCacheSave: desa el veredicte de TIPUS a la caché pròpia (best-effort). */
+    async function kindCacheSave(key, dec, cfg, info) {
+        if (cfg.force) return;
+        try {
+            var cTxt = await utils().callJSX('IO.readTxt(' + JSON.stringify(KIND_CACHE_FILE) + ')');
+            var txt = cachePut(cacheRead(cTxt), key, {
+                kind: dec.kind, covGris: dec.medGris, covBuit: dec.medBuit, covAltres: dec.medAltres,
+                n: dec.n, t: cfg.tSec, ver: KIND_VER,
+                size: (info && info.size), created: (info && info.created)
+            });
+            if (txt) await utils().callJSX('IO.writeTxt(' + JSON.stringify(KIND_CACHE_FILE) + ', ' + JSON.stringify(txt) + ')');
+        } catch (eW) {
+            log('⚠️ [GRAF·tipus] No puc desar la caché: ' + eW.message, 'WARN');
+        }
+    }
+
+    /**
+     * detectKind: QUIN TIPUS de terç inferior té el grafisme? 'gris' | 'color' | 'buit'
+     *
+     * (2026-11-05 · GRAF_TERCIO_TIPUS) Mesura la MATEIXA franja que `detect`, però en
+     * `rgba` (cal l'alfa) i repartint els píxels en tres sacs: placa grisa, buit i
+     * altres. Recepta i caché PRÒPIES: `detect` (rgb24, TWITTS) no canvia gens.
+     *
+     * @param {string} sourcePath - fitxer del grafisme (UNC o local)
+     * @param {Object} [o] - { tStart, tDur, fps, roiY, roiX, color, tol, minCov,
+     *                        minBuit, negreMax, w, h, force }
+     * @returns {Promise<{ok:boolean, kind:string|null, hasGrey:boolean, covGris:number|null,
+     *                    covBuit:number|null, covAltres:number|null, samples:Array,
+     *                    n:number, cached:boolean, key:string, err:string|null}>}
+     *   `ok:false` = no s'ha pogut MESURAR (no és el mateix que «és de color»).
+     */
+    async function detectKind(sourcePath, o) {
+        var cfg = opts(o);
+        var out = {
+            ok: false, kind: null, hasGrey: false,
+            covGris: null, covBuit: null, covAltres: null,
+            samples: [], n: 0, cached: false, key: '', err: null, t: cfg.tSec
+        };
+        if (!sourcePath) { out.err = 'sourcePath buit'; return out; }
+        try {
+            var info = await fileInfo(sourcePath);
+            if (!info.exists) {
+                out.err = 'fitxer no trobat';
+                log('⚠️ [GRAF·tipus] No trobo el fitxer: ' + sourcePath, 'WARN');
+                return out;
+            }
+            var fosc = { lo: cfg.foscLo, hi: cfg.foscHi, spread: cfg.foscSpread };
+            var key = cacheKey(sourcePath, info,
+                KIND_VER + '|g' + cfg.minCov + '|b' + cfg.minBuit + '|n' + cfg.negreMax + '|' + cfg.color +
+                '|f' + cfg.foscLo + '-' + cfg.foscHi + '/' + cfg.foscSpread);
+            out.key = key;
+
+            // ── 1. CACHÉ pròpia (ruta|mida|creació|recepta de TIPUS) ─────
+            if (!cfg.force) {
+                var hit = await kindCacheGet(key);
+                if (hit) {
+                    out.ok = true; out.cached = true;
+                    out.kind = hit.kind;
+                    out.hasGrey = (hit.kind === KIND.GRIS);
+                    out.covGris = (isFinite(hit.covGris) ? Number(hit.covGris) : null);
+                    out.covBuit = (isFinite(hit.covBuit) ? Number(hit.covBuit) : null);
+                    out.covAltres = (isFinite(hit.covAltres) ? Number(hit.covAltres) : null);
+                    logKind(sourcePath, cfg, out, true);
+                    return out;
+                }
+            }
+
+            // ── 2. MESURA rgba (l'alfa és el que delata el terç transparent) ──
+            var ff = ffmpegLogic();
+            if (!ff || typeof ff.extractRoiSeries !== 'function') {
+                out.err = 'FFmpeg.extractRoiSeries no disponible';
+                return out;
+            }
+            var raw = 'C:\\temp\\fp_graf_tipus_' + Date.now() + '.raw';
+            var res = await ff.extractRoiSeries(sourcePath, {
+                tStart: (cfg.tStart != null ? cfg.tStart : cfg.tSec),
+                tDur: cfg.tDur, fps: cfg.fps,
+                roiY: cfg.roiY, roiX: cfg.roiX,
+                w: cfg.w, h: cfg.h, outPath: raw, pixFmt: 'rgba'
+            });
+            if (!res || !res.ok) {
+                out.err = 'ffmpeg: ' + ((res && res.error) || 'extracció fallida');
+                log('⚠️ [GRAF·tipus] No puc extraure el frame de «' + _base(sourcePath) + '»: ' + out.err, 'WARN');
+                return out;
+            }
+            var buf = readBinary(raw);
+            try { await utils().callJSX('IO.remove(' + JSON.stringify(raw) + ')'); } catch (eR) { }
+            if (!buf) { out.err = 'no puc llegir el frame extret'; return out; }
+
+            var covs = analyseSeriesRGBA(buf, cfg.w, cfg.h, cfg.rgb, cfg.tol, cfg.negreMax, fosc);
+            if (!covs) { out.err = 'frame massa curt per a la graella ' + cfg.w + 'x' + cfg.h; return out; }
+
+            // ── 3. VEREDICTE (majoria de mostres) + CACHÉ ───────────────
+            var dec = decideKindSeries(covs, cfg);
+            out.ok = true;
+            out.kind = dec.kind;
+            out.hasGrey = (dec.kind === KIND.GRIS);
+            out.covGris = dec.medGris;
+            out.covBuit = dec.medBuit;
+            out.covAltres = dec.medAltres;
+            out.samples = covs;
+            out.n = dec.n;
+            logKind(sourcePath, cfg, out, false);
+            await kindCacheSave(key, dec, cfg, info);
+            return out;
+        } catch (e) {
+            out.err = e.message;
+            log('❌ [GRAF·tipus] detectKind: ' + e.message, 'ERROR');
+            return out;
+        }
+    }
+
     Logic.GrafZonaGris = {
         // ── pures (prova headless) ──
         hexToRgb: hexToRgb,
@@ -435,12 +812,24 @@
         cachePut: cachePut,
         analyse: analyse,
         analyseSeries: analyseSeries,
+        // ── tipus de terç inferior (2026-11-05) ──
+        median: median,
+        llum: llum,
+        esGrisFosc: esGrisFosc,
+        analyseRGBA: analyseRGBA,
+        analyseSeriesRGBA: analyseSeriesRGBA,
+        decideKind: decideKind,
+        decideKindSeries: decideKindSeries,
         // ── orquestració (CEP: ffmpeg + IO) ──
         fileInfo: fileInfo,
         detect: detect,
+        detectKind: detectKind,
         // ── constants (diagnòstic) ──
         VER: VER,
         CACHE_FILE: CACHE_FILE,
+        KIND: KIND,
+        KIND_VER: KIND_VER,
+        KIND_CACHE_FILE: KIND_CACHE_FILE,
         DEFAULTS: DEFAULTS
     };
 })();

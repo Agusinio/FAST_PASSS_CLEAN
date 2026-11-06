@@ -249,8 +249,8 @@
                 /if \(placeEnd !== null && \(placeEnd - slot\.start\) > REV_FRAME \+ 0\.001\) \{/.test(chySrc) &&
                 /placeEnd = gridDown\(placeEnd - REV_FRAME\);/.test(chySrc));
             var idxW = await readRepo('index.html');
-            ok('#WOTT/24 cache-bust al dia (4_Context 34, flow_chyrons, Scanner 27)',
-                /4_Context\.js\?v=34/.test(idxW) && /flow_chyrons\.js\?v=99/.test(idxW) &&
+            ok('#WOTT/24 cache-bust al dia (4_Context 35, flow_chyrons, Scanner 27)',
+                /4_Context\.js\?v=35/.test(idxW) && /flow_chyrons\.js\?v=99/.test(idxW) &&
                 /Scanner\.js\?v=27/.test(idxW),
                 (idxW.match(/4_Context\.js\?v=\d+/) || '') + ' ' +
                 (idxW.match(/flow_chyrons\.js\?v=\d+/) || '') + ' ' +
@@ -502,8 +502,8 @@
                 /else if \(escReady\) \{/.test(ctxSrc) &&
                 ctxSrc.indexOf('CREA: escaleta local') > 0);
 
-            ok('#WOTT/39 cache-bust del #182 i del #238 (4_Context 34 · Scanner 27)',
-                /4_Context\.js\?v=34/.test(idxW) && /Scanner\.js\?v=27/.test(idxW),
+            ok('#WOTT/39 cache-bust del #182 i del #238 (4_Context 35 · Scanner 27)',
+                /4_Context\.js\?v=35/.test(idxW) && /Scanner\.js\?v=27/.test(idxW),
                 (idxW.match(/4_Context\.js\?v=\d+/) || '') + ' ' + (idxW.match(/Scanner\.js\?v=\d+/) || ''));
 
             // (2026-10-22 · #182) TESTIMONI al log: si el stat d'UNC no dóna cap data,
@@ -1055,6 +1055,30 @@
             mainSrc.indexOf("StA.workTarget = 'today';") > 0,
             'done=' + ctxSrc.indexOf('_doneTarget') +
             ' main=' + (mainSrc.indexOf("StA.workTarget = 'today';") > 0));
+
+        // (2026-11-05 · #238 2a passada) L'usuari: «al crear un projecte de HOY, el
+        // context es queda en CREA i hauria de passar a ACTUALITZAR». El fallback
+        // només podia fallar d'una manera: la guarda «sense cap ancoratge a State
+        // no es pregunta» deixava el projecte OBRET invisible. Ara es pregunta
+        // sempre (amb memòria de 2 s), es reintenta si el pont està ocupat i es
+        // RE-ANCORA `State` quan es reconeix; i si no casa, HO DIU al log.
+        ok('#WOTT/67 #238: el fallback «acabat de crear» pregunta SEMPRE pel .prproj obert',
+            ctxSrc.indexOf('if (!last && !(st && st.projectDateDir)) return null;') === -1 &&
+            ctxSrc.indexOf('for (let intent = 0; intent < 2; intent++)') > 0 &&
+            ctxSrc.indexOf('_justOpenedCache: null') > 0 &&
+            ctxSrc.indexOf('this._justOpenedCache = { folder: folderNorm, at: now, name: name };') > 0,
+            'guarda=' + (ctxSrc.indexOf('if (!last && !(st && st.projectDateDir))') >= 0) +
+            ' reintent=' + (ctxSrc.indexOf('for (let intent = 0') > 0) +
+            ' cache=' + (ctxSrc.indexOf('_justOpenedCache: null') > 0));
+
+        ok('#WOTT/68 #238: si reconeix el projecte obert re-ancora State i ho diu al log',
+            ctxSrc.indexOf('st.lastOpenedProjectName = base;') > 0 &&
+            ctxSrc.indexOf('st.projectDateDir = ctx.dateDir;') > 0 &&
+            ctxSrc.indexOf('Projecte OBERT a la carpeta del bloc (') > 0 &&
+            ctxSrc.indexOf('NO casa amb el patró') > 0 &&
+            ctxSrc.indexOf('NO és a la ') > 0,
+            'anchor=' + (ctxSrc.indexOf('st.lastOpenedProjectName = base;') > 0) +
+            ' warn=' + (ctxSrc.indexOf('NO casa amb el patró') > 0));
 
         } finally {
             UI.Utils.readFolder = realReadFolder;

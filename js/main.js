@@ -1487,12 +1487,22 @@ if (btnMarksC1) btnMarksC1.addEventListener('click', () => callWorkflow('Markers
             btn.classList.remove('btn-busy');
             // (#214) Es restaura el marcatge ORIGINAL del botó (icones incloses) i
             // s'allibera l'amplària que s'havia fixat en marcar-lo.
+            //
+            // (2026-11-05 · #243) PERÒ si algú ha REPINTAT el botó mentres durava la
+            // tasca, eixa etiqueta és la bona i no es pot tirar arrere: `checkContext`
+            // repinta el botó MAIN (via `updateButton`) al final del flux. Cas real
+            // (05/11, obrir TNC V1): el flux acaba amb conclusió UPDATE i pinta
+            // «ACTUAL.», i el `clear` de tancament tornava a deixar «OBRIR» (el text
+            // que hi havia abans del clic) → el panell deia OBRIR amb el projecte ja
+            // obert i el log dient UPDATE, i el clic següent tornava a obrir-lo.
+            // Es considera «repintat» tot el que no siga el buit del rellotge d'arena.
+            var repainted = (btn.innerHTML.trim() !== '' && !btn.querySelector('.fp-busy-txt'));
             if (btn.dataset.busyHtml !== undefined) {
-                btn.innerHTML = btn.dataset.busyHtml;
+                if (!repainted) btn.innerHTML = btn.dataset.busyHtml;
                 delete btn.dataset.busyHtml;
             }
             if (btn.dataset.busyW !== undefined) { btn.style.minWidth = ''; delete btn.dataset.busyW; }
-            if (btn.dataset.busyOff === '0') btn.disabled = false;
+            if (btn.dataset.busyOff === '0' && !repainted) btn.disabled = false;
             delete btn.dataset.busyOff;
         } catch (e) { }
     }

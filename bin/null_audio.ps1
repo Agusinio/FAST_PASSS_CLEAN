@@ -9,9 +9,10 @@
 
       1. ffmpeg decodifica els dos fitxers a RAW float32 mono (sense cap
          resampleig que emmascare el desajust, `-ar` fix).
-      2. `bin\null_core.cs` busca el lag EN MOSTRES (pas de 1) dins de
-         ±`SpanMs` alrededor del nominal i ajusta la ganancia per minims
-         quadrats (`g = <mix,ref>/<ref,ref>`).
+      2. `bin\null_core.cs` busca el desajust EN MOSTRES (pas de 1) dins de
+         ±`SpanMs` al voltant del nominal — desplaçant la REFERENCIA, que es
+         qui te mon — i ajusta la ganancia per minims quadrats
+         (`g = <mix,ref>/<ref,ref>`).
       3. Es mesura el residu `mix - g*ref` tram a tram (`TramSec`) i es diu
          quants dB baixa respecte del mix.
 
@@ -144,6 +145,13 @@ $spanSec  = $SpanMs / 1000.0
 $spanSmp  = [int][Math]::Round($spanSec * $Rate)
 $startA   = [Math]::Max(0.0, $MixPos - $spanSec)
 $durA     = $WinSec + 2 * $spanSec
+# La plantilla es decodifica `refLead` segons ABANS de `SkipRef` (amb `bOff`
+# dient on cau `SkipRef` dins del buffer). Sense eixe mon, quan el tall no te
+# pre-roll (MixPos 0) la referencia nomes es podia endarrerir, mai avancar, i
+# mitja busca quedava morta (BUG #240).
+$refLead  = [Math]::Min($SkipRef, $spanSec)
+$refStart = $SkipRef - $refLead
+$bOff     = [int][Math]::Round($refLead * $Rate)
 $rawA     = Join-Path $tmp 'a.raw'
 $rawB     = Join-Path $tmp 'b.raw'
 
@@ -164,7 +172,7 @@ function Invoke-Ffmpeg {
 # 1) Decodificacio EXACTA (-ss DESPRES de -i): el tros ha de comencar just on diem.
 $okA = Invoke-Ffmpeg @('-hide_banner', '-nostdin', '-y', '-i', $Mix, '-ss', $startA.ToString($inv),
     '-t', $durA.ToString($inv), '-vn', '-ac', '1', '-ar', "$Rate", '-f', 'f32le', $rawA)
-$okB = Invoke-Ffmpeg @('-hide_banner', '-nostdin', '-y', '-i', $Ref, '-ss', $SkipRef.ToString($inv),
+$okB = Invoke-Ffmpeg @('-hide_banner', '-nostdin', '-y', '-i', $Ref, '-ss', $refStart.ToString($inv),
     '-t', $durA.ToString($inv), '-vn', '-ac', '1', '-ar', "$Rate", '-f', 'f32le', $rawB)
 if (-not $okA -or -not $okB) {
     Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue
@@ -180,9 +188,18 @@ if ($A.Length -lt [NullCore]::MIN_LEN -or $B.Length -lt [NullCore]::MIN_LEN) {
     throw 'Audio massa curt'
 }
 
-# 2) Lag a la mostra: b[0] dins de a, buscant al voltant del nominal (spanSmp).
-$lag0 = $spanSmp
-$len  = [Math]::Min([int][Math]::Round($WinSec * $Rate), [Math]::Min($A.Length - $lag0, $B.Length))
+# 2) Alineacio a la mostra: es desplaça la REFERENCIA, no la finestra.
+# El nominal (`lag0`) es on cau `SkipRef` dins de `a`, i NO es `spanSmp`: aixo
+# nomes val si el mix s'ha pogut decodificar `span` segons ABANS de `MixPos`.
+# Quan MixPos < span (la cua: MixPos 0) `startA` cau a 0 i el pre-roll de veritat
+# es MixPos. Pero el desajust que deixa la correlacio (1 mostra a 8 kHz = 6 a
+# 48 kHz) pot demanar la referencia MES AVANT, i `a` no pot anar-se'n a negatiu:
+# per aixo `BestRefShift` mou `b` (que si que te mon, `bOff`) i la finestra es
+# queda quieta. Amb la reixa ancorada a `spanSmp` i nomes cap avant, eixos 4-9
+# mostres (0,1 ms) no es podien corregir i la resta nomes llevava els GREUS:
+# mesurat a la cua del TNC V1 del 04/11, 11 dB en compte de 27 dB (BUG #240).
+$lag0 = [int][Math]::Round(($MixPos - $startA) * $Rate)
+$len  = [int][Math]::Min([int][Math]::Round($WinSec * $Rate), [Math]::Min($A.Length - $lag0, $B.Length - $bOff))
 if ($len -lt [NullCore]::MIN_LEN) {
     Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue
     Write-Done $Done 'FAIL:finestra massa curta'
@@ -190,8 +207,15 @@ if ($len -lt [NullCore]::MIN_LEN) {
 }
 
 $rFine = 0.0
-$lag   = [NullCore]::BestLagSample($A, $B, $lag0, $spanSmp, 0, $len, [ref]$rFine)
-$fit   = [NullCore]::FitWindow($A, $B, $lag, 0, $len)
+$d     = [NullCore]::BestRefShift($A, $lag0, $B, $bOff, $spanSmp, $len, [ref]$rFine)
+$lag   = $lag0 + $d
+# On cau la plantilla dins del mix (`refPosSec` el que gasta la resta).
+# Per a mesurar, `bStart` es on comença la referencia triada i `relLag` el que
+# cal sumar-li per a arribar a la finestra: `a[relLag + bStart + k]` (pot ser
+# negatiu, pero nomes es fa servir en eixa suma).
+$bStart = $bOff - $d
+$relLag = $lag0 - $bStart
+$fit   = [NullCore]::FitWindow($A, $B, $relLag, $bStart, $len)
 $g     = [double]$fit[0]
 $rRaw  = [double]$fit[1]
 $mixDb = [NullCore]::Db([double]$fit[2])
@@ -199,14 +223,14 @@ $resDb = [NullCore]::Db([double]$fit[3])
 $uniDb = [NullCore]::Db([double]$fit[4])
 $nullDb = $mixDb - $resDb
 $nullUniDb = $mixDb - $uniDb
-$driftMs   = ($lag - $lag0) / [double]$Rate * 1000.0
+$driftMs   = $d / [double]$Rate * 1000.0
 $refPosSec = $startA + ($lag / [double]$Rate)
 
-# 3) Perfil del residu tram a tram (0,5 s): on cancela i on no.
+# 3) Perfil del residu tram a tram (`TramSec`): on cancela i on no.
 $tramSmp = [int][Math]::Max([NullCore]::MIN_LEN, [Math]::Round($TramSec * $Rate))
-$prof    = [NullCore]::Profile($A, $B, $lag, $g, 0, $len, $tramSmp)
+$prof    = [NullCore]::Profile($A, $B, $relLag, $g, $bStart, $len, $tramSmp)
 $rows    = @()
-$worst   = -200.0
+$worst   = 200.0
 $best    = -200.0
 $tramsOk = 0
 for ($i = 0; $i -lt ($prof.Length / 3); $i++) {
@@ -214,7 +238,7 @@ for ($i = 0; $i -lt ($prof.Length / 3); $i++) {
     $e = [double]$prof[$i * 3 + 1]
     $go = [double]$prof[$i * 3 + 2]
     $red = $m - $e
-    if ($red -gt $worst) { $worst = $red }
+    if ($red -lt $worst) { $worst = $red }
     if ($red -gt $best) { $best = $red }
     if ($red -ge $MinNullDb) { $tramsOk++ }
     $rows += [pscustomobject]@{
@@ -240,10 +264,11 @@ $verdict  = if ($cancela) { 'NULL' } elseif ($parcial) { 'NULL_PARCIAL' } else {
 Invoke-Say ''
 Invoke-Say ('=== CANCEL·LACIO A LA MOSTRA · ' + [NullCore]::Version() + ' ===')
 Invoke-Say ("  mix .......... {0}" -f $Mix)
-Invoke-Say ("  ref .......... {0} (des de {1:N3} s)" -f $Ref, $SkipRef)
-Invoke-Say ("  finestra ..... {0:N2} s a {1} Hz ({2} mostres), busca ±{3:N1} ms" -f $WinSec, $Rate, $len, $SpanMs)
+Invoke-Say ("  ref .......... {0} (finestra des de {1:N3} s)" -f $Ref, $SkipRef)
 Invoke-Say ("  decode ....... mix des de {0:N4} s ({1:N3} s) · {2} / {3} mostres carregades" -f $startA, $durA, $A.Length, $B.Length)
-Invoke-Say ("  lag bo ....... {0} mostres ({1:N3} ms) · deriva {2:N2} ms respecte del nominal" -f $lag, ($lag / [double]$Rate * 1000.0), $driftMs)
+Invoke-Say ("  plantilla .... decodificada des de {0:N6} s ({1} mostres de mon)" -f $refStart, $bOff)
+Invoke-Say ("  finestra ..... {0:N2} s a {1} Hz ({2} mostres), busca ±{3:N1} ms" -f $WinSec, $Rate, $len, $SpanMs)
+Invoke-Say ("  lag bo ....... {0} mostres ({1:N3} ms) · correccio {2} mostres ({3:N3} ms) sobre el nominal" -f $lag, ($lag / [double]$Rate * 1000.0), $d, $driftMs)
 Invoke-Say ("  refPosSec .... {0:N6} s  <-- el numero que ha de fer servir la resta" -f $refPosSec)
 Invoke-Say ("  r (cru, 1.0 = mateix so) ... {0:N5}" -f $rRaw)
 Invoke-Say ("  guany g ...... {0:N4} ({1:N2} dB)" -f $g, [NullCore]::Db([Math]::Abs($g)))
@@ -381,6 +406,9 @@ $result = [ordered]@{
     spanMs    = $SpanMs
     lag0      = $lag0
     lagSamples = $lag
+    refShift  = $d
+    refLead   = $bOff
+    refStart  = N $refStart 6
     driftMs   = N $driftMs 3
     refPosSec = N $refPosSec 6
     r         = N $rRaw 5

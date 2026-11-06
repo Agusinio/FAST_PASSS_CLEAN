@@ -334,6 +334,67 @@
         ok('#A1C/31 la guarda va DINS de `_runOnce` i ABANS de correlacionar',
             iGuard > iOnce && iCorr > iGuard,
             'once=' + iOnce + ' guard=' + iGuard + ' correq=' + iCorr);
+
+        // ── ALINEAMENT A LA MOSTRA (BUG #240, 05/11) ────────────────────────
+        // El motor desplaça la REFERÈNCIA (`BestRefShift`), no la finestra: el
+        // tall no té pre-roll i la reixa ancorada a `spanSmp` només podia anar
+        // cap avant. Mesurat a la cua del TNC V1: 12 dB de reducció amb el lag
+        // mal posat i 27,4 dB amb els 4 mostres que falten (0,08 ms).
+        ok('#A1C/32 el perfil es mesura amb el MATEIX tram que la resta',
+            sA.indexOf('-NetTramSec 0.250') > 0 && sA.indexOf('-TramSec 0.250') > 0,
+            sA);
+
+        var psSrc = '', csSrc = '';
+        try { psSrc = await (await fetch('file:///' + REPO + '/bin/null_audio.ps1')).text(); } catch (eP) { psSrc = ''; }
+        try { csSrc = await (await fetch('file:///' + REPO + '/bin/null_core.cs')).text(); } catch (eC) { csSrc = ''; }
+        ok('#A1C/33 el desajust es busca desplaçant la REFERÈNCIA (no la finestra)',
+            csSrc.indexOf('public static int BestRefShift(') > 0 &&
+            psSrc.indexOf('BestRefShift') > 0 && psSrc.indexOf('BestLagSample') < 0 &&
+            psSrc.indexOf('$refLead') > 0 && psSrc.indexOf('$bOff') > 0 &&
+            psSrc.indexOf('refShift') > 0,
+            'ps=' + psSrc.length + ' cs=' + csSrc.length +
+            ' shift=' + (psSrc.indexOf('BestRefShift') > 0) +
+            ' vell=' + (psSrc.indexOf('BestLagSample') > 0));
+
+        // ── ON es desa el net (2026-11-05 · orde d'usuari) ──────────────────
+        // El WAV net s'importa al projecte: si viu a %TEMP%, un projecte obert en
+        // un altre equip el busca i el clip ix offline. Ha d'anar a la carpeta
+        // del `.prproj` (`Context.folder()`), dins de `mediaSubdir`.
+        var pd = A1.pickDir(['', 'ERR:no hi ha projecte', 'undefined', '  ',
+            'C:\\temp\\a1_clean\\', '\\\\srv\\share\\proj', 'D:\\altre']);
+        ok('#A1C/34 `pickDir` descarta ERR/buides i exigix ruta ABSOLUTA (primera valida)',
+            pd === 'C:\\temp\\a1_clean' &&
+            A1.pickDir(['', 'ERR:x', 'undefined', 'null', 'relativa\\carpeta']) === '' &&
+            A1.pickDir(['\\\\srv\\share\\proj\\']) === '\\\\srv\\share\\proj' &&
+            A1.pickDir(null) === '',
+            'pd=' + pd + ' rel=' + A1.pickDir(['relativa\\carpeta']));
+
+        var iProj = a1src.indexOf('await projectDir(o)');
+        var iPod = a1src.indexOf('var netWav = mediaPod');
+        var iImp = a1src.indexOf("_importChunk([netWav]", iProj);
+        ok('#A1C/35 el net es desa a la carpeta del PROJECTE (mix/net/JSON), no a `outDir`',
+            iProj > 0 && iPod > iProj && iImp > iPod &&
+            a1src.indexOf('mediaSubdir') > 0 &&
+            a1src.indexOf("var netWav = o.outDir") < 0,
+            'proj=' + iProj + ' pod=' + iPod + ' imp=' + iImp);
+
+        // ── GUARDA DE CANCEL·LACIÓ (BUG #240, 05/11) ────────────────────────
+        // Amb els JSON REALS de la viu del 05/11: el bo té `tramsOk=0/14` (la veu
+        // tapa la música) i s'ha de MUNTAR; el que no resta res s'ha de refusar.
+        var gBona = A1.shouldMount({ trams: 14, tramsOk: 0, bestTramDb: 5.51, nullDb: 0.28 });
+        var gNoop = A1.shouldMount({ trams: 10, tramsOk: 0, bestTramDb: 0.4, nullDb: 0.1 });
+        var gNull = A1.shouldMount(null);
+        ok('#A1C/36 `tramsOk=0` NO bloqueja (la veu tapa la música); el no-op sí',
+            gBona.mount === true && gNoop.mount === false && gNull.mount === true,
+            'bona=' + gBona.mount + ' noop=' + gNoop.mount + ' null=' + gNull.mount +
+            ' why=' + gNoop.why);
+
+        ok('#A1C/37 la guarda usa `shouldMount` (no el `tramsOk` del motor)',
+            a1src.indexOf('shouldMount(nj, o)') > 0 &&
+            typeof A1.shouldMount === 'function' &&
+            a1src.indexOf('num(nj.tramsOk, 0) === 0') < 0,
+            'usa=' + (a1src.indexOf('shouldMount(nj, o)') > 0) +
+            ' vell=' + (a1src.indexOf('num(nj.tramsOk, 0) === 0') > 0));
     };
 })();
 

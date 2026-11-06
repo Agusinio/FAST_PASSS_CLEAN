@@ -70,7 +70,7 @@
     window.FASTPASS_UI = window.FASTPASS_UI || {};
     var Logic = window.FASTPASS_UI.Logic = window.FASTPASS_UI.Logic || {};
 
-    var VER = 'v1.8';
+    var VER = 'v1.9';
     var _running = false;   // guard de reentrada: no repetir dins la mateixa passada
 
     var DEFAULTS = {
@@ -89,7 +89,17 @@
                                 // (la cua/eco de la careta se sent més enllà de la música:
                                 //  amb 0,75 s quedaven 2-3 s sense netejar)
         templateDir: 'Audios',  // plantilles (relatiu a l'arrel de l'extensió)
+        // TEMPORALS (el `.ps1`, el `.done`, el `.verdict` i `_last_run.txt`).
         outDir: 'C:\\temp\\a1_clean',
+        // CARPETA DEL MATERIAL QUE ES MONTA (2026-11-05 · orde d'usuari): el
+        // `_net.wav` que s'importa al projecte NO pot viure a `%TEMP%` — si el
+        // projecte s'obri en un altre equip, el clip ix offline. Va a la carpeta
+        // del `.prproj` obert (`Context.folder()`), dins d'este subdirectori;
+        // només si no se sap quina és, cau a `outDir`.
+        mediaSubdir: 'A1_CLEAN',
+        // Reducció MÍNIMA del millor tram per a muntar el net (dB). Si el motor no
+        // ha llevat res de cap tram, muntar eixe WAV només amaga el problema.
+        minTramDb: 3,
         maxItems: 1,            // només el PRIMER clip d'A1: la careta (o la seua
                                 // cua) sempre cau ahí; mirar-ne més només afig temps
         // ─── RESTA A LA MOSTRA (BUG #235 · validada amb l'A/B del 04/11) ─────
@@ -408,8 +418,8 @@
 
     /**
      * isNetName: el nom d'un clip és el WAV NET que munta esta neteja?
-     * (`a1_<ms>_net.wav`, el que genera `cleanAndMount` a `outDir`; el nom no
-     * el tria ningú més). Pura: es prova headless.
+     * (`a1_<ms>_net.wav`, el que genera `cleanAndMount` a la carpeta del
+     * projecte; el nom no el tria ningú més). Pura: es prova headless.
      *
      * PER QUÈ: el pas es dispara en clicar la DIANA 🎯 (i potser més voltes:
      * l'operador pot clicar-la dos voltes). Si el primer clip d'A1 ja és
@@ -477,10 +487,46 @@
             a.push('-NetMinRefDb', num(o.minRefDb, -60).toFixed(1));
         }
         a.push('-NetTramSec', num(o.tramSec, 0.25).toFixed(3));
+        // El PERFIL de la mesura es fa amb el mateix tamany de tram que la resta.
+        // Amb trams de 0,5 s, un tram que porta 0,36 s de cua i 0,14 s de veu no
+        // compta com a cancel·lat (5 dB en compte de 26) i el panell no pot saber
+        // si la resta ha fet res de bo (BUG #240).
+        a.push('-TramSec', num(o.tramSec, 0.25).toFixed(3));
         if (o.json) a.push('-Json', String(o.json));
         if (o.done) a.push('-Done', String(o.done));
         a.push('-Quiet');
         return a;
+    }
+
+    /**
+     * shouldMount: decidix si el WAV net es pot muntar a A1 (PURA: es prova
+     * headless amb els JSON reals del motor).
+     *
+     * BUG #240 (05/11, en viu): la guarda mirava `tramsOk` (trams que arriben al
+     * `MinNullDb` de reducció) i REFUSAVA neteges bones — amb la veu damunt, un
+     * tram pot cancel·lar 26 dB de música i no arribar-hi mai (la mitjana del
+     * tram la mana la veu). Mesura real del 05/11: `tramsOk=0/14`, `nullDb=0,28`
+     * i la cua a −52 dBFS (inaudible): eixe net NO s'haguera muntat mai.
+     *
+     * El senyal de veritat és si ALGUNA cosa ha baixat: el millor tram
+     * (`bestTramDb`) i la mitjana (`nullDb`). Si ni això, el motor no ha restat.
+     *
+     * @param {Object|null} nj - JSON del motor (`bin\null_audio.ps1 -Json`)
+     * @param {Object} [o]     - `minTramDb` (per defecte 3 dB)
+     * @returns {{mount:boolean, why:string}}
+     */
+    function shouldMount(nj, o) {
+        var minTram = num((o ? o.minTramDb : NaN), num(DEFAULTS.minTramDb, 3));
+        if (!nj || !num(nj.trams, 0)) return { mount: true, why: 'sense mesura del motor' };
+        var best = num(nj.bestTramDb, 0);
+        var mean = num(nj.nullDb, 0);
+        if (best >= minTram || mean >= 1) {
+            return { mount: true, why: 'millor tram −' + fmt(best, 1) + ' dB (' + fmt(mean, 1) + ' dB de mitjana)' };
+        }
+        return {
+            mount: false,
+            why: 'el millor tram només baixa ' + fmt(best, 1) + ' dB i la mitjana ' + fmt(mean, 1) + ' dB'
+        };
     }
 
     // ════════════════════════════════════════════════════════════════════════
@@ -531,6 +577,51 @@
         ];
         for (var i = 0; i < cands.length; i++) { if (exists(cands[i])) return cands[i]; }
         return cands[0];
+    }
+
+    /**
+     * pickDir: tria la primera ruta ABSOLUTA vàlida d'una llista de candidates.
+     *
+     * Funció PURA (així es pot provar sense CEP ni Premiere): descarta el que el
+     * pont JSX torna quan no hi ha projecte (`''`, `ERR:…`, `undefined`,
+     * `EvalScript error`…) i exigix ruta absoluta (`C:\…` o UNC `\\servidor\…`).
+     * @returns {string} ruta sense barra final, o `''` si no en queda cap
+     */
+    function pickDir(cands) {
+        var list = (cands && cands.length) ? cands : [];
+        for (var i = 0; i < list.length; i++) {
+            var d = String(list[i] == null ? '' : list[i]).replace(/^"|"$/g, '').trim();
+            if (!d) continue;
+            if (/^(err|error|undefined|null|eval|exception|nan)/i.test(d)) continue;
+            if (!(d.charAt(1) === ':' || d.indexOf('\\\\') === 0)) continue;
+            return d.replace(/[\\\/]+$/, '');
+        }
+        return '';
+    }
+
+    /**
+     * projectDir: carpeta on ha de viure el material que es MONTA al timeline.
+     *
+     * 2026-11-05 (ordre d'usuari): el `_net.wav` que s'importa al projecte no pot
+     * quedar-se a `%TEMP%` — un projecte obert en un altre equip el buscaria i el
+     * clip eixiria offline. Ordre de fonts, de la més fiable a la de reserva:
+     * `o.mediaDir` explícit → `Context.folder()` (la carpeta del `.prproj`
+     * obert) → `Utils.workFolder(State)` (`destinoBase + prog + data + bloc`) →
+     * `o.outDir` (temp: millor que res, però es pot perdre).
+     * @returns {Promise<string>} ruta sense barra final
+     */
+    async function projectDir(o) {
+        var U = utils();
+        var cands = [];
+        if (o && o.mediaDir) cands.push(o.mediaDir);
+        if (U && U.callJSX) {
+            try { cands.push(await U.callJSX('Context.folder()', { timeoutMs: 15000 })); }
+            catch (e1) { }
+            try { if (U.workFolder) cands.push(U.workFolder(window.FASTPASS_UI.State)); }
+            catch (e2) { }
+        }
+        var d = pickDir(cands);
+        return d || String((o && o.outDir) || '');
     }
 
 
@@ -671,11 +762,26 @@
         var nullPs = extRoot + '\\bin\\null_audio.ps1';
         if (!exists(nullPs)) { log('No trobe ' + nullPs, 'ERROR'); return { ok: false, why: 'sense null_audio.ps1' }; }
 
+        // ─── ON es desa el material (2026-11-05 · orde d'usuari) ────────────
+        // El WAV net s'IMPORTA al projecte: si viu a `%TEMP%`, un projecte obert
+        // en un altre equip el busca on no és i el clip ix offline. El mix, el net
+        // i el JSON de la mesura van a la carpeta del PROJECTE (`projectDir`),
+        // dins de `mediaSubdir`; els transitoris (.ps1/.done/.verdict) es queden
+        // a `o.outDir`, que és temp i ningú no trobarà a faltar.
         ensureDir(o.outDir);
+        var projRoot = await projectDir(o);
+        var mediaPod = projRoot ? (projRoot + '\\' + String(o.mediaSubdir || 'A1_CLEAN')) : String(o.outDir);
+        ensureDir(mediaPod);
+        if (!exists(mediaPod)) {
+            log('no puc crear «' + mediaPod + '»: el net va a ' + o.outDir + ' (temp)', 'WARN');
+            mediaPod = String(o.outDir);
+        } else if (projRoot) {
+            log('material del clip net: «' + mediaPod + '»', 'DEBUG');
+        }
         var ts = Date.now();
-        var mixWav = o.outDir + '\\a1_' + ts + '_mix.wav';
-        var netWav = o.outDir + '\\a1_' + ts + '_net.wav';
-        var jsonFile = o.outDir + '\\a1_' + ts + '.json';
+        var mixWav = mediaPod + '\\a1_' + ts + '_mix.wav';
+        var netWav = mediaPod + '\\a1_' + ts + '_net.wav';
+        var jsonFile = mediaPod + '\\a1_' + ts + '.json';
         var doneFile = o.outDir + '\\a1_' + ts + '.done';       // el que llig el panell
         var verdictFile = o.outDir + '\\a1_' + ts + '.verdict'; // el que escriu el .ps1
         var psFile = o.outDir + '\\a1_' + ts + '.ps1';
@@ -783,13 +889,27 @@
                 (nInfo ? fmt(num(nInfo.frames, 0), 0) + ' frames' : 'sense senyal neta') +
                 (nInfo && nInfo.adapt ? ' · guany ADAPTATIU (màx ' + fmt(num(nInfo.maxG, 1.2), 2) + ')' : ''),
                 'DEBUG');
-            if (String(nj.verdict) === 'NO_NULL') {
+            if (String(nj.verdict) === 'NO_NULL' && num(nj.tramsOk, 0) > 0) {
                 // Normal i no és un error: la finestra mesurada porta la VEU a
                 // sobre, així que la MITJANA no pot baixar. El que val és tram a
                 // tram — el primer, on només hi ha música, baixa 20-25 dB.
                 log('nota: la mitjana de la finestra no baixa (hi ha veu damunt); ' +
                     'el guany adaptatiu decidix tram a tram', 'INFO');
             }
+        }
+
+        // ─── GUARDA DE CANCEL·LACIÓ (BUG #240, 05/11) ───────────────────────
+        // Si el motor diu que la resta NO ha llevat res, muntar eixe WAV és pitjor
+        // que no fer res: el so queda igual i damunt sembla que la neteja ha
+        // funcionat. Qui decidix és `shouldMount` (pura, provada amb els JSON
+        // reals): `tramsOk` NO servix — amb la veu damunt eix número pot ser 0 i
+        // la música estar cancel·lada 26 dB.
+        var sj = shouldMount(nj, o);
+        if (!sj.mount) {
+            log('la resta no ha llevat res (' + sj.why + '): A1 es queda com està. ' +
+                'Revisa «' + mixWav + '» i «' + netWav + '» (l\'offset i el guany són al JSON)',
+                'ERROR');
+            return { ok: false, why: sj.why, mixWav: mixWav, netWav: netWav };
         }
 
         // Guarda d'energia (mesurada al mateix .ps1): si el net puja de nivell
@@ -1233,6 +1353,8 @@
         musicAtWindow: musicAtWindow,
         refSkipAtWindow: refSkipAtWindow,
         isNetName: isNetName,
+        pickDir: pickDir,
+        shouldMount: shouldMount,
         buildNullArgs: buildNullArgs,
         run: run,
         correlate: correlate,

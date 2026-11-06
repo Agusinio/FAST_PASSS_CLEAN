@@ -47,10 +47,20 @@
     // (aquí només són el fallback si la configuració no respon).
     var TRACK_GRAF = 3;
     var TRACK_FREEZE = 6;
-    // (2026-10-28 · ZONA GRISA) Pista de la MÀSCARA (config `v_mascara`, V2). Els
-    // grafismes AMB zona grisa al peu es col·loquen ACÍ i el troç de màscara de
-    // l'ítem puja a la pista de dalt perquè quede per damunt del grafisme.
+    // (2026-10-28 · ZONA GRISA) Pista de la MÀSCARA (config `v_mascara`, V2). És on van
+    // els grafismes de terç COLOR: el troç de màscara de l'ítem puja a la pista de dalt
+    // (V3) perquè quede per damunt del grafisme. El terç GRIS va a V3 (corregit 05/11).
     var TRACK_MASCARA = 2;
+    // (2026-11-05 · GRAF_TERCIO_TIPUS) Pista de DALT per al grafisme del terç inferior
+    // TRANSPARENT (hi va el PNG de fons a V3, davall mateix). El terç GRIS NO la fa
+    // servir: va a V3 amb la màscara quieta a V2 (corregit en viu el 05/11). Es resol
+    // a `_applyTrackConfig` com `TRACK_GRAF + 1` (V4), igual que el wott del títol
+    // (TE_TOTEM, 2026-11-02) i el MAPA ZOOM.
+    var TRACK_GRAF_ALT = 4;
+    // (2026-11-05 · GRAF_TERCIO_TIPUS) PNG de fons del terç inferior TRANSPARENT: el
+    // mateix de la doble finestra i del MAPA ZOOM (bin 3CatInfo/Grafisme/Background).
+    // Va a V3 (`TRACK_GRAF`) amb el MATEIX rang que el grafisme, que va a V4.
+    var FONS_PNG = '3CatInfo_VERTICALITZACIO_Fons-per-videos.png';
     var VIDEO_EXT = ['mov', 'mp4', 'mxf', 'm4v', 'avi', 'mts', 'm2t', 'wmv', 'r3d'];
     var MESOS = ['GENER', 'FEBRER', 'MARÇ', 'ABRIL', 'MAIG', 'JUNY',
         'JULIOL', 'AGOST', 'SETEMBRE', 'OCTUBRE', 'NOVEMBRE', 'DESEMBRE'];
@@ -271,8 +281,11 @@
                 else if (cv && cv.graf) TRACK_GRAF = cv.graf;
                 if (cv && cv.tematitol) TRACK_FREEZE = cv.tematitol;
                 if (cv && cv.mascara != null) TRACK_MASCARA = cv.mascara;
+                // (2026-11-05 · GRAF_TERCIO_TIPUS) La pista de dalt sempre és la de
+                // grafismes + 1: si la config canvia `graficos`, V4 es mou amb ella.
+                TRACK_GRAF_ALT = TRACK_GRAF + 1;
                 L('🗺️ [MAPA] Pistes de la config → GRAF=V' + TRACK_GRAF + ' · congelat=V' + TRACK_FREEZE +
-                    ' · màscara=V' + TRACK_MASCARA);
+                    ' · màscara=V' + TRACK_MASCARA + ' · grafisme de dalt=V' + TRACK_GRAF_ALT);
             } catch (eCfg) {
                 L('⚠️ [MAPA] no s\'ha pogut llegir la config de pistes: ' + eCfg.message, 'WARN');
             }
@@ -386,7 +399,10 @@
                 var freeze = await this._freezeUnderCti(refSec);
 
                 await this._placeClips(items, refSec, freeze, ref, { picked: picked });
-                U().status('MAPA: ' + items.length + ' clip(s) a V' + TRACK_GRAF, 'exito');
+                // (2026-11-05 · GRAF_TERCIO_TIPUS) El missatge diu la pista REAL (V4/V2/V3
+                // segons el tipus de terç) i el tipus detectat.
+                U().status('MAPA: ' + items.length + ' clip(s) a V' + (this._lastTrack || TRACK_GRAF) +
+                    (this._lastTipus ? ' · terç ' + this._lastTipus : ''), 'exito');
 
                 // (2026-09-21) Tornar la auto-selecció a V1: targeting només V1/A1 + clip de V1.
                 try {
@@ -1545,47 +1561,117 @@
         },
 
         /**
-         * _zonaGris: pregunta al mòdul LOGIC (`21_GrafZonaGris_Logic.js`) si el
-         * grafisme té la ZONA GRISA al peu. Es mira TOTS els items de la tongada:
-         * si un en té, tots es col·loquen igual (petició d'usuari: «tot el
-         * grafisme va al mateix track»).
+         * _grafTipus: QUIN TIPUS de terç inferior té el grafisme d'esta tongada?
          *
-         * (2026-10-28 · 2a volta) És **NOMÉS INFORMATIU** (una línia al log): la
-         * màscara puja a V3 i el grafisme va a V2 SEMPRE, tinga zona grisa o no
-         * (petició d'usuari en provar un grafisme a SANG que tapava la màscara).
+         * (2026-11-05 · GRAF_TERCIO_TIPUS · BUG #222) Pregunta al mòdul LOGIC
+         * (`21_GrafZonaGris_Logic.js::detectKind`) com és la FRANJA INFERIOR del
+         * grafisme i en trau el tipus: `gris` (placa grisa, CLARA #D9D9D9 o FOSCA
+         * #333–#808080), `buit` (transparent) o
+         * `color` (foto/altres colors). Es miren TOTS els items perquè tot el grafisme
+         * va al MATEIX track (petició d'usuari del 28/10): si es barregen tipus mana el
+         * que demana MÉS coses —`color` (màscara amunt) > `buit` (PNG de fons) >
+         * `gris`—, perquè així el resultat continua sent bo per als altres.
          *
          * @param {Array} items - [{ name, dur }] media importats
          * @param {Object} ctx  - { picked:[{name,full}], detectOpts }
-         * @returns {Promise<Object|null>} { hasGrey, cov, name, path } o null (sense mesura)
+         * @returns {Promise<Object|null>} { kind, hasGrey, covGris, covBuit, covAltres,
+         *          name, path, cached } o null si no s'ha pogut MESURAR (llavors es
+         *          col·loca com sempre: màscara a V3 i grafisme a V2).
          */
-        _zonaGris: async function (items, ctx) {
+        _grafTipus: async function (items, ctx) {
             var LG = window.FASTPASS_UI && window.FASTPASS_UI.Logic;
             var G = LG && LG.GrafZonaGris;
-            if (!G || typeof G.detect !== 'function') {
-                L('⚠️ [MAPA·gris] Mòdul 21_GrafZonaGris_Logic.js no carregat → col·locació de sempre', 'WARN');
+            if (!G || typeof G.detectKind !== 'function') {
+                L('⚠️ [MAPA·tipus] Mòdul 21_GrafZonaGris_Logic.js (detectKind) no carregat → col·locació de sempre', 'WARN');
                 return null;
             }
             var picked = (ctx && ctx.picked) || [];
-            var mesurats = 0;
+            var PRIO = { color: 0, buit: 1, gris: 2 };   // menys = mana
+            var vistos = [];
             for (var i = 0; i < (items || []).length; i++) {
                 var path = this._pathFor(items[i].name, picked);
                 if (!path) {
-                    L('⚠️ [MAPA·gris] No sé la ruta original de "' + items[i].name + '" → no el puc mesurar', 'WARN');
+                    L('⚠️ [MAPA·tipus] No sé la ruta original de "' + items[i].name + '" → no el puc mesurar', 'WARN');
                     continue;
                 }
-                var r = await G.detect(path, (ctx && ctx.detectOpts) || null);
-                if (!r || !r.ok) {
-                    L('⚠️ [MAPA·gris] "' + items[i].name + '": ' + ((r && r.err) || 'mesura fallida') +
-                        ' → es tracta com a SENSE zona grisa', 'WARN');
+                var r = await G.detectKind(path, (ctx && ctx.detectOpts) || null);
+                if (!r || !r.ok || !r.kind) {
+                    L('⚠️ [MAPA·tipus] "' + items[i].name + '": ' + ((r && r.err) || 'mesura fallida') +
+                        ' → col·locació de sempre', 'WARN');
                     return null;
                 }
-                mesurats++;
-                if (r.hasGrey) {
-                    return { hasGrey: true, cov: r.cov, name: items[i].name, path: path, cached: r.cached };
-                }
+                vistos.push({
+                    kind: r.kind, covGris: r.covGris, covBuit: r.covBuit, covAltres: r.covAltres,
+                    name: items[i].name, path: path, cached: r.cached
+                });
             }
-            if (!mesurats) return null;
-            return { hasGrey: false, cov: null, name: null, path: null, cached: false };
+            if (!vistos.length) return null;
+            var best = vistos[0];
+            for (var k = 1; k < vistos.length; k++) {
+                if (PRIO[vistos[k].kind] < PRIO[best.kind]) best = vistos[k];
+            }
+            if (vistos.length > 1) {
+                var ks = [];
+                for (var j = 0; j < vistos.length; j++) ks.push(vistos[j].name + '=' + vistos[j].kind);
+                L('🎨 [MAPA·tipus] Tongada amb tipus barrejats → mana «' + best.kind + '» (' + ks.join(' · ') + ')', 'WARN');
+            }
+            return best;
+        },
+
+        /**
+         * _trackFreeIn: la pista `trackIdx` està LLIURE en tot el rang?
+         *
+         * (2026-11-05 · GRAF_TERCIO_TIPUS) Abans de pujar el grafisme a V4 (o de posar-hi
+         * el PNG de fons a V3) cal saber que no es pisa material d'un altre bloc. Si el
+         * rang de l'ítem no es coneix (`rng` nul) es mira una finestra curta des de
+         * `refSec`: no s'inventa res i, si hi ha dubte, es torna `false`.
+         *
+         * @param {number} trackIdx - pista (1-based)
+         * @param {Object|null} rng - { a, b } rang de l'ítem (segons)
+         * @param {number} refSec   - posició d'entrada (s) si no hi ha rang
+         * @returns {Promise<boolean>}
+         */
+        _trackFreeIn: async function (trackIdx, rng, refSec) {
+            var a = rng ? rng.a : refSec;
+            var b = rng ? rng.b : (refSec + 5);
+            if (!(b > a)) b = a + 0.5;
+            try {
+                var clips = await getClipsLogic().getTrackClips(trackIdx, 'video');
+                var clash = [];
+                for (var i = 0; i < clips.length; i++) {
+                    var c = clips[i];
+                    if (c.end > a + 0.02 && c.start < b - 0.02) {
+                        clash.push('V' + trackIdx + ' "' + (c.name || '?') + '" @ ' + c.start.toFixed(2) + 's');
+                    }
+                }
+                if (clash.length) {
+                    this._lastClash = clash;
+                    L('⚠️ [MAPA·tipus] Pista ocupada a l\'ítem: ' + clash.join(' · '), 'WARN');
+                    return false;
+                }
+                return true;
+            } catch (e) {
+                this._lastClash = [e.message];
+                L('⚠️ [MAPA·tipus] No puc llegir V' + trackIdx + ': ' + e.message, 'WARN');
+                return false;
+            }
+        },
+
+        /**
+         * _zonaGris: (COMPATIBILITAT) «té zona grisa?» a partir de `_grafTipus`.
+         * (2026-10-28 · 2a volta) Era NOMÉS INFORMATIU: la màscara pujava SEMPRE. Des
+         * del 2026-11-05 mana el TIPUS (`_grafTipus`), però es manté per als diagnòstics
+         * i les proves que encara pregunten pel booleà.
+         *
+         * @returns {Promise<Object|null>} { hasGrey, cov, kind, name, path, cached } o null
+         */
+        _zonaGris: async function (items, ctx) {
+            var t = await this._grafTipus(items, ctx);
+            if (!t) return null;
+            return {
+                hasGrey: (t.kind === 'gris'), cov: t.covGris, kind: t.kind,
+                name: t.name, path: t.path, cached: t.cached
+            };
         },
 
         /**
@@ -1783,6 +1869,48 @@
         },
 
         /**
+         * _placeFonsTerç: PNG de fons DAVALL del grafisme de terç inferior transparent.
+         *
+         * (2026-11-05 · GRAF_TERCIO_TIPUS) El grafisme del terç BUIT va a V4 i el PNG de
+         * fons (el de la doble finestra i del MAPA ZOOM) a V3, amb el MATEIX rang
+         * [start, end]. Mateix patró que el wott del títol (TE_TOTEM, 2026-11-02).
+         * Si V3 està OCUPADA a l'ítem no es col·loca res: mai no es pisa un altre bloc.
+         *
+         * @param {number} start - inici (s), és el CABEZAL
+         * @param {number} end   - final REAL del grafisme inserit (s)
+         * @param {Object|null} rng - rang de l'ítem (per a comprovar que la pista és buida)
+         * @returns {Promise<Object>} { ok, err, name, start, end, res, resEnd }
+         */
+        _placeFonsTerç: async function (start, end, rng) {
+            var out = { ok: false, err: null, name: FONS_PNG, start: start, end: end, res: null, resEnd: null };
+            if (!(end > start + 0.05)) { out.err = 'rang massa curt'; return out; }
+            if (!(await this._trackFreeIn(TRACK_GRAF, rng, start))) { out.err = 'DESTI_OCUPAT'; return out; }
+            try {
+                var res = String(await callJSX("Clips.insert('" + U().escape(FONS_PNG) + "', " +
+                    TRACK_GRAF + ', ' + start.toFixed(4) + ', null, ' + "'video')") || '');
+                if (res.indexOf('ERR') === 0) {
+                    out.err = res;
+                    L('⚠️ [MAPA·tipus] PNG de fons: ' + res + ' → no el trobe al projecte', 'WARN');
+                    return out;
+                }
+                // Retall COHERENT (inPoint 0 → outPoint = durada volguda) perquè el PNG
+                // quede ESTIRABLE i acabe exactament on acaba el grafisme.
+                var rE = await callJSX('Clips.trimBounds(' + start.toFixed(4) + ', 0, ' +
+                    Math.max(0, end - start).toFixed(4) + ', ' + TRACK_GRAF + ", 'video')");
+                out.ok = true;
+                out.res = res;
+                out.resEnd = rE;
+                L('🎨 [MAPA·tipus] V' + TRACK_GRAF + ' (PNG de fons): "' + FONS_PNG + '" @ ' +
+                    start.toFixed(2) + 's → ' + end.toFixed(2) + 's [insert=' + res + ' · end=' + rE + ']');
+                return out;
+            } catch (e) {
+                out.err = e.message;
+                L('❌ [MAPA·tipus] _placeFonsTerç: ' + e.message, 'ERROR');
+                return out;
+            }
+        },
+
+        /**
          * _placeClips: Insereix els grafismes a la pista GRAF des de la posició d'entrada.
          * (2026-10-08) `refSec` és el CABEZAL i l'espai hàbil el marca el CLIP DE REFERÈNCIA
          * (el SELECCIONAT, o el de V1 sota el cabezal): el grafisme no ha d'invair el clip
@@ -1810,28 +1938,60 @@
             //    Tot el grafisme va al MATEIX track encara que tinga diversos trams.
             var tGraf = TRACK_GRAF;
             var rngGris = null;
+            var tipus = null;                    // 'gris' | 'color' | 'buit' | null (sense mesura)
             var gNums0 = [];
             for (var g0 = 0; g0 < items.length; g0++) gNums0.push(items[g0].name);
-            // Restes d'execucions anteriors d'AQUEST bloc a les dos pistes: si no es netegen
-            // abans, o tapen V3 (la màscara no pot pujar) o es confonen amb la màscara a V2
-            // (es pujaria el grafisme en lloc de la màscara). `_cleanupTrack` només esborra
-            // clips el media dels quals és d'aquest bloc.
+            // Restes d'execucions anteriors d'AQUEST bloc a les tres pistes on pot haver
+            // tocat: V2 (la màscara o el grafisme), V3 (el grafisme o el PNG de fons) i V4
+            // (el grafisme de dalt). Si no es netegen abans, o tapen V3 (la màscara no pot
+            // pujar) o es confonen amb la màscara de V2. `_cleanupTrack` només esborra
+            // clips el media dels quals és d'aquest bloc (o el PNG de fons del terç buit).
+            var netG = await this._cleanupTrack(TRACK_GRAF, gNums0.concat([FONS_PNG]));
             var netM = await this._cleanupTrack(TRACK_MASCARA, gNums0);
-            var netG = await this._cleanupTrack(TRACK_GRAF, gNums0);
-            if (netM || netG) {
-                L('🎨 [MAPA·gris] Netejades restes del bloc (V' + TRACK_MASCARA + ': ' + netM +
-                    ' · V' + TRACK_GRAF + ': ' + netG + ') abans de moure la màscara');
+            var netA = await this._cleanupTrack(TRACK_GRAF_ALT, gNums0);
+            if (netM || netG || netA) {
+                L('🎨 [MAPA·tipus] Netejades restes del bloc (V' + TRACK_MASCARA + ': ' + netM +
+                    ' · V' + TRACK_GRAF + ': ' + netG + ' · V' + TRACK_GRAF_ALT + ': ' + netA + ')');
             }
-            var zona = await this._zonaGris(items, ctx);   // només INFO al log
-            if (zona && zona.hasGrey) {
-                L('🎨 [MAPA·gris] El grafisme TÉ zona grisa al peu (' + (zona.cov !== null ?
-                    zona.cov.toFixed(1) + ' %' : '?') + ' · "' + zona.name + '")');
-            } else if (zona && zona.hasGrey === false) {
-                L('🎨 [MAPA·gris] El grafisme NO té zona grisa al peu → igualment màscara a V' +
-                    TRACK_GRAF + ' i grafisme a V' + TRACK_MASCARA);
+            // (2026-11-05 · GRAF_TERCIO_TIPUS · BUG #222) EL TIPUS mana la col·locació:
+            //   gris  → grafisme a V3 (`graficos`), la pista de sempre, i la màscara de V2
+            //           NO es mou: la placa grisa (clara o fosca) del peu ja fa de fons
+            //           (corregit en viu el 05/11 sobre la YNC V1 → `GRAF_TERCIO_V3`);
+            //   buit  → grafisme a V4 + PNG de fons (`FONS_PNG`) a V3 amb el mateix rang;
+            //   color → com des del 28/10: la màscara de l'ítem PUJA de V2 a V3 i el
+            //           grafisme va a V2 (per davall de la màscara).
+            //   Sense mesura (null) → col·locació de sempre (= color).
+            var tp = await this._grafTipus(items, ctx);
+            tipus = tp ? tp.kind : null;
+            var pct = function (v) { return (isFinite(v) ? Number(v).toFixed(1) : '—'); };
+            if (tp) {
+                L('🎨 [MAPA·tipus] Terç inferior = ' + String(tp.kind).toUpperCase() +
+                    ' (gris ' + pct(tp.covGris) + ' % · buit ' + pct(tp.covBuit) + ' % · altres ' +
+                    pct(tp.covAltres) + ' % · "' + tp.name + '"' + (tp.cached ? ' · caché' : '') + ')');
+            } else {
+                L('⚠️ [MAPA·tipus] Sense mesura del terç inferior → col·locació de sempre (màscara a V' +
+                    TRACK_GRAF + ' i grafisme a V' + TRACK_MASCARA + ')', 'WARN');
             }
+            this._lastTipus = tipus;
             var rng = await this._itemRangeAt(refSec);
-            if (!rng) {
+            if (tipus === 'gris') {
+                // GRIS → V3 (la pista de grafismes de sempre) i la màscara de V2 no es toca.
+                tGraf = TRACK_GRAF;
+                L('🎨 [MAPA·tipus] Terç gris → grafisme a V' + tGraf +
+                    ' · la màscara es queda a V' + TRACK_MASCARA + ' sense moure');
+            } else if (tipus === 'buit') {
+                // El grafisme va PER DAMUNT de la màscara: la màscara NO es toca.
+                if (await this._trackFreeIn(TRACK_GRAF_ALT, rng, refSec)) {
+                    tGraf = TRACK_GRAF_ALT;
+                    L('🎨 [MAPA·tipus] Terç buit → grafisme a V' + tGraf +
+                        ' · la màscara es queda a V' + TRACK_MASCARA + ' sense moure' +
+                        ' · el PNG de fons anirà a V' + TRACK_GRAF);
+                } else {
+                    L('⚠️ [MAPA·tipus] V' + TRACK_GRAF_ALT + ' ocupada a l\'ítem → grafisme a V' +
+                        TRACK_GRAF + ' (la màscara NO es mou)', 'WARN');
+                    U().status('MAPA: V' + TRACK_GRAF_ALT + ' ocupada → grafisme a V' + TRACK_GRAF, 'warn');
+                }
+            } else if (!rng) {
                 L('⚠️ [MAPA·gris] Sense rang d\'ítem → col·locació de sempre a V' +
                     TRACK_GRAF, 'WARN');
             } else {
@@ -1849,6 +2009,7 @@
                     U().status('MAPA: no s\'ha pogut moure la màscara', 'warn');
                 }
             }
+            this._lastTrack = tGraf;
 
             // 1. Espai hàbil: del punt d'entrada (el cabezal) fins al final del CLIP DE
             //    REFERÈNCIA (el seleccionat, o el de la pista MP4 sota el cabezal).
@@ -1977,6 +2138,20 @@
                 }
             } catch (eFz) {
                 L('⚠️ [MAPA] Congelat final del grafisme: ' + eFz.message, 'WARN');
+            }
+
+            // 6. (2026-11-05 · GRAF_TERCIO_TIPUS) Terç inferior TRANSPARENT: davall el
+            //    grafisme (V4) hi ha d'anar el PNG de fons a V3 amb el MATEIX rang
+            //    [refSec, grafEnd] (patró TE_TOTEM del 02/11 i del MAPA ZOOM). Si no es
+            //    pot col·locar (V3 ocupada, PNG fora del projecte) es diu i es continua:
+            //    el grafisme ja està col·locat.
+            if (tipus === 'buit') {
+                var fons = await this._placeFonsTerç(refSec, grafEnd, rng);
+                if (!fons.ok) {
+                    L('⚠️ [MAPA·tipus] PNG de fons NO col·locat (' + fons.err +
+                        ') → el terç transparent es queda sense fons', 'WARN');
+                    U().status('MAPA: terç transparent sense PNG de fons', 'warn');
+                }
             }
         }
     };

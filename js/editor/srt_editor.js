@@ -2437,12 +2437,21 @@
             var wfStart = this._wfMediaStart || 0;
             var wfEnd = this._wfMediaEnd || 0;
             var hasRange = (wfEnd > wfStart);
-            // Els peaks del .bin comencen a l'INICIAL del clip amb què es va generar
-            // (= el seu inPoint de MEDIA, p.ex. 27.92s amb handle de 20s), NO a media 0.
-            // Cal descomptar aquest origen abans d'indexar: sense això la waveform
-            // sortia desplaçada exactament aquest offset i quedava un buit gran al
-            // principi del timeline de l'editor (era petit quan el handle era petit).
-            var binStart = (this._wfMediaStart || 0);
+            // ── ORIGEN DEL .bin = MEDIA 0 DEL CLIP (BUG #223, 05/11) ──────────
+            // L'AUDIO_REF.bin es genera amb ffmpeg des del PRIMER BYTE del MP4
+            // extret (`-i <CLIP>.mp4`, SENSE `-ss`; vegeu `15_FFmpeg_Logic.js`
+            // `extractClip`), així que el seu índex 0 és el **media 0** del clip
+            // —el pre-roll/handle inclòs—, NO l'IN del clip.
+            // Abans es descomptava `_wfMediaStart` (= `inPoint` del clip, p.ex.
+            // 20,20 s de handle) i tota la WF quedava desplaçada eixe temps cap
+            // endavant: les pauses que se sentien ací es pintaven 20 s més tard.
+            // Es conserva el descompte NOMÉS si el .bin és més CURT que el rang
+            // del timeline (senyal d'un .bin antic retallat a l'IN del clip).
+            var binDurSec = nPeaks / pps;
+            var binStart = (binDurSec + 0.5 >= wfEnd) ? 0 : (this._wfMediaStart || 0);
+            log("📝 SRT_EDIT: WF base=" + binStart.toFixed(2) + "s · bin " +
+                binDurSec.toFixed(1) + "s · rang " + wfStart.toFixed(2) + "→" +
+                wfEnd.toFixed(2) + "s");
             for (var px = 0; px < W; px++) {
                 var sec = this._xToSec(px);
                 var secEnd = this._xToSec(px + 1);
