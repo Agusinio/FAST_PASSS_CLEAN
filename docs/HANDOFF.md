@@ -8,7 +8,7 @@
 > **Un sol handoff.** Prohibit tornar a crear diaris a `.roo/`, `plans/HANDOFF_*` o llistes de
 > pendents a `INFO/` (històric fusionat a [`docs/archive/`](archive/), 2026-11-06).
 
-**Últim traspàs:** 2026-11-06 · **Versió del codi:** 0.9.8 · **HEAD:** `70e9828` (= `origin/main`)
+**Últim traspàs:** 2026-11-06 · **Versió del codi:** 0.9.8 · **Branca:** `main` neta (= `origin/main`, sense ahead/behind)
 
 ---
 
@@ -40,7 +40,8 @@
    `bin/merge_md.ps1` i esborrats. `bin/merge_md.ps1` blindat (PS 5.1 el llig com ANSI: res
    d'accents en els seus literals).
 
-Commits: `16b29fa` (codi #224 + 0.9.8 + #226) · `26af9d3` (catàlegs) · `70e9828` (CHANGELOG).
+Commits: `16b29fa` (codi #224 + 0.9.8 + #226) · `26af9d3` (catàlegs) · `70e9828` (CHANGELOG) ·
+`125ca54` (este handoff: neteja dels diaris + arxiu).
 
 ## 3 · Com es treballa ací (resum operatiu)
 
@@ -103,7 +104,7 @@ Regles que no es poden trencar:
  (3) valida sempre amb bin\check_all.ps1 (o -Only js,smoke / setup / dead), mai les 4 proves per separat, i digues-me només la línia ALL GREEN;
  (4) codi i documentació en català, parla'm en espanyol; UTF-8 sense BOM;
  (5) git està a E:\PortableGit\bin\git.exe; missatges de commit en ASCII.
-Estat conegut: versió 0.9.8, HEAD 70e9828 = origin/main, ALL GREEN (setup 35/35 · js 65/65 · smoke 974/974 · dead 0 · jsx intacte).
+Estat conegut: versió 0.9.8, branca main neta (= origin/main), ALL GREEN (setup 35/35 · js 65/65 · smoke 974/974 · dead 0 · jsx intacte).
 Cua: 18 bugs per validar en viu (BUGS.md §1.1), 9 implementacions per validar (FEATURES.md §2), 7 per implementar (FEATURES.md §3), 2 decisions meues pendents (BUGS.md §1.3).
 TASCA D'ARA: <TASCA>
 No toques res fins que et confirme què has entés del handoff i quin és el primer pas.
@@ -113,5 +114,5 @@ No toques res fins que et confirme què has entés del handoff i quin és el pri
 
 | Data | Què es va tancar | Commits |
 |---|---|---|
-| 2026-11-06 | #224 (REOMLIR) implementat · #226 descartat · versió 0.9.8 · catàlegs quadrats · handoffs fusionats a `docs/archive/` | `16b29fa` · `26af9d3` · `70e9828` |
+| 2026-11-06 | #224 (REOMLIR) implementat · #226 descartat · versió 0.9.8 · catàlegs quadrats · handoffs fusionats a `docs/archive/` | `16b29fa` · `26af9d3` · `70e9828` · `125ca54` |
 
