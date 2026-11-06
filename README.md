@@ -183,7 +183,7 @@ i `fp_probe_setup_ui.ps1` (`-FailOnly`, només els `FAIL` + el `TOTAL`).
 | Referències (keyframes, parser, TITOLET…) | [`docs/reference/`](docs/reference/) |
 
 > ⚠️ Els documents de `docs/guides/` es van escriure per al repositori de desenvolupament: poden
-> esmentar eines internes (`plans/`, `.roo/`, scripts de `bin/`) que **no formen part d'aquest paquet**.
+> esmentar eines internes (`plans/`, scripts de `bin/`) que **no formen part d'aquest paquet**.
 > Si un enllaç no resol, busqueu el tema a `BUGS.md` o a `docs/CHANGELOG.md`.
 
 ---
