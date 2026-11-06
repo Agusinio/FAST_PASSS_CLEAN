@@ -55,3 +55,11 @@ Audios/
 # Mostres d audio soltes a l arrel (proves A1/anlms, 2026-11-03): fora del repo
 /*.WAV
 /*.wav
+
+# Separacio A1 per IA: el MODEL (67 MB, sense llicencia de redistribucio) i els
+# binaris NO es versionen. El codi font (bin/sep/src/) i PROVENANCE.md SI.
+# Vegeu bin/sep/PROVENANCE.md (descàrrega i hashes).
+bin/sep/*.onnx
+bin/sep/*.dll
+bin/sep/*.exe
+bin/sep/*.pdb
