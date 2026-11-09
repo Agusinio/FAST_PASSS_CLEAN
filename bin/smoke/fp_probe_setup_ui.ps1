@@ -409,12 +409,32 @@ if (-not $proc.WaitForExit(90000)) {
 }
 
 # (2026-10-22) Edge pot deixar el fitxer de `--dump-dom` bloquejat uns
-# mil·lisegons (fills del procés que hereten el handle): es reintenta la
+# mil·lísegons (fills del procés que hereten el handle): es reintenta la
 # lectura en lloc de petar la prova sencera amb un IOException.
-for ($attempt = 0; $attempt -lt 20; $attempt++) {
-    if (-not (Test-Path $dom)) { Start-Sleep -Milliseconds 250; continue }
-    try { $d = [System.IO.File]::ReadAllText($dom); break }
-    catch { Start-Sleep -Milliseconds 250 }
+# (2026-11-09) I el bloqueig pot durar MÉS que la vida del procés pare («Closing
+# with more than one service connected» a `fp_setup_err.txt`) → `ReadAllText`
+# peta sempre. Es llig amb `FileShare.ReadWrite` (el contingut ja està escrit i
+# només el te obert) i s'espera fins que APAREGUEN `#out` i `#out2` (màx. 10 s).
+function Read-SharedText([string]$path) {
+    $fs = $null
+    $sr = $null
+    try {
+        $fs = [System.IO.File]::Open($path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+        $sr = New-Object System.IO.StreamReader($fs, [System.Text.Encoding]::UTF8)
+        return $sr.ReadToEnd()
+    } catch { return '' }
+    finally {
+        if ($sr -ne $null) { try { $sr.Dispose() } catch { } }
+        if ($fs -ne $null) { try { $fs.Dispose() } catch { } }
+    }
+}
+$d = ''
+for ($attempt = 0; $attempt -lt 40; $attempt++) {
+    if (Test-Path -LiteralPath $dom) {
+        $d = Read-SharedText $dom
+        if ($d.IndexOf('<pre id="out">') -ge 0 -and $d.IndexOf('<pre id="out2">') -ge 0) { break }
+    }
+    Start-Sleep -Milliseconds 250
 }
 $mOut = [regex]::Match($d, '(?s)<pre id="out">(.*?)</pre>')
 if (-not $mOut.Success) {

@@ -233,9 +233,89 @@
                 P.alignmentCredible(null, 3).ok === false,
                 JSON.stringify([credNo, credOk, credFar, credFew]));
 
+            // ═══ (BUG #224-b · 09/11) MAPA PER ANCLES: el desfasament NO és constant ══
+            // Mesurat al NAS (11 parells SINT↔oficial, 126 mostres): dins d'un mateix
+            // parell el Δ va de -135 s a +799 s segons el tram. El que sí que es
+            // conserva és l'ORDRE de les frases → mapa per trams amb les frases que
+            // els dos tenen iguals com a ancles.
+            var ancBase = [E(10, 12, 'a'), E(100, 102, 'b'), E(200, 202, 'c')];
+            var ancSint = [E(0, 2, 'a'), E(50, 52, 'b'), E(120, 122, 'c')];
+            var anc = P.mapAnchors(ancBase, ancSint);
+            ok('#F3/68 mapAnchors: emparella en ordre i INTERPOLA el Δ entre ancles (no extrapola)',
+                anc.used === 3 && anc.pairs === 3 && anc.method === 'ancles' &&
+                near(anc.deltaMin, 10, 0.001) && near(anc.deltaMax, 80, 0.001) &&
+                near(anc.map(0), 10, 0.001) &&          // ancla
+                near(anc.map(50), 100, 0.001) &&        // ancla
+                near(anc.map(25), 55, 0.001) &&         // mig tram: Δ interpolat 10→50
+                near(anc.map(-10), 0, 0.001) &&         // abans del 1r ancla: Δ de l'extrem
+                near(anc.map(200), 280, 0.001),         // més enllà: Δ de l'últim
+                JSON.stringify({ used: anc.used, d: [anc.deltaMin, anc.deltaMax], m25: anc.map(25) }));
+
+            // Monotonia: una frase REPETIDA al SINT no pot generar ancles creuats.
+            var ancRep = P.mapAnchors([E(10, 11, 'hola'), E(20, 21, 'adeu'), E(30, 31, 'hola')],
+                [E(0, 1, 'hola'), E(10, 11, 'hola'), E(20, 21, 'adeu'), E(30, 31, 'hola')]);
+            var ancMono = true;
+            for (var ai = 1; ai < ancRep.anchors.length; ai++) {
+                if (!(ancRep.anchors[ai].sSec > ancRep.anchors[ai - 1].sSec)) ancMono = false;
+            }
+            ok('#F3/69 mapAnchors: els ancles són ESTRICTAMENT creixents (text repetit inclòs)',
+                ancMono && ancRep.used >= 3, JSON.stringify(ancRep.anchors));
+
+            var ancNo = P.mapAnchors([E(0, 1, 'res')], [E(0, 1, 'una altra cosa')]);
+            var ancFew = P.mapAnchors([E(10, 11, 'a'), E(20, 21, 'b')], [E(0, 1, 'a'), E(10, 11, 'b')]);
+            ok("#F3/70 mapAnchors: sense frases en comú és la IDENTITAT ('cap'); amb 1-2 ancles, 'ancles-febol'",
+                ancNo.method === 'cap' && ancNo.used === 0 && near(ancNo.map(7), 7, 0.001) &&
+                ancFew.method === 'ancles-febol' && ancFew.used === 2 &&
+                near(ancFew.map(5), 15, 0.001) &&
+                P.mapAnchors([], [], {}).method === 'cap',
+                JSON.stringify([ancNo.method, ancFew.method]));
+
+            // La fusio ha de col·locar on diu el MAPA: sense ell, la mateixa frase
+            // cauria fora del tram (l'eix SINT no és l'eix del NORMAL).
+            var mapBase = [E(0, 2, 'A'), E(30, 32, 'B'), E(60, 62, 'C')];
+            var mapSint = [E(-40, -38, 'A'), E(-20, -18, 'B'), E(0, 2, 'C'), E(-10, -8, 'NOU')];
+            var mapAnc = P.mapAnchors(mapBase, mapSint);
+            var conMapa = P.mergeSyntheticGaps(mapBase, mapSint, { tolSec: 0.2, anchorMap: mapAnc });
+            var senseMapa = P.mergeSyntheticGaps(mapBase, mapSint, { tolSec: 0.2 });
+            ok('#F3/71 fusió amb anchorMap: la frase SINT va al buit de l\'eix NORMAL (sense mapa, fora del tram)',
+                mapAnc.used === 3 && conMapa.mapped === true && conMapa.anchorUsed === 3 &&
+                conMapa.added.length === 1 && near(conMapa.added[0].startSec, 32.12) &&
+                conMapa.added[0].texts[0] === 'NOU' &&
+                conMapa.added[0].endSec > conMapa.added[0].startSec &&
+                conMapa.added[0].endSec <= 59.88 &&
+                senseMapa.added.length === 0,
+                'ancles=' + mapAnc.used + ' · amb-mapa=' + JSON.stringify(conMapa.added.map(function (a) { return a.startSec + '-' + a.endSec; })) +
+                ' · sense-mapa=' + JSON.stringify(senseMapa.rejected.map(function (r) { return r.texts[0] + ':' + r.reason; })));
+
+            // Amb mapa, la frase que només TOCA la vora del buit és del subtítol veí:
+            // només entra si hi cau al manco a mitges (`minOverlapRatio` = 0,5).
+            var ovBase = [E(0, 2, 'A'), E(10, 12, 'B')];
+            var ovSint = [E(0, 2, 'A'), E(10, 12, 'B'), E(0.5, 2.5, 'vora'), E(4, 5, 'dins')];
+            var ovMap = P.mergeSyntheticGaps(ovBase, ovSint, { tolSec: 0.2, anchorMap: P.mapAnchors(ovBase, ovSint) });
+            ok('#F3/72 fusió amb mapa: la frase que només toca la vora (25 %) NO entra al buit; la de dins sí',
+                ovMap.added.length === 1 && ovMap.added[0].texts[0] === 'dins',
+                JSON.stringify(ovMap.added.map(function (a) { return a.texts[0] + '@' + a.startSec; })));
+            // (BUG #224-b) PER QUE LA CREDIBILITAT ES MIRA TAMBÉ AMB ANCLES: la finestra
+            // de `alignmentCredible` (+-2,5 s al voltant de la MEDIANA) es buida quan el
+            // text es repetix (l'index per text pren la 1a aparicio i el Delta eixix
+            // dispers) → el SINT CORRECTE es descartava i el 🧩 no reomplia res. El
+            // mapa per ancles, que respecta l'ORDRE, el reconeix.
+            var credBase = [E(0, 1, 'A'), E(10, 11, 'B'), E(20, 21, 'A'),
+                E(30, 31, 'B'), E(40, 41, 'A'), E(50, 51, 'B')];
+            var credSint = credBase.map(function (x) { return E(x.startSec, x.endSec, x.texts[0]); });
+            var credEst = P.estimateOffsetSec(credBase, credSint);
+            var credCr = P.alignmentCredible(credEst, 3);
+            var credAnc = P.mapAnchors(credBase, credSint);
+            ok('#F3/74 credibilitat: text repetit → `alignmentCredible` diu NO però el mapa per ancles diu SÍ',
+                credEst.pairs === 6 && credCr.ok === false && credCr.reason === 'poques-frases' &&
+                credAnc.method === 'ancles' && credAnc.used === 6 &&
+                credAnc.used >= 3 && near(credAnc.map(25), 25, 0.001),
+                'pairs=' + credEst.pairs + ' used=' + credEst.used + ' cr=' + credCr.reason +
+                ' · ancles=' + credAnc.used + '/' + credAnc.method);
         } catch (eA) {
             ok('#F3 parser: la prova no ha llancat cap excepcio', false, eA && (eA.message + ' | ' + eA.stack));
         }
+
 
         // ── C. GUARDES DELS FITXERS REALS ────────────────────────────────
         try {
@@ -261,9 +341,9 @@
             ok('#F3/30 editor: el cursor NOMÉS es mou clicant la REGLA',
                 /this\._canvas\.addEventListener\('click', function \(e\) \{[\s\S]{0,200}?_inRulerZone\(e\)\) return;/.test(ed) &&
                 /_clipHitAtEvent\(e\)/.test(ed));
-            ok('#F3/15 editor: colors propis SINT (taronja) i MOD (verd)',
+            ok('#F3/15 editor: colors propis SINT (ROIG) i MOD (verd)',
                 /'SINT'/.test(ed) && /'MOD'/.test(ed) &&
-                /212,\s*120,\s*32/.test(ed) && /32,\s*160,\s*120/.test(ed));
+                /206,\s*38,\s*46/.test(ed) && /32,\s*160,\s*120/.test(ed));
             ok('#F3/16 editor: exportToPremiere(opts) amb pista i neteja NOMES la de destí',
                 /exportToPremiere:\s*async function \(opts\)/.test(ed) &&
                 /o\.track != null/.test(ed) && /trackIdx/.test(ed) &&
@@ -279,13 +359,16 @@
             // estirament màxim), les entrades encaixades es pinten amb un to propi
             // (`e.sint`) i l'exportació al timeline ja no penja del 🧩.
             if (ed.indexOf('exportGapClips') !== -1) {
-                ok('#F3/51 editor: fusió amb encaix al buit (minDur/gapSec/maxStretch) + pintat SINT', false, 'exportGapClips encara hi és');
+                ok('#F3/51 editor: fusió amb encaix al buit (minDur/gap/maxStretch) + pintat SINT', false, 'exportGapClips encara hi és');
             } else {
-                ok('#F3/51 editor: fusió amb encaix al buit (minDur/gapSec/maxStretch) + pintat SINT',
-                    /srtSyntheticMinDurSec/.test(ed) && /srtSyntheticGapSec/.test(ed) &&
-                    /srtSyntheticMaxStretch/.test(ed) &&
-                    /minDurSec: minDur/.test(ed) && /gapSec: gapSec/.test(ed) &&
-                    /maxStretchSec: maxStretch/.test(ed) &&
+                // (BUG #224-b) La separació de 3 frames (0,12 s) ja no ve de la config
+                // (`srtSyntheticGapSec` suprimida): viu al parser com a `GAP` i el que
+                // el 🧩 passa a la fusió és el MAPA PER ANCLES (`anchorMap`).
+                ok('#F3/51 editor: fusió amb encaix al buit (minDur/GAP/maxStretch) + pintat SINT',
+                    /srtSyntheticMinDurSec/.test(ed) && /srtSyntheticMaxStretch/.test(ed) &&
+                    /minDurSec: minDur/.test(ed) && /maxStretchSec: maxStretch/.test(ed) &&
+                    /anchorMap: anch/.test(ed) && /mapAnchors/.test(ed) &&
+                    ed.indexOf('srtSyntheticGapSec') === -1 &&
                     /fillSint/.test(ed) && /e\.sint/.test(ed));
             }
             ok('#F3/19 editor: esborrar del timeline NOMES clips de subtítol (sense ripple)',
@@ -330,11 +413,11 @@
             ok('#F3/24 index: 🧩 a la fila SUBTÍTOLS i 🗑 RETIRAT (Supr ho fa)',
                 html.indexOf('btnSrtDel') === -1 && /id="btnSrtFill"/.test(html) &&
                 /Ctrl\+clic = SUBTÍTOLS SINTÈTICS/.test(html));
-            ok('#F3/25 index: cache-busts F3 (srt_editor 90, flow_srt 19, main ' +
-                '109, Scanner 27, Srt_Logic 23, Config 45)',
-                /srt_editor\.js\?v=90/.test(html) && /flow_srt\.js\?v=19/.test(html) &&
+            ok('#F3/25 index: cache-busts F3 (srt_editor 94, flow_srt 21, main ' +
+                '109, Scanner 27, Srt_Logic 24, Config 46)',
+                /srt_editor\.js\?v=94/.test(html) && /flow_srt\.js\?v=21/.test(html) &&
                 /main\.js\?v=109/.test(html) && /Scanner\.js\?v=27/.test(html) &&
-                /10_Srt_Logic\.js\?v=23/.test(html) && /11_Configuracio\.js\?v=45/.test(html));
+                /10_Srt_Logic\.js\?v=24/.test(html) && /11_Configuracio\.js\?v=46/.test(html));
 
             var cfg = noComments(await readRepo('js/core/11_Configuracio.js'));
             ok('#F3/26 config: srtSyntheticGapTolSec (default 0,2 s + getter)',
@@ -517,14 +600,18 @@
                 /REOMLIR cancel·lat/.test(edSrc) &&
                 edSrc.indexOf('pot ser d\'un ALTRE bloc') === -1);
 
-            // (BUG #189 · 2026-10-23) El SINT es desplaça a l'eix de MEDIA del NORMAL
-            // ABANS de fusionar (i tambe en carregar-lo o en restaurar els marcadors).
-            var mergeSrc = edSrc.split('mergeSyntheticGaps: async function')[1] || '';
-            ok("#F3/58 editor: alinea el SINT a l'eix del NORMAL abans de fusionar (BUG #189)",
+            // (BUG #189 · 2026-10-23 · reescrit al #224-b 2026-11-09) L'eix del SINT es
+            // creua amb un MAPA PER ANCLES. `_applySintAlignment` només MESURA i ho diu
+            // al log: desplaçar la taula SINT era el que feia que cada reintent partira
+            // d'un eix distint (el «desfasament inestable» del #224).
+            // (BUG #224-c) la mesura es fa contra la taula oficial SENSE les entrades
+            // `sint` (`measBase`), no contra la de fusió.
+            ok("#F3/58 editor: el SINT es creua amb el mapa per ANCLES (no es desplaça la taula)",
                 /_applySintAlignment:\s*function/.test(edSrc) &&
-                /estimateOffsetSec/.test(edSrc) && /shiftEntries\(holder\.entries, d\)/.test(edSrc) &&
-                /this\._applySintAlignment\(\);/.test(mergeSrc) &&
-                /_sintShiftSec/.test(edSrc) && /marcadors SINT desplaçats/.test(edSrc));
+                /var anch = P\.mapAnchors\(base, holder\.entries\);/.test(edSrc) &&
+                /var anch = P\.mapAnchors\(measBase, sint\);/.test(edSrc) &&
+                /anchorMap: anch/.test(edSrc) &&
+                edSrc.indexOf('shiftEntries(holder.entries') === -1);
             // (BUG #189) Els marcadors es desen a disc en l'eix DEL FITXER (es desfà
             // `_sintShiftSec`), perque en restaurar-los se'ls aplica el desplaçament:
             // si es desessin desplaçats, cada recàrrega els tornaria a moure.
@@ -535,13 +622,245 @@
                 /var sh = Number\(this\._sintShiftSec\) \|\| 0;/.test(edSrc) &&
                 /Number\(m\) - sh/.test(edSrc) &&
                 /var data = this\._markersPayload\(\);/.test(edSrc));
-            // El desplaçament viatja amb la instantania de la vista (NORMAL↔SINT) i
-            // s'acumula si una segona fusió corregeix un residual.
-            ok('#F3/60 editor: el desplaçament SINT viatja amb la vista i s\'acumula',
-                /sintShiftSec:\s*Number\(this\._sintShiftSec\) \|\| 0/.test(edSrc) &&
-                /this\._sintShiftSec = Number\(v\.sintShiftSec\) \|\| 0;/.test(edSrc) &&
-                /var shNow = shPrev \+ d;/.test(edSrc) &&
-                /this\._sintShiftSec = shNow; else holder\.sintShiftSec = shNow;/.test(edSrc));
+            // (BUG #224-b · 2026-11-09) IDENTITAT DEL PROJECTE: el .srt de treball, el
+            // nom i l'empremta només els fixa el NORMAL. Si el SINT els deixava
+            // ficats, el RESET ♻️ recarregava el sintètic com a SRT del bloc i els
+            // marcadors es desaven/restauraven contra eixe eix.
+            ok('#F3/60 editor: el SINT no sobreescriu la identitat del projecte (RESET ♻️)',
+                /this\._viewPath = srtPath;/.test(edSrc) &&
+                /if \(kind === 'NORMAL'\) \{/.test(edSrc) &&
+                /this\._viewPath = v\.path \|\| '';/.test(edSrc) &&
+                /String\(v\.kind \|\| ''\)\.toUpperCase\(\) === 'NORMAL'/.test(edSrc) &&
+                /path: this\._viewPath \|\| this\._srtPath/.test(edSrc) &&
+                /name: this\._viewName \|\| this\._srtName/.test(edSrc));
+            // (BUG #224-b) El RESET ♻️ recarrega SEMPRE el NORMAL (encara que s'estiga
+            // veient el SINT o la MOD): si recarregara el sintètic, la base de mesura
+            // quedaria contaminada i el desfasament eixiria distint a cada reintent.
+            ok("#F3/73 flux: el RESET ♻️ recarrega el SRT NORMAL (kind explícit)",
+                /loadSrt\(cur, \{ kind: 'NORMAL', skipMarkerRestore: true \}\)/.test(flow));
+            // (BUG #224-b) La TRIERA de candidats també ha de mirar el mapa per ancles:
+            // si només es mira `alignmentCredible` (finestra de +-2,5 s al voltant de la
+            // mediana) un SINT correcte de Delta variable es descarta i el 🧩 no fa res.
+            ok('#F3/75 editor: _pickSintForFill accepta el SINT per ANCLES (no només per la mediana)',
+                /var credible = function \(ents\)/.test(edSrc) &&
+                /P\.mapAnchors\(base, ents\)/.test(edSrc) &&
+                /anch\.method === 'ancles' && anch\.used >= minPairs/.test(edSrc) &&
+                /ok-ancles/.test(edSrc) &&
+                /Math\.max\(Number\(est\.used\) \|\| 0, nAnch\)/.test(edSrc));
+
+            // (2026-11-09 · BUG #224-c · UI) FORMA D'ONA EN BLAU: la WF es pintava
+            // verda (#22cc66 damunt #0d2818) i els clips de la vista MOD també són
+            // verds (`_trackStyle`), així que no es distingia la silueta d'un clip.
+            // El blau no el fa servir cap taula (NORMAL lila · SINT taronja · MOD verd).
+            var wfBlk = (edSrc.split('_drawWaveform: function')[1] || '')
+                .split('_computeWaveformPixels: function')[0];
+            ok('#F3/76 editor: la WF es pinta en BLAU FOSC (fons #071320 · pics #1f6fb5), no verda',
+                /fillStyle = '#071320'/.test(wfBlk) && /fillStyle = '#1f6fb5'/.test(wfBlk) &&
+                wfBlk.indexOf('#22cc66') === -1 && wfBlk.indexOf('#0d2818') === -1,
+                'blau=' + /#1f6fb5/.test(wfBlk) + ' * verd=' + /#22cc66/.test(wfBlk));
+
+            // (2026-11-09 · BUG #224-c) ELS CLIPS ESBORRATS TORNAVEN: `mergeSyntheticGaps`
+            // llegia SEMPRE `_views['NORMAL']` (instantania que només canvia al canviar de
+            // vista) i `deleteSelected` edita només la taula VIVA → el 🧩 partia d'una
+            // copia vella i tornava a col·locar el que l'usuari havia esborrat. Ara la base
+            // ix de `_baseForFill()` (viva si es veu NORMAL o MOD) i la MESURA descarta les
+            // entrades `sint` (`_baseForMeasure`) per a no confirmar-se amb si mateixa.
+            ok('#F3/77 editor: el 🧩 partix de la taula VIVA (no de la instantania) i mesura sense les `sint`',
+                /_baseForFill:\s*function/.test(edSrc) && /_baseForMeasure:\s*function/.test(edSrc) &&
+                /var fbase = this\._baseForFill\(\);/.test(edSrc) &&
+                /var measBase = this\._baseForMeasure\(fbase\);/.test(edSrc) &&
+                /P\.mapAnchors\(measBase, sint\)/.test(edSrc) &&
+                /P\.mergeSyntheticGaps\(base, sint/.test(edSrc) &&
+                /P\.estimateOffsetSec\(measBase, sint\)/.test(edSrc) &&
+                /_pickSintForFill\(measBase,/.test(edSrc) &&
+                /if \(!cands\[c\]\[i\]\.sint\) out\.push/.test(edSrc) &&
+                /if \(this\._views && this\._views\[this\._kind\]\) this\._stashCurrentView\(\)/.test(edSrc) &&
+                edSrc.indexOf('var base = baseView ? baseView.entries') === -1,
+                'fill=' + /_baseForFill:\s*function/.test(edSrc) +
+                ' * meas=' + /_baseForMeasure:\s*function/.test(edSrc) +
+                ' * vella=' + (edSrc.indexOf('var base = baseView ? baseView.entries') >= 0));
+
+            // (2026-11-09 · BUG #224-c) PROVA FUNCIONAL del helper (no només regex): amb
+            // una vista NORMAL viva de 2 clips i una instantania vella de 3, la base del
+            // 🧩 ha de ser la VIVA (el clip esborrat NO torna) i la MESURA ha de descartar
+            // les entrades `sint` que ja va encaixar una fusio anterior.
+            var SE = UI.Editor && UI.Editor.SrtEditor;
+            if (SE && SE._baseForFill && SE._baseForMeasure) {
+                var viva = [E(0, 2, 'A'), E(10, 12, 'B')];              // l'usuari ha esborrat el del mig
+                var vella = { entries: [E(0, 2, 'A'), E(4, 6, 'C'), E(10, 12, 'B')], markers: [] };
+                var fN = SE._baseForFill.call({ _kind: 'NORMAL', _entries: viva, _views: { NORMAL: vella } });
+                var fM = SE._baseForFill.call({ _kind: 'MOD', _entries: viva, _views: { NORMAL: vella } });
+                var fS = SE._baseForFill.call({ _kind: 'SINT', _entries: [E(0, 1, 'S')], _views: { NORMAL: vella } });
+                // Taula viva BUIDA: la instantania NO ha de fer tornar els clips.
+                var fB = SE._baseForFill.call({ _kind: 'NORMAL', _entries: [], _views: { NORMAL: vella } });
+                var mixta = viva.concat([{ index: 0, timeStr: '', texts: ['X'], startSec: 20, endSec: 21, sint: true }]);
+                var mida = SE._baseForMeasure.call({ _views: { NORMAL: vella } }, { entries: mixta });
+                var sintMes = 0;
+                for (var iM = 0; iM < mida.length; iM++) { if (mida[iM].sint) sintMes++; }
+                ok('#F3/78 funcional: el 🧩 usa la taula VIVA (no la instantania) i mesura sense les `sint`',
+                    fN.entries === viva && fN.live === true && fN.view === null &&
+                    fM.entries === viva && fM.live === true &&
+                    fS.entries === vella.entries && fS.view === vella && fS.live === false &&
+                    fB.live === true && fB.entries.length === 0 &&
+                    mida.length === 3 && mida[2].texts[0] === 'B' && sintMes === 0,
+                    'N=' + fN.entries.length + ' M=' + fM.entries.length +
+                    ' S=' + (fS.entries ? fS.entries.length : -1) +
+                    ' mesura=' + mida.length + ' sint=' + sintMes);
+            } else {
+                ok('#F3/78 funcional: el 🧩 usa la taula VIVA (no la instantania) i mesura sense les `sint`', false,
+                    'SrtEditor=' + !!SE + ' fill=' + !!(SE && SE._baseForFill) +
+                    ' meas=' + !!(SE && SE._baseForMeasure));
+            }
+
+            // ═══ (BUG #257 · 2026-11-09) EL SINT NO ES RETALLA EN CARREGAR-SE ═══════
+            // El fitxer de marcadors va lligat al NOM i a l'EMPREMTA del SRT oficial,
+            // però eixa empremta no canvia en carregar un SINT (#224-b) → es
+            // restauraven els marcadors del SRT OFICIAL i `_applyAllMarkers()` muntava
+            // la taula SINT amb els eixos d'un altre fitxer: clips sencers
+            // desapareixien (l'usuari ho veu com «falta la primera part de la frase i
+            // el clip anterior acaba en punt»). En vista SINT no es restaura res.
+            var loadBlk = (edSrc.split('loadSrt: async function')[1] || '').split('loadEmergencySrt:')[0];
+            ok("#F3/79 editor: en vista SINT no es restauren marcadors ni s'aplica el warp (#257)",
+                /var sintView = \(kind === 'SINT'\);/.test(loadBlk) &&
+                /if \(sintView\) \{[\s\S]{0,400}?log\(/.test(loadBlk) &&
+                /else if \(skipMarkerRestore\) log\(/.test(loadBlk) &&
+                /if \(!sintView\) this\._applyAllMarkers\(\);/.test(loadBlk) &&
+                !/^ {12}this\._applyAllMarkers\(\);$/m.test(loadBlk),
+                'sintView=' + /var sintView = \(kind === 'SINT'\);/.test(loadBlk) +
+                ' guard=' + /if \(!sintView\) this\._applyAllMarkers\(\);/.test(loadBlk) +
+                ' senseGuarda=' + /^ {12}this\._applyAllMarkers\(\);$/m.test(loadBlk));
+            ok('#F3/80 editor: en vista SINT no es desen marcadors (no esborra els del SRT oficial)',
+                /_persistMarkers: function \(\) \{[\s\S]{0,700}?=== 'SINT'\)[\s\S]{0,300}?return;/.test(edSrc) &&
+                /clic dret ignorat en vista SINT/.test(edSrc));
+            // PROVA FUNCIONAL: sense marcadors la taula SINT es copia SENCERA; amb
+            // marcadors d'un altre eix (el cas del bug) en perden. El detall del test
+            // deixa el número al log perquè quede clar per què cal el guard.
+            if (SE && SE._applyAllMarkers) {
+                function sintTaula() {
+                    return [E(0.0, 1.8, 'A'), E(2.0, 3.9, 'B'), E(4.1, 5.7, 'C'), E(6.0, 8.2, 'D')];
+                }
+                var edNet = Object.create(SE);
+                edNet._originalEntries = sintTaula();
+                edNet._originalMarkers = [];
+                edNet._markers = [];
+                edNet._applyAllMarkers();
+                var edAli = Object.create(SE);
+                edAli._originalEntries = sintTaula();
+                edAli._originalMarkers = [40, 80];   // eix del SRT oficial (90 s)
+                edAli._markers = [40, 80];
+                edAli._applyAllMarkers();
+                ok('#F3/81 funcional: sense marcadors el SINT es conserva sencer (amb marcadors aliens es perd)',
+                    edNet._entries.length === 4 && edNet._entries[3].texts[0] === 'D',
+                    'nete=' + edNet._entries.length + '/4 · amb marcadors aliens=' + edAli._entries.length + '/4');
+            } else {
+                ok('#F3/81 funcional: sense marcadors el SINT es conserva sencer (amb marcadors aliens es perd)', false,
+                    'SrtEditor=' + !!SE + ' warp=' + !!(SE && SE._applyAllMarkers));
+            }
+            // (2026-11-09) ROIG per al SINT (abans taronja) i WF menys amplificada.
+            var stBlk = (edSrc.split('_trackStyle: function')[1] || '').split('_clipAtSec:')[0];
+            ok('#F3/82 editor: els clips SINT en ROIG (no taronja) i la WF menys amplificada (gain 1.8)',
+                /fillSint: 'rgba\(206,38,46/.test(stBlk) &&
+                /strokeSint: 'rgba\(255,138,138/.test(stBlk) &&
+                /fill: 'rgba\(176,30,38/.test(stBlk) &&
+                stBlk.indexOf('212,120,32') === -1 &&
+                /_waveformGain: 1\.8,/.test(edSrc),
+                'roig=' + /rgba\(206,38,46/.test(stBlk) +
+                ' * taronja=' + (stBlk.indexOf('212,120,32') >= 0) +
+                ' * gain=' + /_waveformGain: 1\.8,/.test(edSrc));
+
+            // ═══ (BUG #257 · 2026-11-09) ELS FITXERS DE MARCADORS S'ESBORREN ═══════
+            // Un `fastpass_srt_markers_*.json` orfe no ha de sobreviure ni al RESET ni
+            // al tancament del projecte: el V3 tenia el del SINT (creat pel bug) dins
+            // la carpeta del projecte i podia re-infectar la vista. ABANS es BUIDAVA
+            // (`writeFile(path,'')`) i el .json buit es quedava al costat del manifest.
+            var wipeBlk = (edSrc.split('_wipeMarkersFile: function')[1] || '').split('wipeMarkersForProject')[0];
+            ok("#F3/83 editor: `_wipeMarkersFile` ESBORRA el .json (deleteFile, no writeFile buit)",
+                /_deleteFiles\(\[full\]\)/.test(wipeBlk) &&
+                /_deleteFiles: function \(paths\)/.test(edSrc) &&
+                /fs\.deleteFile\(p\)/.test(edSrc) &&
+                !/writeFile\(full, ''\)/.test(wipeBlk) &&
+                !/writeFile\(full, ""\)/.test(wipeBlk),
+                'del=' + /_deleteFiles\(\[full\]\)/.test(wipeBlk) +
+                ' api=' + /fs\.deleteFile\(p\)/.test(edSrc) +
+                ' * buit=' + (/writeFile\(full, ''\)/.test(wipeBlk) || /writeFile\(full, ""\)/.test(wipeBlk)));
+            var wfpBlk = (edSrc.split('wipeMarkersForProject: function')[1] || '').split('_persistMarkers')[0];
+            ok('#F3/84 editor: `wipeMarkersForProject` esborra els marcadors de DINS del projecte (SINT inclòs)',
+                /readdir\(rawF\.replace/.test(wfpBlk) &&
+                /baseP \+ '\/' \+ nmA/.test(wfpBlk) &&
+                /_deleteFiles\(\[full\]\)/.test(wfpBlk) &&
+                !/writeFile\(full, ''\)/.test(wfpBlk),
+                'readdir=' + /readdir\(rawF\.replace/.test(wfpBlk) +
+                ' del=' + /_deleteFiles\(\[full\]\)/.test(wfpBlk) +
+                ' * buit=' + /writeFile\(full, ''\)/.test(wfpBlk));
+            var resetBlk = (flow.split('runSrtReset: async function')[1] || '').split('runSrtLoad:')[0];
+            ok('#F3/85 flux: el RESET ♻️ esborra TOTS els fitxers de marcadors del projecte',
+                /ed\._wipeMarkersFile\(cur\)/.test(resetBlk) &&
+                /ed\.wipeMarkersForProject\(ed\._projectKey\)/.test(resetBlk),
+                'wipe=' + /ed\._wipeMarkersFile\(cur\)/.test(resetBlk) +
+                ' projecte=' + /ed\.wipeMarkersForProject\(ed\._projectKey\)/.test(resetBlk));
+            ok("#F3/86 editor: en carregar el SINT s'esborra el seu fitxer de marcadors (restes del #257)",
+                /if \(sintView\) \{[\s\S]{0,400}?this\._wipeMarkersFile\(this\._viewName \|\| this\._srtName\);/.test(loadBlk),
+                'wipeSint=' + /this\._wipeMarkersFile\(this\._viewName \|\| this\._srtName\);/.test(loadBlk));
+
+            // PROVA FUNCIONAL amb un `cep.fs` simulat (memòria): esborra DE DEBÒ (no
+            // deixa fitxers buits), treu el del projecte i el del SINT, i respecta el
+            // manifest i els marcadors d'un ALTRE projecte.
+            if (SE && SE._deleteFiles && SE.wipeMarkersForProject && SE._wipeMarkersFile) {
+                var cepPrev257 = window.cep;
+                function n257(p) { return String(p).replace(/\\/g, '/'); }
+                var files257 = {};
+                files257['C:/proj257/fastpass_srt_markers_emergencia_EMERGENCIA.json'] = '{"projectKey":"C:\\\\proj257","markers":[1]}';
+                files257['C:/proj257/fastpass_srt_markers_TN_SINT.json'] = '{"projectKey":"C:\\\\proj257","markers":[2]}';
+                files257['C:/proj257/manifest.fastpass.json'] = '{}';
+                files257['C:/temp/fastpass_srt_markers_emergencia_EMERGENCIA.json'] = '{"projectKey":"C:\\\\proj257","markers":[1]}';
+                files257['C:/temp/fastpass_srt_markers_daltre.json'] = '{"projectKey":"C:\\\\ALTRE","markers":[3]}';
+                function ls257(dir) {
+                    var d = n257(dir).replace(/\/+$/, '') + '/';
+                    var out = [];
+                    for (var k in files257) {
+                        if (!Object.prototype.hasOwnProperty.call(files257, k)) continue;
+                        if (k.indexOf(d) !== 0) continue;
+                        if (k.slice(d.length).indexOf('/') !== -1) continue;
+                        out.push(k.slice(d.length));
+                    }
+                    return { err: 0, data: out };
+                }
+                window.cep = {
+                    fs: {
+                        deleteFile: function (p) {
+                            var q = n257(p);
+                            if (!Object.prototype.hasOwnProperty.call(files257, q)) return { err: 9 };
+                            delete files257[q]; return { err: 0 };
+                        },
+                        writeFile: function (p, d) { files257[n257(p)] = d; return { err: 0 }; },
+                        readFile: function (p) {
+                            var q = n257(p);
+                            return Object.prototype.hasOwnProperty.call(files257, q) ? { err: 0, data: files257[q] } : { err: 9, data: '' };
+                        },
+                        readdir: function (d) { return ls257(d); }
+                    }
+                };
+                var edW257 = Object.create(SE);
+                edW257._projectKey = 'C:\\proj257';
+                edW257._srtName = 'emergencia_EMERGENCIA';
+                var nDel257 = edW257.wipeMarkersForProject('C:\\proj257');
+                var qued257 = Object.keys(files257).sort().join(',');
+                ok('#F3/87 funcional: el RESET esborra el .json del projecte i el del SINT (respecta manifest i altres projectes)',
+                    nDel257 === 3 && qued257 === 'C:/proj257/manifest.fastpass.json,C:/temp/fastpass_srt_markers_daltre.json',
+                    'n=' + nDel257 + ' queden=[' + qued257 + ']');
+                var nWipe257 = edW257._wipeMarkersFile('emergencia_EMERGENCIA.srt');
+                var buits257 = Object.keys(files257).filter(function (k) { return files257[k] === ''; }).length;
+                ok('#F3/88 funcional: `_wipeMarkersFile` esborra (no deixa cap .json buit)',
+                    !Object.prototype.hasOwnProperty.call(files257, 'C:/proj257/fastpass_srt_markers_emergencia_EMERGENCIA.json') && buits257 === 0,
+                    'n=' + nWipe257 + ' buits=' + buits257);
+                if (cepPrev257 === undefined) delete window.cep; else window.cep = cepPrev257;
+            } else {
+                ok('#F3/87 funcional: el RESET esborra el .json del projecte i el del SINT (respecta manifest i altres projectes)', false,
+                    'SrtEditor=' + !!SE + ' del=' + !!(SE && SE._deleteFiles) + ' wipe=' + !!(SE && SE.wipeMarkersForProject));
+                ok('#F3/88 funcional: `_wipeMarkersFile` esborra (no deixa cap .json buit)', false,
+                    'SrtEditor=' + !!SE + ' wipe=' + !!(SE && SE._wipeMarkersFile));
+            }
+
             // (BUG #190 · 2026-10-23) Quan 🧩/Ctrl+clic no troben SINT, el motiu REAL ha
             // d'arribar a la barra d'estat: abans deia «revisa rutas.subtitulosSinteticos»
             // i pareixia que el botó no responia (la carpeta estava bé; eixe dia només hi

@@ -14,7 +14,7 @@
   `jsx/**` → permís previ + `-Only js,smoke`.
 - Redirigeix a `%TEMP%` i llig només `ALL GREEN` / `FAIL` / `exit=`.
   El detall ja és a `%TEMP%\fp_check_all\<control>.txt`.
-- Verd esperat: `ALL GREEN | setup 35/35 | js 61/61 | smoke 452/452 | dead 0 | jsx intacte`.
+- Verd esperat: `ALL GREEN | setup 35/35 | js 65/65 | smoke 990/990 | dead 0 | jsx intacte`.
 
 ## 2 · ⛔ EXTENDSCRIPT INTOCABLE (`jsx/main.jsx`, `jsx/modules/*.jsx`)
 

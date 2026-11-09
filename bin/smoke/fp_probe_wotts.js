@@ -249,8 +249,8 @@
                 /if \(placeEnd !== null && \(placeEnd - slot\.start\) > REV_FRAME \+ 0\.001\) \{/.test(chySrc) &&
                 /placeEnd = gridDown\(placeEnd - REV_FRAME\);/.test(chySrc));
             var idxW = await readRepo('index.html');
-            ok('#WOTT/24 cache-bust al dia (4_Context 36, flow_chyrons 101, Scanner 27)',
-                /4_Context\.js\?v=36/.test(idxW) && /flow_chyrons\.js\?v=101/.test(idxW) &&
+            ok('#WOTT/24 cache-bust al dia (4_Context 36, flow_chyrons 103, Scanner 27)',
+                /4_Context\.js\?v=36/.test(idxW) && /flow_chyrons\.js\?v=104/.test(idxW) &&
                 /Scanner\.js\?v=27/.test(idxW),
                 (idxW.match(/4_Context\.js\?v=\d+/) || '') + ' ' +
                 (idxW.match(/flow_chyrons\.js\?v=\d+/) || '') + ' ' +
@@ -526,40 +526,57 @@
                 workTargetDay: UI.State.workTargetDay,
                 projectDateDir: UI.State.projectDateDir
             };
+            // (2026-11-09 · BUG #251) PROVA HERMÈTICA: `_targetDateDir` construïx el
+            // «avui» amb `new Date()` (4_Context.js:135 i :154), NO amb `_ymdToday()`,
+            // així que mockejar `Utils.getFormattedDate` no el controla. Fins hui les
+            // dos assercions clavaven la data a mà ('2026_11_06') i el verd eixia
+            // NOMÉS el dia que el rellotge coincidia amb eixa data → el 09/11 el
+            // smoke donava 972/974. Ara la foto es calcula del rellotge real i el
+            // mock dona EIXE MATEIX dia: el control continua sent igual de dur
+            // (el cas «AHIR» és la data real de fa un dia) i no caduca mai.
+            var _ymd = function (dt) {
+                return dt.getFullYear() + '_' +
+                    ('0' + (dt.getMonth() + 1)).slice(-2) + '_' +
+                    ('0' + dt.getDate()).slice(-2);
+            };
+            var YMD_HOY = _ymd(new Date());
+            var _dtAhir = new Date();
+            _dtAhir.setDate(_dtAhir.getDate() - 1);
+            var YMD_AHIR = _ymd(_dtAhir);
             var gfdD = UI.Utils.getFormattedDate;
             try {
-                UI.Utils.getFormattedDate = function () { return '2026_11_06'; };
+                UI.Utils.getFormattedDate = function () { return YMD_HOY; };
                 // (a) Mode correcció segellat AHIR: en canviar el dia, caduca.
                 UI.State.workTarget = 'yesterday';
-                UI.State.workTargetDay = '2026_11_05';
-                UI.State.projectDateDir = '2026_11_05';
+                UI.State.workTargetDay = YMD_AHIR;
+                UI.State.projectDateDir = YMD_AHIR;
                 var actCad = ctxD._correctionActive();
                 var tgtCad = ctxD._targetDateDir();
                 ok('#WOTT/69 _correctionActive: el mode correcció del dia ANTERIOR CADUCA hui → data de treball AVUI',
                     actCad === false && UI.State.workTarget === 'today' &&
-                    UI.State.workTargetDay === null && tgtCad === '2026_11_06',
+                    UI.State.workTargetDay === null && tgtCad === YMD_HOY,
                     'actiu=' + actCad + ' wt=' + UI.State.workTarget +
-                    ' tgt=' + tgtCad + ' (esperat 2026_11_06)');
+                    ' tgt=' + tgtCad + ' (esperat ' + YMD_HOY + ')');
 
                 // (b) Sessió ANTIGA (panell d'abans del #245): sense segell → caduca.
                 UI.State.workTarget = 'yesterday';
                 UI.State.workTargetDay = null;
-                UI.State.projectDateDir = '2026_11_05';
+                UI.State.projectDateDir = YMD_AHIR;
                 var actLeg = ctxD._correctionActive();
                 ok('#WOTT/70 _correctionActive: `workTarget` sense segell de dia CADUCA (mai AHIR per inèrcia)',
                     actLeg === false && UI.State.workTarget === 'today' &&
-                    ctxD._targetDateDir() === '2026_11_06',
+                    ctxD._targetDateDir() === YMD_HOY,
                     'actiu=' + actLeg + ' wt=' + UI.State.workTarget);
 
                 // (c) Ctrl+clic fet AVUI → l'AHIR es conserva (#238 intacte).
                 UI.State.workTarget = 'yesterday';
-                UI.State.workTargetDay = '2026_11_06';
-                UI.State.projectDateDir = '2026_11_05';
+                UI.State.workTargetDay = YMD_HOY;
+                UI.State.projectDateDir = YMD_AHIR;
                 var actOk = ctxD._correctionActive();
                 var tgtOk2 = ctxD._targetDateDir();
-                ok('#WOTT/71 _correctionActive: Ctrl+clic fet AVUI → es conserva AHIR (projecte del 05/11)',
+                ok('#WOTT/71 _correctionActive: Ctrl+clic fet AVUI → es conserva AHIR (projecte d\'AHIR)',
                     actOk === true && UI.State.workTarget === 'yesterday' &&
-                    UI.State.workTargetDay === '2026_11_06' && tgtOk2 === '2026_11_05',
+                    UI.State.workTargetDay === YMD_HOY && tgtOk2 === YMD_AHIR,
                     'actiu=' + actOk + ' tgt=' + tgtOk2);
             } finally {
                 UI.Utils.getFormattedDate = gfdD;
@@ -647,9 +664,9 @@
             ok('#WOTT/43 retall del clip sencer: 3 → 1 frame i un de 2 frames NO es toca (mai <1)',
                 rC === null && rD !== null && fN(rD) === 1,
                 '2f=' + (rC === null ? 'intacte' : fN(rC)) + ' 3f=' + (rD === null ? 'n/d' : fN(rD)));
-            ok('#WOTT/44 el retall del sencer deixa traça (✂️ CLIP SENCER) i cache-bust flow_chyrons 101',
+            ok('#WOTT/44 el retall del sencer deixa traça (✂️ CLIP SENCER) i cache-bust flow_chyrons 103',
                 chySrc.indexOf('✂️ [') > 0 && chySrc.indexOf('CLIP SENCER') > 0 &&
-                /flow_chyrons\.js\?v=101/.test(idxW),
+                /flow_chyrons\.js\?v=104/.test(idxW),
                 (idxW.match(/flow_chyrons\.js\?v=\d+/) || ''));
 
             // ── N2. CUA DE SEGURETAT DE TOTS ELS WOTTS (2026-11-02 · #218, 03/11) ──
@@ -776,13 +793,107 @@
                     /const LIMIT_PROGRAMA = 400 \* 1024/.test(stillSrc) &&
                     /const pngSospitos = cap\.ok && Number\(cap\.bytes\) > LIMIT_PROGRAMA/.test(stillSrc) &&
                     /if \(cap\.ok && !pngSospitos\)/.test(stillSrc) &&
-                    /flow_chyrons\.js\?v=101/.test(idxW),
+                    /flow_chyrons\.js\?v=104/.test(idxW),
                     'still=' + stillSrc.length +
                     ' zoneAvansCaptura=' + (stillSrc.indexOf('_freezeZone(needZone)') > -1 && stillSrc.indexOf('_freezeZone(needZone)') < stillSrc.indexOf('_capturePng(capBase')) +
                     ' v6=' + (stillSrc.indexOf('const TEMP_TC = await this._v6FreeTC') === -1 ? 'fora' : 'DINS') +
-                    ' v100=' + /flow_chyrons\.js\?v=101/.test(idxW));
+                    ' v100=' + /flow_chyrons\.js\?v=104/.test(idxW));
             } finally {
                 UI.Utils.callJSX = savedCJZ;
+            }
+
+            // ── P. ♻️ EL CONGELAT DEL TITULILLO ES CAPTURA UNA SOLA VOLTA (2026-11-09 · #256) ──
+            // Queixa de l'usuari: «en el grafismo hay un título común a todo el bloque (el
+            // titulillo). Cuando colocamos 2 Tema-Títol hacemos 2 congelados … son exactamente
+            // el mismo título … podríamos ahorrarnos el segundo freeze». El PNG del congelat
+            // s'exporta del PROGRAMA a un TC fix (final del titulillo), així que el frame és el
+            // MATEIX: el 2n congelat ha de REUTILITZAR el PNG ja importat al bin CHY.
+            var CHY2 = UI.Workflows.Chyrons;
+            var LGC = UI.Logic && UI.Logic.Clips;
+            if (CHY2 && LGC && typeof CHY2._freezeTitulilloStill === 'function') {
+                var savedCJ2 = UI.Utils.callJSX, savedLog2 = UI.Utils.log;
+                var savedCap2 = CHY2._capturePng, savedV62 = CHY2._v6FreeTC;
+                var savedGTC2 = LGC.getTrackClips, savedEC2 = LGC.endCoherent;
+                var savedCache2 = CHY2._stillCache;
+                var N_CAP = 0, N_IMP = 0, INS = [], MOVES = [], LOGS = [], TL = [], FREE = 4000, NOIDX = false;
+                try {
+                    UI.Utils.log = function (m) { LOGS.push(String(m)); };
+                    UI.Utils.callJSX = async function (expr) {
+                        var s = String(expr), m;
+                        if ((m = /^Clips\.insert\('([^']+)', (\d+), ([\d.]+), null, 'video'\)$/.exec(s))) {
+                            INS.push({ name: m[1], track: Number(m[2]), start: Number(m[3]) });
+                            TL.push({ start: Number(m[3]), end: Number(m[3]) + 5 });
+                            return 'OK';
+                        }
+                        if ((m = /^Clips\.at\((\d+), ([\d.]+), 'video'\)$/.exec(s))) {
+                            var tc = Number(m[2]);
+                            var c = TL.filter(function (x) { return x.start <= tc && x.end > tc; })[0];
+                            return c ? JSON.stringify({ start: c.start, end: c.end, name: 'x' }) : 'null';
+                        }
+                        if ((m = /^Clips\.moveToRange\((\d+), (\d+), ([\d.]+), ([\d.]+), 'video'\)$/.exec(s))) {
+                            MOVES.push({ track: Number(m[1]), start: Number(m[3]), end: Number(m[4]) });
+                            var it = TL[Number(m[2])];
+                            if (it) { it.start = Number(m[3]); it.end = Number(m[4]); }
+                            return 'OK';
+                        }
+                        if (/^IO\.importFiles\(/.test(s)) { N_IMP++; return 'OK'; }
+                        if (/^Context\.folder\(\)$/.test(s)) return 'Z:' + BS + 'PROJ';
+                        return 'OK';
+                    };
+                    CHY2._v6FreeTC = async function () { FREE += 10; return FREE; };
+                    LGC.getTrackClips = async function () { return NOIDX ? [] : TL.slice(); };
+                    LGC.endCoherent = async function () { return 'OK'; };
+                    CHY2._capturePng = async function (base) {
+                        N_CAP++;
+                        return { ok: true, bytes: 21229, res: 'QE', path: base + '.png' };
+                    };
+                    CHY2._stillCache = null;
+                    var ZONE = { ok: true, tc: 3000, via: 'preferit' };
+                    var pA = { name: 'Tema_Titol_petit_600279.mov', dur: 1.0 };
+                    // 2 congelats del MATEIX titulillo (2 Tema-Títol grans al bloc)
+                    var r75a = await CHY2._freezeTitulilloStill(pA, 6, 100, 120, 'buit 1', ZONE);
+                    var r75b = await CHY2._freezeTitulilloStill(pA, 6, 200, 260, 'buit 2', ZONE);
+                    ok('#WOTT/75 (#256) dos congelats del MATEIX titulillo → UNA sola captura i UN sol import (abans: 2 PNG duplicats al CHY)',
+                        r75a === true && r75b === true && N_CAP === 1 && N_IMP === 1,
+                        'res=' + r75a + '/' + r75b + ' captures=' + N_CAP + ' imports=' + N_IMP);
+
+                    var pngIns = INS.filter(function (i) { return i.name.indexOf('freeze_titulillo_') === 0; });
+                    var reuseLog = LOGS.filter(function (l) {
+                        return l.indexOf('CONGELAT ja estava capturat') !== -1 && l.indexOf('reutilitzat') !== -1;
+                    });
+                    ok('#WOTT/76 (#256) el 2n congelat COL·LOCA el mateix PNG al SEU buit (2 posicions) i el log diu que es reutilitza',
+                        pngIns.length === 2 && pngIns[0].name === pngIns[1].name &&
+                        MOVES.length === 2 && Math.abs(MOVES[0].start - 100) < 0.01 && Math.abs(MOVES[1].start - 200) < 0.01 &&
+                        reuseLog.length === 1,
+                        'png=' + pngIns.length + ' moves=' + JSON.stringify(MOVES) + ' log=' + reuseLog.length);
+
+                    var pB = { name: 'Tema_Titol_petit_600388.mov', dur: 1.0 };
+                    var r77 = await CHY2._freezeTitulilloStill(pB, 6, 300, 320, 'buit 3', ZONE);
+                    ok('#WOTT/77 (#256) un titulillo DIFERENT sí que es captura: el cache va per mèdia, no global',
+                        r77 === true && N_CAP === 2 && N_IMP === 2,
+                        'res=' + r77 + ' captures=' + N_CAP + ' imports=' + N_IMP);
+
+                    // El PNG reutilitzat ja no es pot col·locar (p. ex. després d'un RESET) →
+                    // s'oblida l'entrada i es captura de nou.
+                    CHY2._stillCache[pA.name] = 'freeze_titulillo_antic.png';
+                    var capAbans = N_CAP;
+                    NOIDX = true;
+                    var r78 = await CHY2._freezeTitulilloStill(pA, 6, 400, 420, 'buit 4', ZONE);
+                    NOIDX = false;
+                    ok('#WOTT/78 (#256) si el congelat reutilitzat no es pot col·locar → eixida del cache i CAPTURA de nou (autocorrecció)',
+                        r78 === false && N_CAP === capAbans + 1 &&
+                        CHY2._stillCache[pA.name] !== 'freeze_titulillo_antic.png' &&
+                        LOGS.filter(function (l) { return l.indexOf('es captura de nou') !== -1; }).length === 1,
+                        'res=' + r78 + ' captures=' + N_CAP + ' cache=' + CHY2._stillCache[pA.name]);
+                } finally {
+                    UI.Utils.callJSX = savedCJ2;
+                    UI.Utils.log = savedLog2;
+                    CHY2._capturePng = savedCap2;
+                    CHY2._v6FreeTC = savedV62;
+                    CHY2._stillCache = savedCache2;
+                    LGC.getTrackClips = savedGTC2;
+                    LGC.endCoherent = savedEC2;
+                }
             }
         // ── K. WOTTS FLOTANTS (2026-10-26) ──────────────────────────────
         // Wotts amb el bloc A SEQUES (`Wott_TNM_V_...`): el generador no els lliga a

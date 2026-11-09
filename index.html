@@ -188,8 +188,8 @@
             <div class="section-label" title="Subtítols"><span class="lbl-full">SUBTÍTOLS</span><span class="lbl-short">SUB</span></div>
             <div class="section-content">
                  <div class="graphics-strip cols-3">
-                    <button id="btnSrtLoad" class="secondary icon-only" title="CARREGAR: obri a l'editor el SRT del bloc de 15 min del dia (l'únic mecanisme de càrrega). Ctrl+clic = SUBTÍTOLS SINTÈTICS del MATEIX PROGRAMA i de la data del PROJECTE OBERT (2n Ctrl+clic = tornar al SRT normal).">⬇️</button>
-                    <button id="btnSrtExport" class="secondary icon-only" title="GUARDAR: exporta la taula de l'editor a la pista de subtítols (S1; els SINT a S2) com a _MOD_<timestamp>.srt. NOMÉS substituïx els clips del tram que escriu (no esborra la resta del timeline). Ctrl+clic = AFEGIR NOMÉS EL QUE FALTA: no reescriu el que ja té clip, ho col·loca a S2 i ho pinta amb una altra etiqueta de color.">💾</button>
+                    <button id="btnSrtLoad" class="secondary icon-only" title="CARREGAR: obri a l'editor el SRT del bloc de 15 min del dia (l'únic mecanisme de càrrega). Ctrl+clic = SUBTÍTOLS SINTÈTICS del MATEIX PROGRAMA i de la data del PROJECTE OBERT (2n Ctrl+clic = tornar al SRT normal).">📥</button>
+                    <button id="btnSrtExport" class="secondary icon-only" title="GUARDAR: exporta la taula de l'editor a la pista de subtítols (S1; els SINT a S2) com a _MOD_<timestamp>.srt. NOMÉS substituïx els clips del tram que escriu (no esborra la resta del timeline). Ctrl+clic = AFEGIR NOMÉS EL QUE FALTA: no reescriu el que ja té clip, ho col·loca a S2 i ho pinta amb una altra etiqueta de color.">➡️</button>
                     <button id="btnSrtReset" class="secondary icon-only" style="background:#5a2a2a; color:#f99;" title="RESET: torna la taula i els marcadors al seu estat inicial (memòria i disc), trau els subtítols de la seqüència i RECARREGA el mateix .srt (si no n'hi havia cap, l'emergència de 15 min)">♻️</button>
                     <button id="btnSrtFill" class="secondary icon-only" title="🧩 REOMLIR: carrega els SINT del MATEIX PROGRAMA i de la data del PROJECTE OBERT (si no ho estan) i afegeix al SRT normal NOMÉS les entrades sintètiques que hi falten —comparant TC (±tolerància) I text—, dins d'un BUIT. Si un SINT no hi cap exacte s'ENCOGEIX fins a la vora del buit (retall màxim general.srtSyntheticMaxTrimSec 0,8 s; durada mínima general.srtSyntheticMinDurSec 0,4 s) · tolerància general.srtSyntheticGapTolSec 0,2 s. El resultat és una vista MOD dins del MATEIX editor (les afegides es pinten amb un to propi) i NO toca el timeline: per a col·locar-les, 💾.">🧩</button>
                     <button id="btnSrtIn" class="secondary" title="IN del subtítol seleccionat">IN</button>
@@ -291,9 +291,9 @@
 
     <!-- SCRIPTS with version cachebuster -->
     <script src="js/lib/CSInterface.js"></script>
-    <script src="js/core/utils.js?v=32"></script>
+    <script src="js/core/utils.js?v=34"></script>
     <script src="js/logic/20_Rutas_Logic.js?v=2"></script>
-    <script src="js/core/11_Configuracio.js?v=45"></script>
+    <script src="js/core/11_Configuracio.js?v=46"></script>
     <script src="js/core/escaleta_timecode.js?v=5"></script>
     <script src="js/core/escaleta_config.js?v=9"></script>
     <script src="js/core/escaleta_io.js?v=21"></script>
@@ -314,7 +314,7 @@
     <script src="js/logic/5_Tracks_Logic.js?v=5"></script>
     <script src="js/logic/6_Clips_Logic.js?v=7"></script>
     <script src="js/logic/7_KF_Logic.js?v=5"></script>
-    <script src="js/logic/10_Srt_Logic.js?v=23"></script>
+    <script src="js/logic/10_Srt_Logic.js?v=24"></script>
     <script src="js/logic/13_Parse.js?v=6"></script>
     <script src="js/logic/14_Assembly_Logic.js?v=6"></script>
     <script src="js/logic/15_FFmpeg_Logic.js?v=14"></script>
@@ -332,12 +332,12 @@
 <script src="js/logic/23_A1_Clean_Logic.js?v=15"></script>
     <script src="js/core/assembly_context.js?v=10"></script>
     <script src="js/workflows/flow_mp4.js?v=8"></script>
-    <script src="js/workflows/flow_markers.js?v=69"></script>
-    <script src="js/workflows/flow_chyrons.js?v=101"></script>
+    <script src="js/workflows/flow_markers.js?v=70"></script>
+    <script src="js/workflows/flow_chyrons.js?v=104"></script>
     <script src="js/workflows/flow_graphics.js?v=27"></script>
-    <script src="js/workflows/flow_mainButton.js?v=47"></script>
+    <script src="js/workflows/flow_mainButton.js?v=51"></script>
     <script src="js/workflows/flow_cut.js?v=19"></script>
-    <script src="js/workflows/flow_srt.js?v=19"></script>
+    <script src="js/workflows/flow_srt.js?v=21"></script>
     <script src="js/workflows/flow_render.js?v=40"></script>
     <script src="js/workflows/flow_KF.js?v=10"></script>
     <script src="js/workflows/flow_config.js?v=12"></script>
@@ -345,7 +345,7 @@
 <script src="js/workflows/flow_mapa.js?v=35"></script>
 <script src="js/workflows/flow_twitts.js?v=12"></script>
     <script src="js/core/project_registry.js?v=6"></script>
-    <script src="js/editor/srt_editor.js?v=90"></script>
+    <script src="js/editor/srt_editor.js?v=94"></script>
     <script src="js/main.js?v=109"></script>
 </body>
 </html>

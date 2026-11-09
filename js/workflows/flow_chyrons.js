@@ -201,6 +201,15 @@
         _dupSkipped: 0,         // quants rètols s'han omés des de l'últim `resetDupSkipped`
         _dupEps: 0.25,          // tolerància (s) al voltant de l'instant de destí
 
+        // ♻️ CONGELAT DEL TITULILLO, CAPTURAT UNA SOLA VEGADA (2026-11-09 · BUG #256)
+        // El titulillo és el MATEIX per a tot el bloc i el frame que es congela també
+        // (el del final del clip). Amb 2 Tema-Títol grans es capturava dos voltes el
+        // MATEIX PNG: insert temporal + captura QE + import d'un duplicat al bin CHY.
+        // Ara: `{ 'nom_del_titulillo': 'freeze_titulillo_<ts>.png' }`. Si l'entrada
+        // apunta a un PNG que ja no és al projecte (p. ex. després d'un RESET), la
+        // col·locació falla i es torna a capturar (autocorrecció).
+        _stillCache: null,
+
         /**
          * _dupKey: identitat del wott per a la guarda NO-DUPLICAR.
          * `_regenKey` lleva fora la versió de generació i l'extensió; si el clip del
@@ -4946,6 +4955,64 @@
         },
 
         /**
+         * _placeStillAt: col·loca un PNG (still JA importat al bin CHY) en el rang exacte
+         * [startSec, endSec] d'una pista, de manera NO DESTRUCTIVA.
+         *
+         * (2026-10-01 · #129) El PNG és un STILL i el projecte li assigna la seua durada
+         * per defecte (~5 s). `Clips.insert` fa un overwriteClip de [start, start+5s):
+         * ESBORRAVA el TEMA-TÍTOL GRAN (que ja és a la pista, més a la dreta) i, a més,
+         * el seu `endSec` retallava l'ÚLTIM clip de la pista. Mateixa tècnica que
+         * `_repararClipsV7`: inserir a un TC TEMPORAL llunyà i dur-lo al rang exacte amb
+         * `Clips.moveToRange` (reassigna start/end, NO fa overwriteClip → no trepitja
+         * cap clip veí).
+         *
+         * (2026-11-09 · BUG #256) Extret de `_freezeTitulilloStill` perquè el congelat
+         * del titulillo es puga REUTILITZAR: el frame congelat és el mateix a tot el
+         * bloc, així que el PNG es captura una volta i es col·loca a cada buit.
+         * @param {string} fName - Nom del PNG al projecte (mèdia)
+         * @param {number} track - Pista de vídeo destí
+         * @param {number} startSec - IN del congelat
+         * @param {number} endSec - OUT del congelat
+         * @param {string} label - Etiqueta pel log
+         * @returns {Promise<boolean>} true si el still ha quedat col·locat
+         */
+        _placeStillAt: async function (fName, track, startSec, endSec, label) {
+            const utils = getUtils();
+            try {
+                // Zona temporal LLIURE per al PNG (l'insert d'un still ocupa ~5 s de projecte).
+                const TEMP_PNG = await this._v6FreeTC(track, 10);
+                await callJSX(`Clips.insert('${utils.escape(fName)}', ${track}, ${TEMP_PNG}, null, 'video')`);
+                await utils.delay(200);
+                let idxPng = -1;
+                try {
+                    const clP = await getClipsLogic().getTrackClips(track, 'video');
+                    for (let ci = 0; ci < clP.length; ci++) {
+                        if (Math.abs(clP[ci].start - TEMP_PNG) < 0.5) { idxPng = ci; break; }
+                    }
+                } catch (eIdx) { idxPng = -1; }
+                if (idxPng < 0) {
+                    log(`   ⚠️ [Titol·Petit] Congelat: PNG temporal no trobat a ${TEMP_PNG.toFixed(2)}s → no es col·loca`, 'WARN');
+                    return false;
+                }
+                const mv = await callJSX(`Clips.moveToRange(${track}, ${idxPng}, ${startSec.toFixed(4)}, ${endSec.toFixed(4)}, 'video')`);
+                if (String(mv).indexOf('OK') !== 0) {
+                    log(`   ⚠️ [Titol·Petit] Congelat: moveToRange ha fallat (${mv}) → es treu el PNG temporal`, 'WARN');
+                    try { await callJSX(`Clips.removeAt(${track}, ${TEMP_PNG}, 'video')`); } catch (eRm) { }
+                    return false;
+                }
+                // (2026-10-16 · #171) `moveToRange` només mou start/end → l'in/out del source
+                // queda amb la durada per defecte del still i el congelat NO s'estira amb el
+                // ratolí. `endCoherent` el deixa coherent (inPoint 0 → outPoint = durada).
+                const rEstFz = await getClipsLogic().endCoherent(track, startSec, endSec, 'video', 'Titol·Petit·freeze');
+                log(`      ${label} → V${track} @ ${startSec.toFixed(2)}s→${endSec.toFixed(2)}s (${(endSec - startSec).toFixed(2)}s) [${mv} · ${rEstFz}]`);
+                return true;
+            } catch (e) {
+                log(`   ⚠️ [Titol·Petit] Congelat fallit: ${e.message}`, 'WARN');
+                return false;
+            }
+        },
+
+        /**
          * _freezeTitulilloStill: Col·loca un CONGELAT (PNG estirat) del DARRER frame d'un
          * titulillo, de `startSec` a `endSec`, a la pista indicada.
          *
@@ -4956,6 +5023,10 @@
          *
          * (2026-10-01 · #128) Extret de `_fillTitulilloGaps` §2 per poder-lo reutilitzar en la
          * transició ENTRANT→SORTINT del CasB, que quedava sense congelat.
+         *
+         * (2026-11-09 · BUG #256) El PNG es captura **una sola volta per titulillo**: este
+         * mètode mira primer `_stillCache` i, si eixe titulillo ja té congelat, només el
+         * col·loca amb `_placeStillAt` (el frame és el mateix a tot el bloc).
          * @param {{name:string, dur:number}} petit - Titulillo (wott) triat
          * @param {number} track - Pista de Tema-Títol
          * @param {number} startSec - IN del congelat (final de l'entrant)
@@ -4966,6 +5037,24 @@
         _freezeTitulilloStill: async function (petit, track, startSec, endSec, label, zone) {
             const utils = getUtils();
             if (!petit || !petit.name || !(endSec > startSec + 0.02)) return false;
+            // ── ♻️ REUTILITZAR EL CONGELAT JA CAPTURAT (2026-11-09 · BUG #256) ──────────
+            // El titulillo és COMÚ a tot el bloc i el frame que es congela és el mateix:
+            // amb 2 Tema-Títol grans es feien DOS congelats (insert temporal + QE +
+            // import d'un PNG duplicat al bin CHY) del MATEIX frame. Ara, si ja s'ha
+            // capturat per a este titulillo, s'usa eixe PNG (ja importat) i no es torna
+            // a capturar. No cal ni zona de programa buida: només es col·loca un mèdia
+            // que ja existix.
+            if (!this._stillCache) this._stillCache = {};
+            const sKey = String(petit.name);
+            const sCached = this._stillCache[sKey];
+            if (sCached) {
+                if (await this._placeStillAt(sCached, track, startSec, endSec, label)) {
+                    log(`   ♻️ [Titol·Petit] «${label}»: el CONGELAT ja estava capturat (${sCached}) → reutilitzat (no es torna a fer el freeze)`);
+                    return true;
+                }
+                log(`   ⚠️ [Titol·Petit] «${label}»: el congelat reutilitzat (${sCached}) no s'ha pogut col·locar → es captura de nou`, 'WARN');
+                delete this._stillCache[sKey];
+            }
             // (2026-10-01 · #129) Zones temporals LLIURES de la pista: l'insert és un
             // overwriteClip i esborraria tot el material que cobrís (p. ex. el PNG estirat del
             // Tema-Títol gran, que ocupa el bloc sencer).
@@ -5040,42 +5129,12 @@
                 if (cap.ok && !pngSospitos) {
                     const fName = snapPath.split("\\").pop();
                     await callJSX(`IO.importFiles('${utils.escape(JSON.stringify([snapPath]))}', 'CHY')`);
-                    // (2026-10-01 · #129) COL·LOCACIÓ NO DESTRUCTIVA del congelat.
-                    // El PNG és un STILL i el projecte li assigna la seva durada per defecte
-                    // (~5 s). `Clips.insert` fa un overwriteClip de [start, start+5s):
-                    // ESBORRAVA el TEMA-TÍTOL GRAN (que ja és a la pista, més a la dreta) i,
-                    // a més, el seu `endSec` retallava l'ÚLTIM clip de la pista (el gran) →
-                    // el gran quedava "tallat per l'inici". Mateixa tècnica que _repararClipsV7:
-                    // inserir a un TC TEMPORAL llunyà i dur-lo al rang exacte amb
-                    // `Clips.moveToRange` (reassigna start/end, NO fa overwriteClip → no
-                    // trepitja cap clip veí).
-                    // Zona temporal LLIURE per al PNG (l'insert d'un still ocupa ~5 s de projecte).
-                    const TEMP_PNG = await this._v6FreeTC(track, 10);
-                    await callJSX(`Clips.insert('${utils.escape(fName)}', ${track}, ${TEMP_PNG}, null, 'video')`);
-                    await utils.delay(200);
-                    let idxPng = -1;
-                    try {
-                        const clP = await getClipsLogic().getTrackClips(track, 'video');
-                        for (let ci = 0; ci < clP.length; ci++) {
-                            if (Math.abs(clP[ci].start - TEMP_PNG) < 0.5) { idxPng = ci; break; }
-                        }
-                    } catch (eIdx) { idxPng = -1; }
-                    if (idxPng < 0) {
-                        log(`   ⚠️ [Titol·Petit] Congelat: PNG temporal no trobat a ${TEMP_PNG.toFixed(2)}s → no es col·loca`, 'WARN');
-                        return false;
-                    }
-                    const mv = await callJSX(`Clips.moveToRange(${track}, ${idxPng}, ${startSec.toFixed(4)}, ${endSec.toFixed(4)}, 'video')`);
-                    if (String(mv).indexOf('OK') !== 0) {
-                        log(`   ⚠️ [Titol·Petit] Congelat: moveToRange ha fallat (${mv}) → es treu el PNG temporal`, 'WARN');
-                        try { await callJSX(`Clips.removeAt(${track}, ${TEMP_PNG}, 'video')`); } catch (eRm) { }
-                        return false;
-                    }
-                    // (2026-10-16 · #171) `moveToRange` només mou start/end → l'in/out del source
-                    // queda amb la durada per defecte del still i el congelat NO s'estira amb el
-                    // ratolí. `endCoherent` el deixa coherent (inPoint 0 → outPoint = durada).
-                    const rEstFz = await getClipsLogic().endCoherent(track, startSec, endSec, 'video', 'Titol·Petit·freeze');
-                    log(`      ${label} → V${track} @ ${startSec.toFixed(2)}s→${endSec.toFixed(2)}s (${(endSec - startSec).toFixed(2)}s) [${mv} · ${rEstFz}]`);
-                    return true;
+                    // ♻️ (2026-11-09 · BUG #256) El PNG queda al cache: el pròxim buit del
+                    // bloc (2n Tema-Títol gran) reutilitza ESTE congelat en compte de
+                    // capturar-ne un duplicat. La col·locació (no destructiva) viu a
+                    // `_placeStillAt`, compartida amb el camí de reutilització.
+                    this._stillCache[sKey] = fName;
+                    return await this._placeStillAt(fName, track, startSec, endSec, label);
                 }
                 log(`   ⚠️ [Titol·Petit] Snapshot del congelat NO usable (${pngSospitos ? 'PNG del programa descartat' : cap.res})`, 'WARN');
                 return false;
@@ -5589,11 +5648,17 @@
          * (importFiles no llança mai) i el fitxer no arriba al projecte.
          * Ordre de resolució (mana SEMPRE el valor del desplegable = l'operador):
          *   1. Ítem ja al projecte (nom exacte, sense extensió o equivalent).
+         *   1b. (2026-11-09 · BUG #255) Ítem dins d'un BIN de 1r nivell — els
+         *      conductors viuen a «Conductors» i `Project.items('')` NOMÉS llig
+         *      l'arrel, així que abans es tornava a importar el .mov del NAS
+         *      (200 MB per xarxa) a cada clic de la DIANA. Es miren primer els
+         *      bins amb «Conduct» al nom i desprès la resta.
          *   2. Si no, es resol el NOM REAL dins de cfg.rutas.conductors (el
          *      desplegable pot dur noms antics) i s'importa amb Utils.importList
          *      SONDEJANT el projecte fins que hi apareix: la ingesta de Premiere
          *      és ASÍNCRONA (un delay fix de 500 ms donava un ❌ fals sempre).
-         *   3. Qualsevol "Conduct*" ja al projecte (WARN: pot no ser el triat).
+         *   3. Qualsevol "Conduct*" ja al projecte, ARREL o bins (WARN: pot no ser
+         *      el triat).
          *   4. null → res insertable (l'operador ha de revisar el NAS).
          * @param {string|null} domValue - valor del desplegable #conductor
          * @returns {Promise<string|null>} nom real de l'ítem al projecte
@@ -5642,20 +5707,58 @@
                 return pref || same[0];
             };
 
-            const projectNames = async () => {
+            // (2026-11-09 · BUG #255) `FASTPASS.Project.items('')` llig NOMÉS l'ARREL
+            // (no és recursiu) i els conductors ja fa temps que viuen al SEU BIN
+            // («Conductors»): el desplegable no els trobava i cada clic a la DIANA
+            // tornava a importar el .mov del NAS (un .mov de ~200 MB per xarxa)
+            // encara que ja estiguera al projecte. Ara es mira ARREL → bins.
+            const projectItems = async () => {
                 try {
                     const raw = await callJSX("FASTPASS.Project.items('')");
-                    return JSON.parse(raw || '[]').map(i => String(i.name || ''));
+                    const arr = JSON.parse(raw || '[]');
+                    return Array.isArray(arr) ? arr : [];
                 } catch (eIt) {
                     log(`   ⚠️ [Conductor] no s'han pogut llegir els items del projecte: ${eIt.message}`, 'WARN');
                     return [];
                 }
             };
+            const namesOf = (items) => (Array.isArray(items) ? items : [])
+                .filter(i => i && Number(i.type) !== 2)   // els BINS no són media insertable
+                .map(i => String((i && i.name) || '')).filter(Boolean);
+            const binItems = async (binName) => {
+                try {
+                    const raw = await callJSX('FASTPASS.Project.items(' + JSON.stringify(String(binName)) + ')');
+                    const arr = JSON.parse(raw || '[]');
+                    return Array.isArray(arr) ? arr : [];
+                } catch (eB) { return []; }
+            };
 
-            // ── 1. Ja és al projecte? ─────────────────────────────────────────────
-            let names = await projectNames();
+            // ── 1. Ja és al projecte? (ARREL → bins de 1r nivell) ────────────────
+            const rootItems = await projectItems();
+            let names = namesOf(rootItems);
+            let pool = names.slice();
             const direct = pick(names, domValue);
             if (direct) return direct;
+            // 1b. `binsDe` és l'àtom de `Logic.TwittsOcr` que ja va resoldre este
+            //     mateix forat per als XARXES (`Project.items('')` no és recursiu).
+            //     Primer els bins que sonen a conductors; s'atura al primer encert.
+            const OCR = (window.FASTPASS_UI && window.FASTPASS_UI.Logic) ? window.FASTPASS_UI.Logic.TwittsOcr : null;
+            const bins = (OCR && typeof OCR.binsDe === 'function') ? OCR.binsDe(rootItems) : [];
+            const binsOrd = bins.slice().sort((a, b) =>
+                (/conduct/i.test(String(b)) ? 1 : 0) - (/conduct/i.test(String(a)) ? 1 : 0));
+            for (let bi = 0; bi < binsOrd.length; bi++) {
+                const bn = namesOf(await binItems(binsOrd[bi]));
+                if (bn.length === 0) { continue; }
+                pool = pool.concat(bn);
+                const hitBin = pick(bn, domValue);
+                if (hitBin) {
+                    log(`   ✅ [Conductor] «${hitBin}» ja és al projecte (bin «${binsOrd[bi]}»): no cal importar res`);
+                    return hitBin;
+                }
+            }
+            if (binsOrd.length > 0) {
+                log(`   ℹ️ [Conductor] «${domValue}» no és a l'arrel ni en cap dels ${binsOrd.length} bin(s) del projecte`);
+            }
 
             // ── 2. Resoldre el nom REAL a la biblioteca del NAS ───────────────────
             // Una ruta inexistent fa que Premiere IGNORI la ingesta sense cap error
@@ -5704,7 +5807,7 @@
                 const MAX_WAIT_MS = 20000;
                 for (let waited = 500; waited <= MAX_WAIT_MS; waited += 500) {
                     await utils.delay(500);
-                    names = await projectNames();
+                    names = namesOf(await projectItems());
                     const imported = pick(names, fileName);
                     if (imported) {
                         log(`   ✅ [Conductor] Importat al projecte: "${imported}" (${(waited / 1000).toFixed(1)}s)`);
@@ -5718,7 +5821,9 @@
             }
 
             // ── 3. Últim recurs: qualsevol conductor que JA sigui al projecte ────
-            const anyConduct = names.find(n => n.indexOf('Conduct') === 0);
+            // (2026-11-09 · BUG #255) `pool` inclou l'ARREL i els bins, així que el
+            // recurs també veu el conductor que viu a «Conductors».
+            const anyConduct = pool.find(n => n.indexOf('Conduct') === 0);
             if (anyConduct) {
                 log(`   ⚠️ [Conductor] Usant "${anyConduct}" (present al projecte; pot NO ser el triat)`, 'WARN');
                 return anyConduct;
@@ -6169,15 +6274,22 @@
                 const wottIdxTr = await FASTPASS_UI.Logic.Project.getWottIndex();
                 // Xarxa de seguretat: l'insert del PNG estirat és un `overwriteClip` i pot tocar
                 // clips veïns de la pista → instantània prèvia + reparació amb `_repararClipsV7`
-                // (la mateixa xarxa que fa servir Repartir). Només s'actua si hi ha hagut
-                // congelat: el camí sense congelat queda intacte.
+                // (la mateixa xarxa que fa servir Repartir). Des del #254 la reparació final es
+                // fa SEMPRE (el camí «sense congelat» també és un overwriteClip).
                 let snapTrad = [];
                 try {
                     const clTrad = (await getClipsLogic().getTrackClips(T_TRAD, 'video')) || [];
                     snapTrad = clTrad.map(c => ({ name: c.name, start: c.start, end: c.end }));
                 } catch (eSnapT) { log(`   ⚠️ [Traducció] no s'ha pogut llegir V${T_TRAD} per a la reparació: ${eSnapT.message}`, "WARN"); }
+                // (2026-11-09 · BUG #254) ZONA MORTA per apartar els veïns abans de cada insert:
+                // ben passat el final de la pista de traduccions (a la dreta no hi ha res, així
+                // que `moveToRange` no pot pisar cap altre clip).
+                let tempBaseTrad = 0;
+                for (const c0 of snapTrad) { if (isFinite(c0.end) && Number(c0.end) > tempBaseTrad) tempBaseTrad = Number(c0.end); }
+                const zonaTrad = { next: tempBaseTrad + 120 };
                 const placedRanges = [];
                 let frozeCount = 0;
+                let veinsApartatsCount = 0;
                 for (const mk of markersFull) {
                     const entry = structureById[mk.fullId];
                     if (!entry || !entry.chyrons || entry.chyrons.length === 0) continue;
@@ -6312,12 +6424,35 @@
                         for (let i = 0; i < N; i++) {
                             const placeTime = refStart + slotDur * i;
                             const placeEnd = (i === N - 1) ? refStart + clipDur : refStart + slotDur * (i + 1);
+                            const spanSlot = Math.max(0.2, placeEnd - placeTime);
+                            const mediaI = trMedia[group[i].name] || 0;
+                            // ══ (2026-11-09 · BUG #254) PROTECCIÓ DELS VEÏNS ═══════════════════
+                            // `Clips.insert` és un `overwriteClip` de la durada COMPLETA del mèdia:
+                            // si el mèdia és més llarg que el slot (o si no s'ha pogut resoldre i
+                            // s'escriu la durada per defecte del still), l'insert passa del slot i
+                            // es MENJA el cap del clip del SEGÜENT tall de la mateixa pista (les
+                            // traduccions ja col·locades eixien pisades i retallades al TNM V3 del
+                            // 08/11). Els veïns es trauen de la pista just abans de l'insert i es
+                            // tornen exactament al seu lloc tot seguit.
+                            const coverEnd = placeTime + (mediaI > 0.1 ? mediaI : (spanSlot + 5)) + 0.10;
+                            const veins = await this._apartarVeinsTrad({
+                                track: T_TRAD, slotStart: placeTime, slotEnd: placeEnd, dangerEnd: coverEnd,
+                                model: snapTrad, zone: zonaTrad, label: 'Traducció'
+                            });
+                            veinsApartatsCount += veins.length;
                             // (2026-10-12) `_placeTradSlot`: clip SENCER (durada del mèdia) + cua
                             // congelada, en comptes d'estirar el clip més enllà del mèdia.
-                            const rSlot = await this._placeTradSlot({
-                                chy: group[i], track: T_TRAD, start: placeTime, end: placeEnd,
-                                mediaDur: trMedia[group[i].name] || 0, tempTC: tempTC, zoneOk: zoneTr.ok, label: 'Traducció'
-                            });
+                            // `try/finally`: si l'insert llança, el veí TORNA igualment al seu lloc
+                            // (no es pot quedar aparcat a la zona morta).
+                            let rSlot = null;
+                            try {
+                                rSlot = await this._placeTradSlot({
+                                    chy: group[i], track: T_TRAD, start: placeTime, end: placeEnd,
+                                    mediaDur: mediaI, tempTC: tempTC, zoneOk: zoneTr.ok, label: 'Traducció'
+                                });
+                            } finally {
+                                if (veins.length > 0) await this._tornarVeinsTrad(T_TRAD, veins, 'Traducció');
+                            }
                             if (!rSlot || !rSlot.ok) {
                                 log(`      ⚠️ [${i+1}/${N}] NO col·locat (${rSlot ? rSlot.err : '?'})`, "WARN");
                                 tradMissing.push(String(group[i].name || ''));
@@ -6325,6 +6460,16 @@
                             }
                             placedCount++;
                             placedRanges.push([placeTime, placeEnd]);
+                            // El clip que acabem de col·locar entra al MODEL de la pista: si un
+                            // insert posterior l'arriba a tocar, es pot tornar al seu lloc (i la
+                            // reparació final NO el descarta per `ours`). Si el slot ha eixit per
+                            // «ja col·locat» (dup) NO s'anota: el clip que hi ha no l'hem posat
+                            // nosaltres en esta passada i no se li ha de canviar la mida.
+                            if (!rSlot.skipped) {
+                                const aliveEnd = (rSlot.mode === 'freeze' && mediaI > 0.1)
+                                    ? placeTime + Math.min(mediaI, spanSlot) : placeEnd;
+                                snapTrad.push({ name: String(group[i].name || ''), start: placeTime, end: aliveEnd, ours: true });
+                            }
                             if (rSlot.mode === 'freeze') {
                                 frozeCount++;
                             } else {
@@ -6340,12 +6485,18 @@
                             tradMissing.join(' · '), 'ERROR');
                     }
                 }
-                // (2026-10-12) Reparació de veïns: només si algun slot ha necessitat el congelat
-                // (l'insert del PNG estirat pot haver tocat clips de la pista).
+                // (2026-10-12) Reparació de veïns. (2026-11-09 · BUG #254) ARA SEMPRE: l'insert
+                // del camí «sense congelat» també és un `overwriteClip` de tota la durada del
+                // mèdia i pot haver tocat el clip del costat. La passada és barata (una lectura
+                // de la pista i, només si hi ha danys, una segona); els veïns que s'han pogut
+                // apartar abans de cada insert ni tan sols hi arriben.
                 if (frozeCount > 0) {
                     log(`🧊 [Traducció] ${frozeCount} slot(s) amb la cua CONGELADA (clip sencer + PNG del frame).`);
-                    await this._repararClipsV7(T_TRAD, snapTrad, placedRanges, 'Traducció');
                 }
+                if (veinsApartatsCount > 0) {
+                    log(`🛡️ [Traducció] ${veinsApartatsCount} clip(s) veí(ns) apartats abans dels inserts i tornats al seu lloc.`);
+                }
+                await this._repararClipsV7(T_TRAD, snapTrad, placedRanges, 'Traducció');
                 if (placedCount === 0) {
                     log("⚠️ [Traducció] Cap traducció.", "WARN");
                 } else {
@@ -6830,6 +6981,122 @@
         },
 
         /**
+         * _apartarVeinsTrad: Aparta de la pista de traduccions els clips que l'`overwriteClip`
+         * de l'insert s'enduria (i `_tornarVeinsTrad` els deixa exactament on eren).
+         *
+         * ── PER QUÈ (2026-11-09 · BUG #254) ─────────────────────────────────────────────
+         * `Clips.insert` és un `overwriteClip` de la durada COMPLETA del mèdia: encara que
+         * tot seguit es retalle el clip al final del slot (`Clips.endCoherent`), el material
+         * que hi havia davall eixe interval JA s'ha esborrat. Quan el mèdia d'una traducció
+         * és MÉS LLARG que el slot (o quan el mèdia no s'ha pogut resoldre i l'insert escriu
+         * una durada per defecte més llarga), l'insert passa la ratlla del slot i es menja el
+         * CAP del clip del SEGÜENT tall de la mateixa pista → les traduccions col·locades
+         * abans eixien PISADES i RETALLADES (cas TNM V3 del 08/11).
+         *
+         * La solució no és reparar-ho després, sinó que l'insert NO el toque: els veïns es
+         * MOUEN a una zona morta de la pista (passat el final del programa) i, en acabar el
+         * slot, tornen EXACTAMENT al seu rang amb `Clips.moveToRange` (reassigna start/end i
+         * NO toca in/out → el contingut queda intacte encara que el mèdia no siga un still).
+         * Mateixa mecànica no destructiva que el flux «Repartir» (2026-09-25f).
+         *
+         * @param {Object} p - {track, slotStart, slotEnd, dangerEnd, model, zone, label}
+         *   · `dangerEnd` = fins on pot arribar l'overwrite (`slotStart + max(span, mèdia)`).
+         *   · `model` = instantània [{name,start,end}] de la pista (s'amplia amb els slots
+         *     que es van col·locant).
+         *   · `zone` = {next} comptador de la zona morta (es comparteix entre slots).
+         * @returns {Promise<Array>} veïns apartats [{name,start,end,dur,tmpStart}]
+         */
+        _apartarVeinsTrad: async function (p) {
+            const opts = p || {};
+            const tag = opts.label || 'Traducció';
+            const track = parseInt(opts.track, 10);
+            const slotEnd = Number(opts.slotEnd);
+            const dangerEnd = Number(opts.dangerEnd);
+            const model = opts.model || [];
+            const zone = opts.zone || { next: 0 };
+            const moved = [];
+            if (!isFinite(slotEnd) || !isFinite(dangerEnd)) return moved;
+            // Només si el mèdia PASSA del slot (+0,10 s de marge del càlcul): si el mèdia cap
+            // dins del slot, l'overwrite s'acaba dins del nostre terreny i no toca cap veí.
+            if (!(dangerEnd > slotEnd + 0.15)) return moved;
+            for (const c of model) {
+                const s0 = Number(c.start);
+                const e0 = Number(c.end);
+                if (!isFinite(s0) || !isFinite(e0)) continue;
+                // Un clip que comença DINS del nostre slot (o abans) no es toca: si és el
+                // duplicat vell d'este mateix rètol, l'insert l'ha de substituir.
+                if (s0 <= slotEnd - 0.05) continue;
+                if (s0 >= dangerEnd - 0.05) continue;
+                const dur = Math.max(0.04, e0 - s0);
+                const nom = String(c.name || '');
+                const curt = nom.substring(0, 30);
+                let found = null;
+                try {
+                    const atRaw = await callJSX(`Clips.at(${track}, ${(s0 + 0.03).toFixed(4)}, 'video')`);
+                    found = (atRaw && atRaw !== 'null') ? JSON.parse(atRaw) : null;
+                } catch (eAt) { found = null; }
+                // Guarda de POSICIÓ: si a eixe instant hi ha un ALTRE clip (model i timeline
+                // desincronitzats) no es mou res — seria pitjor el remei.
+                if (!found || found.index === undefined || found.index === null ||
+                    Math.abs(Number(found.start) - s0) > 0.25) {
+                    log(`   ⚠️ [${tag}] el veí «${curt}…» @ ${s0.toFixed(2)}s no s'ha pogut localitzar per apartar-lo (el mirarà la reparació final)`, 'WARN');
+                    continue;
+                }
+                const tmpStart = Number(zone.next) || 0;
+                const mv = String(await callJSX(
+                    `Clips.moveToRange(${track}, ${found.index}, ${tmpStart.toFixed(4)}, ${(tmpStart + dur).toFixed(4)}, 'video')`) || '');
+                if (mv.indexOf('OK') !== 0) {
+                    log(`   ⚠️ [${tag}] el veí «${curt}…» NO s'ha pogut apartar (${mv}) (el mirarà la reparació final)`, 'WARN');
+                    continue;
+                }
+                zone.next = tmpStart + dur + 10;
+                moved.push({ name: nom, start: s0, end: e0, dur: dur, tmpStart: tmpStart });
+                log(`   🛡️ [${tag}] veí «${curt}…» [${s0.toFixed(2)}-${e0.toFixed(2)}]s apartat a ${tmpStart.toFixed(2)}s: l'insert no el tocarà (torna en acabar el slot)`);
+            }
+            return moved;
+        },
+
+        /**
+         * _tornarVeinsTrad: Torna EXACTAMENT al seu rang original els veïns que
+         * `_apartarVeinsTrad` havia tret de la pista de traduccions.
+         * Es diu just després de l'insert del slot: en eixe moment el clip nou ja està
+         * retallat dins del seu slot (`Clips.endCoherent`), així que el veí pot tornar al
+         * seu lloc sense que ningú el toque (`moveToRange` no fa `overwriteClip`).
+         * @param {number} track - Pista (1-based)
+         * @param {Array} moved - El que torna `_apartarVeinsTrad`
+         * @param {string} [tagArg] - Etiqueta dels logs
+         * @returns {Promise<number>} Quants han tornat
+         */
+        _tornarVeinsTrad: async function (track, moved, tagArg) {
+            const tag = tagArg || 'Traducció';
+            const t = parseInt(track, 10);
+            const list = moved || [];
+            let tornats = 0;
+            for (const v of list) {
+                const curt = String(v.name || '').substring(0, 30);
+                const tmp = Number(v.tmpStart);
+                let found = null;
+                try {
+                    const atRaw = await callJSX(`Clips.at(${t}, ${(tmp + 0.03).toFixed(4)}, 'video')`);
+                    found = (atRaw && atRaw !== 'null') ? JSON.parse(atRaw) : null;
+                } catch (eAt) { found = null; }
+                if (!found || found.index === undefined || found.index === null) {
+                    log(`   ⚠️ [${tag}] «${curt}…» no s'ha pogut tornar des de ${tmp.toFixed(2)}s (el mirarà la reparació final)`, 'WARN');
+                    continue;
+                }
+                const r = String(await callJSX(
+                    `Clips.moveToRange(${t}, ${found.index}, ${Number(v.start).toFixed(4)}, ${Number(v.end).toFixed(4)}, 'video')`) || '');
+                if (r.indexOf('OK') !== 0) {
+                    log(`   ⚠️ [${tag}] «${curt}…» NO ha tornat al seu lloc (${r}) (el mirarà la reparació final)`, 'WARN');
+                    continue;
+                }
+                tornats++;
+                log(`   ↩️ [${tag}] «${curt}…» tornat al seu lloc [${Number(v.start).toFixed(2)}-${Number(v.end).toFixed(2)}]s`);
+            }
+            return tornats;
+        },
+
+        /**
          * _repararClipsV7: Torna a la seva posició original qualsevol clip de la pista de
          * traduccions que un insert hagi retallat, desplaçat o esborrat.
          * Per què funciona: `Clips.insert` (overwrite) col·loca el clip amb la durada per
@@ -6862,21 +7129,35 @@
                 }
                 let fixed = 0;
                 for (const s0 of snap) {
-                    const dins = placed.some(p => (s0.start < p[1] - 0.05) && (s0.end > p[0] + 0.05));
+                    // (2026-11-09 · BUG #254) Els clips que hem col·locat NOSALTRES en esta
+                    // mateixa passada (`ours`) també s'han de poder reparar: el seu rang
+                    // coincidix amb un slot repartit i abans es descartaven per eixe motiu.
+                    const dins = (!s0.ours) && placed.some(p => (s0.start < p[1] - 0.05) && (s0.end > p[0] + 0.05));
                     if (dins) {
                         log(`   ⚠️ [${TAG}] "${s0.name}" (${s0.start.toFixed(2)}-${s0.end.toFixed(2)}s) no es repara: el seu lloc original l'ocupa un slot repartit`, "WARN");
                         continue;
                     }
                     let best = null, bestD = Infinity;
                     for (const c of cur) {
-                        if (c.name !== s0.name) continue;
+                        // (2026-11-09 · BUG #254) Un clip NOSTRE es reconeix també per la
+                        // POSICIÓ: la instantània du el nom del bin (que pot dur extensió)
+                        // i el clip del timeline pot dur-lo distint.
+                        const perPos = !!s0.ours && Math.abs(Number(c.start) - s0.start) <= 0.35;
+                        if (c.name !== s0.name && !perPos) continue;
                         // No confondre una traducció NOSTRA (acabada de col·locar) amb el clip
                         // original si comparteixen nom.
-                        if (placed.some(p => Math.abs(c.start - p[0]) < 0.05 && Math.abs(c.end - p[1]) < 0.05)) continue;
+                        if (!s0.ours && placed.some(p => Math.abs(c.start - p[0]) < 0.05 && Math.abs(c.end - p[1]) < 0.05)) continue;
                         const d = Math.abs(c.start - s0.start);
                         if (d < bestD) { bestD = d; best = c; }
                     }
                     if (!best) {
+                        // (2026-11-09 · BUG #254) Si el clip era NOSTRE i no hi és, NO es
+                        // re-inserta: eixe lloc és un slot propi i un insert ací crearia un
+                        // duplicat (el motiu de no haver-lo col·locat ja ix al seu log).
+                        if (s0.ours) {
+                            log(`   ⚠️ [${TAG}] el clip "${s0.name}" @ ${s0.start.toFixed(2)}s ja no és al timeline: no es re-inserta (slot propi)`, "WARN");
+                            continue;
+                        }
                         // Esborrat del tot → tornar-lo a inserir a la seva posició original.
                         const esc = getUtils().escape(s0.name);
                         await callJSX(`Clips.insert('${esc}', ${track}, ${s0.start.toFixed(4)}, null, 'video')`);

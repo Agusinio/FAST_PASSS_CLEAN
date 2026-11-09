@@ -43,6 +43,13 @@
         var INSERT_OPTS = [];         // opcions de CADA `Clips.insert`
         var FAIL_LEFT = 0;            // quants `Clips.insert` han de fallar (-1 = sempre)
         var LOGS = [];                // missatges de log capturats
+        // (#255) Model del PROJECTE: PROJ[''] = arrel · PROJ['Conductors'] = el bin.
+        // IMPORTS = crides `FASTPASS.IO.importFiles` vistes · NAS_PENDING = el que
+        // «arriba» al projecte quan es fa una ingesta (la ingesta de Premiere és
+        // asíncrona, així que només apareix al projecte DESPRÉS de la crida).
+        var PROJ = {};
+        var IMPORTS = [];
+        var NAS_PENDING = [];
 
         function trackOf(t) { return TL[t] || (TL[t] = []); }
         function put(t, name, start, dur, media) {
@@ -100,6 +107,12 @@
                 if ((m = /^Clips\.get\((-?\d+), (\d+), '(\w+)'\)$/.exec(s))) {
                     return jclip(num(m[1]), num(m[2]));
                 }
+                if ((m = /^Clips\.moveToRange\((-?\d+), (\d+), (-?[\d.]+), (-?[\d.]+), '(\w+)'\)$/.exec(s))) {
+                    var cv = trackOf(num(m[1]))[num(m[2])];
+                    if (!cv) return 'ERR_NO_CLIP';
+                    cv.start = num(m[3]); cv.end = num(m[4]);
+                    return 'OK:start=' + cv.start.toFixed(3) + ',end=' + cv.end.toFixed(3);
+                }
                 if ((m = /^Clips\.retrim\((-?\d+), (\d+), (-?[\d.]+), (-?[\d.]+), (-?[\d.]+), '(\w+)'\)$/.exec(s))) {
                     var c = trackOf(num(m[1]))[num(m[2])];
                     if (!c) return 'ERR_NO_CLIP';
@@ -113,12 +126,25 @@
                     c2.end = num(m[3]);
                     return 'OK';
                 }
+                if ((m = /^FASTPASS\.Project\.items\((['"])([^'"]*)\1\)$/.exec(s))) {
+                    return JSON.stringify(PROJ[m[2]] || []);
+                }
+                if (s.indexOf('FASTPASS.IO.importFiles(') === 0) {
+                    IMPORTS.push(s);
+                    // La ingesta deixa l'ítem a l'ARREL (és on importa el flux real).
+                    if (NAS_PENDING.length) { PROJ[''] = (PROJ[''] || []).concat(NAS_PENDING.splice(0)); }
+                    return 'OK';
+                }
                 return 'OK';
             };
             UI.Config.get = function () {
                 return {
                     tracks: { video: { chyrons: 7, tematitol: 6, lloc: 20, graficos: 3, trad: 20, mp4: 1 } },
-                    traduccio: { freezeTail: false, freezeMinSec: 0.12 }
+                    traduccio: { freezeTail: false, freezeMinSec: 0.12 },
+                    // (#255) `_ensureConductorInProject` llig la biblioteca del NAS i el
+                    // programa actiu per a desempatar noms de conductor.
+                    rutas: { conductors: '\\\\NAS\\CHYRONS CONDUCTORS\\' },
+                    mapeoProgramas: {}
                 };
             };
         }
@@ -266,6 +292,127 @@
             ok('#247 `placeChyronTraduccio` crida `_tradRefSpan` amb el mínim de Config i ho deixa al log',
                 /_tradRefSpan\(\{/.test(srcTrad) && /minSlotSec/.test(srcTrad) &&
                 /OUT est.s al seg/.test(srcTrad));
+
+            // ══ 8. BUG #254: L'INSERT NO HA DE PISAR ELS CLIPS VEÏNS ════════════════════
+            // `Clips.insert` és un overwriteClip de la durada COMPLETA del mèdia: si el mèdia
+            // és més llarg que el slot, la ratlla del slot i es menja el CAP del clip del
+            // SEGÜENT tall de la mateixa pista (TNM V3 08/11: traduccions ja col·locades que
+            // eixien pisades i retallades). Ara el veí s'aparta abans de l'insert i torna
+            // EXACTAMENT al seu lloc tot seguit (moveToRange invers, sense overwriteClip).
+            reset();
+            put(20, 'Trad_VEINA.png', 71.60, 4.00, 4.00);   // el clip del SEGÜENT tall
+            put(20, 'Trad_DINS.png', 70.50, 0.50, 0.50);    // duplicat dins del nostre slot
+            var model254 = [
+                { name: 'Trad_VEINA.png', start: 71.60, end: 75.60 },
+                { name: 'Trad_DINS.png', start: 70.50, end: 71.00 }
+            ];
+            var zona254 = { next: 900 };
+            var apartats = await CHY._apartarVeinsTrad({
+                track: 20, slotStart: 70.00, slotEnd: 71.00, dangerEnd: 70.00 + 10.80 + 0.10,
+                model: model254, zone: zona254, label: 'Traducció'
+            });
+            ok('#254 el veí del SEGÜENT tall s\'aparta abans de l\'insert (el mèdia passa del slot)',
+                apartats.length === 1 && apartats[0].name === 'Trad_VEINA.png' &&
+                Math.abs(trackOf(20)[0].start - 900) < 1e-6 && Math.abs(trackOf(20)[0].end - 904) < 1e-6,
+                JSON.stringify(apartats));
+            ok('#254 el clip que comença DINS del nostre slot NO s\'aparta (l\'insert l\'ha de substituir)',
+                !apartats.some(function (v) { return v.name === 'Trad_DINS.png'; }) &&
+                Math.abs(trackOf(20)[1].start - 70.50) < 1e-6,
+                JSON.stringify(trackOf(20)));
+            var tornats254 = await CHY._tornarVeinsTrad(20, apartats, 'Traducció');
+            ok('#254 el veí torna EXACTAMENT al seu rang original (moveToRange invers)',
+                tornats254 === 1 && Math.abs(trackOf(20)[0].start - 71.60) < 1e-6 &&
+                Math.abs(trackOf(20)[0].end - 75.60) < 1e-6,
+                'tornats=' + tornats254 + ' · clips=' + JSON.stringify(trackOf(20)));
+            var cap254 = await CHY._apartarVeinsTrad({
+                track: 20, slotStart: 70.00, slotEnd: 71.00, dangerEnd: 71.00,
+                model: model254, zone: { next: 900 }, label: 'Traducció'
+            });
+            ok('#254 si el mèdia NO passa del slot no s\'aparta ningú (cap moviment de més)',
+                cap254.length === 0 && Math.abs(trackOf(20)[0].start - 71.60) < 1e-6,
+                'apartats=' + cap254.length);
+            var srcTrad3 = String(CHY.placeChyronTraduccio);
+            ok('#254 `placeChyronTraduccio`: aparta els veïns ABANS de l\'insert i els torna DESPRÉS',
+                srcTrad3.indexOf('_apartarVeinsTrad') !== -1 &&
+                srcTrad3.indexOf('_apartarVeinsTrad') < srcTrad3.indexOf('this._placeTradSlot(') &&
+                srcTrad3.indexOf('_tornarVeinsTrad') > srcTrad3.indexOf('this._placeTradSlot('),
+                'apartar@' + srcTrad3.indexOf('_apartarVeinsTrad') + ' · slot@' + srcTrad3.indexOf('this._placeTradSlot(') +
+                ' · tornar@' + srcTrad3.indexOf('_tornarVeinsTrad'));
+            ok('#254 la reparació final ja NO depèn del congelat i no descarta els slots propis (`ours`)',
+                /await this\._repararClipsV7\(T_TRAD, snapTrad/.test(srcTrad3) &&
+                /ours: true/.test(srcTrad3) && /!s0\.ours/.test(String(CHY._repararClipsV7)),
+                'reparar=' + /await this\._repararClipsV7\(T_TRAD, snapTrad/.test(srcTrad3) +
+                ' · ours=' + /ours: true/.test(srcTrad3) + ' · guarda=' + /!s0\.ours/.test(String(CHY._repararClipsV7)));
+            // ══ 9. BUG #255: EL CONDUCTOR JA ÉS AL BIN «Conductors» ════════════════════
+            // `FASTPASS.Project.items('')` llig NOMÉS l'ARREL (no és recursiu) i els
+            // conductors viuen al seu bin: `_ensureConductorInProject` no els trobava i
+            // cada clic a la DIANA tornava a importar el .mov del NAS (~200 MB per
+            // xarxa) encara que ja estiguera al projecte.
+            reset();
+            PROJ = {
+                '': [{ name: 'Conductors', type: 2 },
+                     { name: 'CHY', type: 2 },
+                     { name: 'seq_01', type: 4 }],
+                'CHY': [{ name: 'Chyron_TemaTitol.mov', type: 1 }],
+                'Conductors': [{ name: 'Conduct_TNV_Toni Cruanyes.mov', type: 1 },
+                                { name: 'Conduct_TNM_Raquel Sans Duran.mov', type: 1 }]
+            };
+            IMPORTS = [];
+            NAS_PENDING = [{ name: 'Conduct_Nuria Sole Perez.mov', type: 1 }];
+            var cond255 = await CHY._ensureConductorInProject('Conduct_Toni Cruanyes.mov');
+            ok('#255 el conductor que ja és al BIN «Conductors» es troba (nom antic → ítem real)',
+                cond255 === 'Conduct_TNV_Toni Cruanyes.mov',
+                'retorn=' + cond255);
+            ok('#255 … i NO s\'importa res del NAS (abans: un .mov de ~200 MB per xarxa)',
+                IMPORTS.length === 0,
+                'imports=' + IMPORTS.length + ' ' + IMPORTS.join(' | '));
+            ok('#255 es consulta el BIN (`Project.items` no és recursiu) i el log ho diu',
+                CALLS.some(function (e) { return /^FASTPASS\.Project\.items\(["']Conductors["']\)$/.test(e); }) &&
+                LOGS.some(function (l) { return l.indexOf('ja és al projecte (bin «Conductors»)') !== -1; }),
+                LOGS.filter(function (l) { return l.indexOf('[Conductor]') !== -1; }).join(' | '));
+            // El camí ràpid (ítem a l'arrel) no ha de pagar cap viatge als bins.
+            PROJ = { '': [{ name: 'Conduct_Xavi Coral Trullas.mov', type: 1 }, { name: 'Conductors', type: 2 }],
+                     'Conductors': [{ name: 'Conduct_TNV_Toni Cruanyes.mov', type: 1 }] };
+            CALLS = [];
+            var cond255r = await CHY._ensureConductorInProject('Conduct_Xavi Coral Trullas.mov');
+            ok('#255 si el conductor ja és a l\'ARREL es retorna sense mirar cap bin (camí ràpid)',
+                cond255r === 'Conduct_Xavi Coral Trullas.mov' &&
+                !CALLS.some(function (e) { return /^FASTPASS\.Project\.items\(["']Conductors["']\)$/.test(e); }),
+                'retorn=' + cond255r + ' · calls=' + CALLS.length);
+            // Recés intacte: si no hi és ENLLOC, es importa del NAS com sempre.
+            // (El harness SUBSTITUEÏX `Utils` per un stub sense `importList` ni
+            //  `_decodeName` — vegeu `bin/smoke/fp_smoke_ac.js` — així que s'injecten.)
+            PROJ = { '': [{ name: 'Conductors', type: 2 }], 'Conductors': [] };
+            IMPORTS = [];
+            NAS_PENDING = [{ name: 'Conduct_Ariadna Oltra.mov', type: 1 }];
+            var savedCep = window.cep;
+            var savedImportList = UI.Utils.importList;
+            var savedDecode = UI.Utils._decodeName;
+            window.cep = { fs: {
+                readdir: function () { return { err: 0, data: ['Conduct_Ariadna Oltra.mov'] }; },
+                stat: function () { return { err: 0 }; }
+            } };
+            UI.Utils._decodeName = function (n) { return String(n); };
+            UI.Utils.importList = async function (paths, bin) {
+                IMPORTS.push(String(bin) + ':' + paths.join(','));
+                PROJ[''] = (PROJ[''] || []).concat(NAS_PENDING.splice(0));
+                return { ok: true, sent: paths.length, chunks: 1, failed: 0, timeout: false, blocked: false };
+            };
+            var cond255n = await CHY._ensureConductorInProject('Conduct_Ariadna Oltra.mov');
+            window.cep = savedCep;
+            UI.Utils._decodeName = savedDecode;
+            UI.Utils.importList = savedImportList;
+            ok('#255 si el conductor NO és al projecte es manté el recés: s\'importa del NAS i es retorna',
+                cond255n === 'Conduct_Ariadna Oltra.mov' && IMPORTS.length === 1,
+                'retorn=' + cond255n + ' · imports=' + IMPORTS.length + ' · ' +
+                LOGS.filter(function (l) { return l.indexOf('[Conductor]') !== -1 || /INGEST/i.test(l); }).join(' | '));
+            var srcEns = String(CHY._ensureConductorInProject);
+            ok('#255 cablejat: mira els BINS (binsDe) ABANS d\'importar del NAS, i el recurs final usa el pool',
+                srcEns.indexOf('binsDe') !== -1 &&
+                srcEns.indexOf('binsDe') < srcEns.indexOf('utils.importList') &&
+                /pool\.find/.test(srcEns),
+                'binsDe@' + srcEns.indexOf('binsDe') + ' · import@' + srcEns.indexOf('utils.importList') +
+                ' · pool=' + /pool\.find/.test(srcEns));
         } finally {
             UI.Utils.callJSX = savedCallJSX;
             UI.Config.get = savedConfigGet;

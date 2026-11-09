@@ -95,8 +95,8 @@
             '');
 
         var idx = await readRepo('index.html');
-        ok('#ING/11 index.html: cache-busts del #221 (utils 32 · Project_Logic 36)',
-            /utils\.js\?v=32/.test(idx) && /3_Project_Logic\.js\?v=36/.test(idx),
+        ok('#ING/11 index.html: cache-busts del #221 (utils 33 · Project_Logic 36)',
+            /utils\.js\?v=34/.test(idx) && /3_Project_Logic\.js\?v=36/.test(idx),
             (idx.match(/utils\.js\?v=\d+/) || '') + ' ' +
             (idx.match(/3_Project_Logic\.js\?v=\d+/) || ''));
     };

@@ -1185,6 +1185,28 @@
         },
 
         /**
+         * _potOcuparElZero (2026-11-09 · BUG #250): pot este prefix quedar-se el 00:00?
+         *
+         * El 00:00 és del MARCADOR D'INICI del bloc (`_pickStartItem` → el 1r ítem
+         * ESTRUCTURAL del bloc en orde d'escaleta). Un ítem que NO és del bloc
+         * (`agrupacio:null` → material aliè, IPD d'un altre bloc…) no pot clavar-s'hi:
+         * si ho fa, F8 ha de separar algú i desplaça l'INICI a `00:00:03:00`, i el bloc
+         * es queda sense el seu 00:00 (TNM_V3 08/11: `20 +++IPD EIZENKOT+++` a 0,00 i
+         * `22i intro` —el 1r estructural del bloc— expulsat a 3,00 s).
+         *
+         * Funció PURA (sense JSX ni estat) per poder provar-la al smoke.
+         * @param {string} num - prefix de l'ítem que es vol col·locar
+         * @param {string|null} iniciNum - prefix del marcador d'inici (null = no se'n sap cap)
+         * @returns {boolean} true si pot ocupar el 00:00
+         */
+        _potOcuparElZero: function (num, iniciNum) {
+            if (!iniciNum) return true;                 // sense inici conegut no es bloqueja res
+            var a = String(num == null ? '' : num).trim().toLowerCase();
+            var b = String(iniciNum).trim().toLowerCase();
+            return (a !== '') && (a === b);
+        },
+
+        /**
          * placeUngroupedMarkers (2026-09-29 · BUG #110): col·loca els marcadors dels ítems
          * que NO són del bloc (`agrupacio:null`, `ungroupedItems`). El color surt SEMPRE de
          * `_getColorIdx` → 1 (VERMELL) per al material aliè i 7 (TURQUESA) per als IPD,
@@ -1215,7 +1237,22 @@
             const list = (ungroupedItems && ungroupedItems.length) ? ungroupedItems : [];
             if (list.length === 0) { log('🔴 [Ungrouped] Cap ítem no agrupat dins del bloc. ✓ FINALITZAT.'); return; }
 
-            const structuralItems = this._classifyItems(lines).structuralItems;
+            const classDataUg = this._classifyItems(lines);
+            const structuralItems = classDataUg.structuralItems;
+            // (#250 · 09/11) El 00:00 és del MARCADOR D'INICI (`_pickStartItem`) i un ítem
+            // que NO és del bloc no pot clavar-s'hi: si ho fa, F8 ha de separar algú i
+            // desplaça l'inici a 00:00:03:00 (TNM_V3 08/11: `20 +++IPD EIZENKOT+++` a 0,00
+            // i `22i intro`, el 1r estructural del bloc, expulsat a 3,00 s). Ací el prefix
+            // d'inici es resol SEMPRE: `_iniciPrefix` (F2/F3 ja l'han publicat) o, si
+            // esta fase va sola (botó Vermells), amb el mateix `_pickStartItem`.
+            var _horaRefUg = function (it) { return this._horaRefSec(it, reader); }.bind(this);
+            var iniciNumUg = null;
+            try {
+                var _spUg = this._pickStartItem(structuralItems, ungroupedItems, _horaRefUg,
+                    classDataUg.graphicItems, classDataUg.unplacedItems);
+                if (_spUg && _spUg.num) iniciNumUg = String(_spUg.num).toLowerCase();
+            } catch (eSpUg) { iniciNumUg = null; }
+            if (!iniciNumUg && this._iniciPrefix) iniciNumUg = String(this._iniciPrefix).toLowerCase();
             const anchors = this._calcTemporalAnchors(manifest, reader, structuralItems, clips);
             if (!anchors) { log('⚠️ [Ungrouped] _calcTemporalAnchors ha fallat. Abortant.'); return; }
             const { tlClipStartSec, refF1 } = anchors;
@@ -1252,6 +1289,16 @@
                         ? Number(manifest.ref.worldBlockStartSec) : NaN;
                     var refCap = isFinite(blkStart) ? blkStart : refF1;
                     if (tSec >= refCap - HEAD_MARGIN_SEC) {
+                        // (2026-11-09 · #250) El 00:00 és del MARCADOR D'INICI del bloc
+                        // (`_pickStartItem`). Este ítem NO és del bloc: si se'l clava a 0
+                        // ocupa el lloc de l'inici i F8 acaba desplaçant l'inici a
+                        // 00:00:03:00 (TNM_V3 08/11: `20` a 0,00 i `22i` a 3,00). Es descarta.
+                        if (!this._potOcuparElZero(ug.num, iniciNumUg)) {
+                            log('   ⏭️ [Ungrouped] ' + (ug.num || '?') + ': cau fora del clip (' +
+                                pos.toFixed(2) + "s) i el 00:00 és del marcador d'inici (" +
+                                iniciNumUg + ') → no es col·loca.');
+                            continue;
+                        }
                         log('   🔧 [Ungrouped] ' + (ug.num || '?') + ': cau fora del clip (' + pos.toFixed(2) + 's) però és capçalera del bloc → clamp a 0.');
                         pos = 0;
                     } else {
@@ -3434,8 +3481,10 @@
          * Entre dos estructurals (o contra una àncora OnAir) sí que es desplacen, per a
          * no deixar mai dos marcadors superposats (regla imperativa).
          *
-         * @param {Array} entries [{ prefix, time, seq, comment, color, pinned, graf }]
+         * @param {Array} entries [{ prefix, time, seq, comment, color, pinned, graf, inici }]
          *        `seq` = número de `sequencia` de l'escaleta (mana dins de cada nivell);
+         *        `inici` = true si és el MARCADOR D'INICI del bloc (`_iniciPrefix`): el
+         *        00:00 és seu i cap ítem aliè no el pot desplaçar (2026-11-09 · BUG #250);
          *        `pinned` = true si el marcador és OnAir (no es mou mai: OnAir = veritat);
          *        `graf` = true si és gràfic (si falta, es deduïx de `prefix`/`color`).
          * @param {Object} [opts] { gap, tol } — `gap` per defecte `_GAP_SEPARACIO`,
@@ -3464,6 +3513,7 @@
                     comment: e.comment || '',
                     color: e.color,
                     pinned: e.pinned === true,
+                    inici: e.inici === true,
                     graf: isGraf
                 });
             }
@@ -3486,9 +3536,14 @@
                 if (cluster.length > 1) {
                     // (#248) JERARQUIA dins del clúster: OnAir → estructura → gràfic.
                     // L'orde d'escaleta només decidix DINS de cada nivell.
+                    // (#248) JERARQUIA dins del clúster: OnAir → inici → estructura → gràfic.
+                    // (#250 · 09/11) L'INICI DEL BLOC (`inici` = `_iniciPrefix`) va davant de
+                    // qualsevol altre estructural: el 00:00 és seu per regla (`_pickStartItem`)
+                    // i un ítem ALIÈ clavat a 0 el desplaçava a 00:00:03:00 (TNM_V3 08/11:
+                    // `20 +++IPD EIZENKOT+++` a 0,00 i `22i intro` expulsat a 3,00).
                     cluster.sort(function (a, b) {
-                        var ja = a.pinned ? 0 : (a.graf ? 2 : 1);
-                        var jb = b.pinned ? 0 : (b.graf ? 2 : 1);
+                        var ja = a.pinned ? 0 : (a.inici ? 1 : (a.graf ? 3 : 2));
+                        var jb = b.pinned ? 0 : (b.inici ? 1 : (b.graf ? 3 : 2));
                         if (ja !== jb) return ja - jb;
                         if (a.seq !== b.seq) return a.seq - b.seq;
                         return a.time - b.time;
@@ -3614,6 +3669,11 @@
                         comment: mks[m].comments || '',
                         color: col,
                         pinned: onAirByNum[num] === true,
+                        // (#250) L'inici del bloc (el prefix que F2/F3 van publicar a
+                        // `_iniciPrefix`) té prioritat dins del clúster: ningú no el trau
+                        // del 00:00. Sense `_iniciPrefix` (fase solta) queda false.
+                        inici: !!this._iniciPrefix &&
+                            String(this._iniciPrefix).toLowerCase() === String(num).toLowerCase(),
                         graf: this._isGraphicByNum(num) || col === 4
                     });
                 }
@@ -3625,7 +3685,7 @@
                 }
 
                 log('🔧 [F8·Separació] Marcadors superposats → separant per JERARQUIA ' +
-                    '(OnAir → estructura → gràfic, GAP ' +
+                    '(OnAir → inici → estructura → gràfic, GAP ' +
                     this._GAP_SEPARACIO + 's): ' +
                     placements.map(function (p) { return p.prefix + '@' + p.timeSec + 's'; }).join(', '));
 

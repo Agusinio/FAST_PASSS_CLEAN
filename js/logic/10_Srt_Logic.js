@@ -367,6 +367,129 @@
         },
 
         /**
+         * mapAnchors (BUG #224-b · 2026-11-09): MAPA MONOTON SINT → NORMAL fet amb
+         * els ANCLES de text de les dos taules.
+         *
+         * PER QUE NO UNA CONSTANT: mesurat al NAS (11 parells SINT↔oficial,
+         * 07-09/11, 126 mostres) el desfasament GLOBAL no existix. Dins d'un mateix
+         * parell el Δ va de -135 s a +799 s segons el tram: cada sintetic porta el
+         * seu propi zero i, a mes, el motor que els genera allarga o acurça les
+         * frases. Una sola constant (el que fa `estimateOffsetSec`, BUG #189)
+         * encerta quan hi ha sort i el residu eixia com a «subtitol d'un altre
+         * moment». L'ORDRE de les frases SI que es conserva (0 inversions en 10/11
+         * parells), i per aixo el que funciona es un mapa per TRAMS:
+         *
+         *   1. S'emparellen les frases que els dos tenen EXACTAMENT iguals (text
+         *      normalitzat) en ORDRE i sense creuar-se mai: la monotonia queda
+         *      garantida per construccio (primera aparicio LLIURE que no va cap
+         *      enrere).
+         *   2. Cada parell es un ANCLE (eix SINT → eix NORMAL). Entre dos ancles
+         *      el desfasament s'INTERPOLA; fora del tram d'ancles es pren el delta
+         *      de l'ancla extrem (no s'extrapola: no hi ha informacio).
+         *
+         * Validacio objectiva (leave-one-out sobre les 126 mostres): Δ global
+         * MAE 3,54 s / p90 3,47 s / pitjor 249 s → ancles interpolats MAE 0,71 s /
+         * p90 1,99 s / pitjor 5,23 s.
+         *
+         * @param {Array} baseEntries - SRT normal (eix de MEDIA)
+         * @param {Array} sintEntries - SRT sintetic (el seu propi eix)
+         * @param {Object} [opts] - { maxAbsSec: 900, minAnchors: 3 }
+         * @returns {{map:function, anchors:Array, pairs:number, used:number,
+         *   method:string, spreadSec:number, deltaMin:number, deltaMax:number,
+         *   slopeMin:number, slopeMax:number}}
+         *   `map(tSec)` → porta un temps SINT a l'eix del NORMAL.
+         *   `method` = 'ancles' (>= minAnchors) | 'ancles-febol' (1-2) | 'cap';
+         *   amb 'cap' el `map` es la IDENTITAT.
+         */
+        mapAnchors: function (baseEntries, sintEntries, opts) {
+            var o = opts || {};
+            var maxAbs = (o.maxAbsSec != null && isFinite(Number(o.maxAbsSec))) ? Number(o.maxAbsSec) : 900;
+            var minAnchors = (o.minAnchors != null && isFinite(Number(o.minAnchors))) ? Number(o.minAnchors) : 3;
+            var base = baseEntries || [], sint = sintEntries || [], i, j, key;
+            var out = {
+                map: function (t) { return t; }, anchors: [], pairs: 0, used: 0, method: 'cap',
+                spreadSec: 0, deltaMin: 0, deltaMax: 0, slopeMin: 1, slopeMax: 1
+            };
+            if (base.length === 0 || sint.length === 0) return out;
+            // 1) Posicions del SINT per text (ascendents): una frase repetida pot
+            //    servir d'ancla una sola vegada.
+            var posByKey = {};
+            for (j = 0; j < sint.length; j++) {
+                key = this._normText((sint[j].texts || []).join(' '));
+                if (!key) continue;
+                if (!posByKey[key]) posByKey[key] = [];
+                posByKey[key].push(j);
+            }
+            // 2) Recorregut en ORDRE del NORMAL: primera aparicio LLIURE del mateix
+            //    text que no complica la monotonia (mai cap enrere).
+            var ptr = {}, lastSintStart = -Infinity, anchors = [];
+            for (i = 0; i < base.length; i++) {
+                key = this._normText((base[i].texts || []).join(' '));
+                if (!key || !posByKey[key]) continue;
+                var arr = posByKey[key], p = ptr[key] || 0;
+                while (p < arr.length && (Number(sint[arr[p]].startSec) || 0) < lastSintStart - 0.001) p++;
+                if (p >= arr.length) continue;
+                j = arr[p];
+                ptr[key] = p + 1;
+                var sSec = Number(sint[j].startSec) || 0;
+                var bSec = Number(base[i].startSec) || 0;
+                if (Math.abs(bSec - sSec) > maxAbs) continue;   // ancla absurda: fora
+                anchors.push({ sSec: sSec, bSec: bSec, deltaSec: bSec - sSec, baseIdx: i, sintIdx: j });
+                lastSintStart = sSec;
+            }
+            out.pairs = anchors.length;
+            out.anchors = anchors;
+            if (anchors.length === 0) return out;
+            // 3) Dispersio respecte al Δ GLOBAL (informatiu: si es gran, el mapa per
+            //    trams es IMPRESCINDIBLE) i rang dels deltes dels ancles.
+            var dMin = Infinity, dMax = -Infinity;
+            for (i = 0; i < anchors.length; i++) {
+                if (anchors[i].deltaSec < dMin) dMin = anchors[i].deltaSec;
+                if (anchors[i].deltaSec > dMax) dMax = anchors[i].deltaSec;
+            }
+            var dMed = this._median(anchors.map(function (a) { return a.deltaSec; }));
+            var dGr = 0;
+            for (i = 0; i < anchors.length; i++) dGr = Math.max(dGr, Math.abs(anchors[i].deltaSec - dMed));
+            out.used = anchors.length;
+            out.spreadSec = Math.round(dGr * 1000) / 1000;
+            out.deltaMin = Math.round(dMin * 1000) / 1000;
+            out.deltaMax = Math.round(dMax * 1000) / 1000;
+            out.method = (anchors.length >= minAnchors) ? 'ancles' : 'ancles-febol';
+            // 4) Pendent entre ancles consecutius (diagnostic: ~1 = mateix ritme).
+            var sMin = 1, sMax = 1;
+            for (i = 1; i < anchors.length; i++) {
+                var ds = anchors[i].sSec - anchors[i - 1].sSec;
+                if (ds <= 0.001) continue;
+                var sl = (anchors[i].bSec - anchors[i - 1].bSec) / ds;
+                if (sl < sMin) sMin = sl;
+                if (sl > sMax) sMax = sl;
+            }
+            out.slopeMin = Math.round(sMin * 1000) / 1000;
+            out.slopeMax = Math.round(sMax * 1000) / 1000;
+            // 5) El mapa: interpolacio lineal entre ancles; fora del rang, el delta de
+            //    l'ancla extrem (ni extrapolar ni inventar pendent).
+            var list = anchors;
+            out.map = function (tSec) {
+                var t = Number(tSec) || 0;
+                if (list.length === 0) return t;
+                if (t <= list[0].sSec) return t + list[0].deltaSec;
+                var last = list[list.length - 1];
+                if (t >= last.sSec) return t + last.deltaSec;
+                for (var k = 1; k < list.length; k++) {
+                    if (t <= list[k].sSec) {
+                        var a0 = list[k - 1], a1 = list[k];
+                        var span = a1.sSec - a0.sSec;
+                        if (span <= 0.0001) return t + a1.deltaSec;
+                        var r = (t - a0.sSec) / span;
+                        return t + (a0.deltaSec + r * (a1.deltaSec - a0.deltaSec));
+                    }
+                }
+                return t + last.deltaSec;
+            };
+            return out;
+        },
+
+        /**
          * shiftEntries (BUG #189): copia la taula desplacant TOTS els temps
          * `deltaSec` (positiu = mes tard). No muta l'original i conserva la marca
          * `sint` de cada entrada.
@@ -535,14 +658,23 @@
          * a omplir-lo). Els que cauen damunt d'un subtitol existent es descarten
          * («solapa») i els que ja hi són amb el mateix text («duplicat-text»).
          *
+         * (2026-11-09 · BUG #224-b) EIXOS: `opts.anchorMap` (el que torna
+         * `mapAnchors`) porta cada entrada SINT a l'eix de MEDIA del NORMAL ABANS
+         * de seleccionar. Amb mapa, una frase només entra al buit si hi cau al
+         * manco a MITGES (`opts.minOverlapRatio`=0,5); la que només toca la vora és
+         * del subtitol veí. Sense mapa (o si no en queda cap a mitges) es manté el
+         * criteri llis de solapament per a no deixar el buit buit.
+         *
          * @param {Array} baseEntries - SRT normal
          * @param {Array} sintEntries - SRT sintetic (font de les entrades noves)
          * @param {Object} [opts] { tolSec=0.2, minDurSec=0.4, gapSec=0.12,
-         *                         maxStretchSec=2, textNearSec=10 }
+         *                         maxStretchSec=2, textNearSec=10,
+         *                         anchorMap=null, minOverlapRatio=0.5 }
          * @returns {{entries:Array, added:Array, rejected:Array, gaps:Array,
          *            tolSec:number, minDurSec:number, gapSec:number,
          *            maxStretchSec:number, trimmed:number, sintCount:number,
-         *            filledGaps:number, dropped:number}}
+         *            filledGaps:number, dropped:number, mapped:boolean,
+         *            anchorUsed:number}}
          *   added:    {startSec,endSec,texts,reason:'buit'|'buit-ajustada',trimSec,
          *              factor,gapStartSec,gapEndSec}
          *   rejected: {startSec,endSec,texts,reason:'solapa'|'duplicat-text'|
@@ -563,11 +695,30 @@
             if (maxStretch < 1) maxStretch = 1;
             var base = this.cloneEntries(baseEntries).sort(function (a, b) { return a.startSec - b.startSec; });
             var sint = this.cloneEntries(sintEntries).sort(function (a, b) { return a.startSec - b.startSec; });
+            // (BUG #224-b · 2026-11-09) EIXOS: si el cridador porta el mapa per
+            // ANCLES (`SrtParser.mapAnchors`), el SINT es porta a l'eix del NORMAL
+            // ABANS de mirar res mes. Es un mapa per TRAMS —cada sintetic pot tindre
+            // el seu propi zero i un ritme distint— i no una constant: el Δ global
+            // (BUG #189) encertava de sort i fallava fins a 249 s en algun tram.
+            var anchorMap = (o.anchorMap && typeof o.anchorMap.map === 'function') ? o.anchorMap : null;
+            // Solapament MINIM (fraccio de la frase) per a acceptar-la dins del buit.
+            var ratio = (o.minOverlapRatio != null && isFinite(Number(o.minOverlapRatio))) ? Number(o.minOverlapRatio) : 0.5;
+            if (ratio < 0) ratio = 0;
+            if (ratio > 1) ratio = 1;
+            if (anchorMap) {
+                for (var mi = 0; mi < sint.length; mi++) {
+                    var mS = anchorMap.map(Number(sint[mi].startSec) || 0);
+                    var mE = anchorMap.map(Number(sint[mi].endSec) || 0);
+                    sint[mi].startSec = mS;
+                    sint[mi].endSec = Math.max(mS, mE);
+                }
+            }
             var info = this.findGaps(base);
             var out = {
                 entries: base, added: [], rejected: [], gaps: info.gaps, tolSec: tol,
                 minDurSec: minDur, gapSec: GAP, maxStretchSec: maxStretch,
-                trimmed: 0, sintCount: sint.length, filledGaps: 0, dropped: 0
+                trimmed: 0, sintCount: sint.length, filledGaps: 0, dropped: 0,
+                mapped: !!anchorMap, anchorUsed: anchorMap ? (Number(anchorMap.used) || 0) : 0
             };
             if (sint.length === 0) return out;
             if (base.length === 0) return out;   // sense SRT normal no hi ha res a reomplir
@@ -633,12 +784,21 @@
             for (var g0 = 0; g0 < gapsToFill.length; g0++) {
                 var gap = gapsToFill[g0];
                 // QUINS sintetics cauen dins d'eixe buit (solapament real, no el toc).
-                var sel = [];
+                // (BUG #224-b · 2026-11-09) Amb mapa per ancles s'exigix que la frase
+                // hi caiga al manco a MITGES (`minOverlapRatio`): la que només toca
+                // la vora és del subtitol del costat i ficar-la ací repetix o trenca
+                // el text oficial. Si no en quedara cap, es torna al criteri llis
+                // (toc) per a no deixar el buit buit.
+                var sel = [], selToc = [];
                 for (var ci = 0; ci < cands.length; ci++) {
                     if (usedFlags[ci]) continue;
                     var ov = Math.min(cands[ci].endSec, gap.endSec) - Math.max(cands[ci].startSec, gap.startSec);
-                    if (ov > Math.max(tol, 0.0001)) sel.push(ci);
+                    if (ov <= Math.max(tol, 0.0001)) continue;
+                    var cDur = Math.max(0.001, (Number(cands[ci].endSec) || 0) - (Number(cands[ci].startSec) || 0));
+                    if (!anchorMap || ov >= ratio * cDur - 0.0001) sel.push(ci);
+                    else selToc.push(ci);
                 }
+                if (sel.length === 0 && selToc.length > 0) sel = selToc;
                 if (sel.length === 0) continue;
                 sel.sort(function (a, b) { return cands[a].startSec - cands[b].startSec; });
                 // Dins del MATEIX buit, dos sintetics que se solapen són la mateixa

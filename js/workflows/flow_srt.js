@@ -417,7 +417,20 @@
                 // .srt que es torna a carregar; si no, `loadSrt` els restaura del fitxer
                 // persistit i sembla que el RESET no els haja esborrat.
                 if (ed._wipeMarkersFile) ed._wipeMarkersFile(cur);
-                const ok = await ed.loadSrt(cur, { skipMarkerRestore: true });
+                // (BUG #257 · 2026-11-09) El RESET ha de deixar el projecte SENSE fitxers
+                // de marcadors: no només el del .srt carregat (el del SINT queda fora si
+                // eixe és el nom actual). Un `fastpass_srt_markers_*.json` orfe torna a
+                // interferir en la pròxima càrrega, així que s'esborren tots els del
+                // projecte (carpeta del projecte + respatller C:/temp).
+                if (ed.wipeMarkersForProject && ed._projectKey) {
+                    const nW = ed.wipeMarkersForProject(ed._projectKey);
+                    log("♻️ SRT_RESET: fitxers de marcadors del projecte esborrats (" + nW + ")");
+                }
+                // (BUG #224-b · 2026-11-09) kind explícit: el RESET sempre torna a la
+                // vista NORMAL. Si es veia el SINT (o la MOD), `_srtPath` ja no s'hi
+                // contamina —el fixa només el NORMAL, vegeu `loadSrt`—, però deixar-ho
+                // explícit evita que un canvi futur reobri el forat.
+                const ok = await ed.loadSrt(cur, { kind: 'NORMAL', skipMarkerRestore: true });
                 if (ok) {
                     getUtils().status("SRT resetejat i recarregat: " + cur.split(/[\\/]/).pop(), "exito");
                     log("✅ SRT_RESET: carregat a l'editor: " + cur);

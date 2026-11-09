@@ -223,6 +223,9 @@
                 ['_repararClipsV7', CHY._repararClipsV7],
                 ['_freezeTemaTitol', CHY._freezeTemaTitol],
                 ['_freezeTitulilloStill', CHY._freezeTitulilloStill],
+                // (2026-11-09 · BUG #256) La col·locació del congelat viu a `_placeStillAt`
+                // perquè el PNG es puga reutilitzar a tots els buits del bloc.
+                ['_placeStillAt', CHY._placeStillAt],
                 ['_fillTitulilloGaps', CHY._fillTitulilloGaps],
                 ['_placeTemaTitolTransicions', CHY._placeTemaTitolTransicions],
                 ['_insertTemaTitolExit', CHY._insertTemaTitolExit]
@@ -231,7 +234,10 @@
             for (var k = 0; k < fns.length; k++) {
                 var src = String(fns[k][1] || '');
                 if (/Clips\.endAt\(/.test(src)) ambEndAt.push(fns[k][0]);
-                if (!/endCoherent/.test(src)) senseCoherent.push(fns[k][0]);
+                // (2026-11-09 · BUG #256) `_freezeTitulilloStill` delega la col·locació del
+                // congelat a `_placeStillAt`: qui tanca amb `endCoherent` és l'ajudant.
+                var delega = /this\._placeStillAt\(/.test(src) && /endCoherent/.test(String(CHY._placeStillAt || ''));
+                if (!/endCoherent/.test(src) && !delega) senseCoherent.push(fns[k][0]);
             }
             ok('#171 cap col·locació de rètol tanca el final amb `Clips.endAt` (estat incoherent)',
                 ambEndAt.length === 0, 'encara amb endAt: ' + ambEndAt.join(', '));

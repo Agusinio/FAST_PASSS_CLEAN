@@ -1433,7 +1433,7 @@
          * es l'API NATIVA de CEP (CEP 10+, sense Node) i el projecte ja la fa
          * servir per a `pick_folder.ps1` (setup.html) i `manage_prproj.ps1`
          * (10_Srt_Logic.js). Amb ella llancem PowerShell, que si que esborra
-         * arbres sencers (`Remove-Item -Recurse -Force` inclou fitxers de nomes
+         * arbres sencers ([IO.Directory]::Delete, natiu, i `Remove-Item -Recurse -Force` de recanç; inclou fitxers de nomes
          * lectura, ocults i de sistema) i NO bloqueja la UI del panell.
          *
          * @param {string} path - ruta completa (es normalitza abans)
@@ -1449,14 +1449,42 @@
             var psExe = 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe';
             // Comilla simple de PowerShell: es redobla.
             var q = p.replace(/['\u2019]/g, "''");
-            // `attrib` lleva els atributs que faria fallar Remove-Item (nomes
-            // lectura / ocult / sistema) i despres s'esborra l'arbre sencer.
+
+            // Rastre del guió (quin intent falla i per què) → arrel de l'extensió,
+            // que sempre és escrivible; si no es resol, $env:TEMP. Es llig a
+            // `_logWipeTrace()` quan la via nativa acaba amb restes.
+            var traceRoot = this._extRoot();
+            var tracePath = traceRoot ? (traceRoot + '\\_wipe_trace.log') : '';
+            var tq = traceRoot ? traceRoot.replace(/['\u2019]/g, "''") : '';
+
+            // (2026-11-09 · #253 · 2a passada) EL BORRAT VA TOT DINS DEL MATEIX
+            // PROCÉS DE POWERSHELL, AMB REINTENTS ACTIUS. Per què (log del 09/11,
+            // RESET d'un bloc d'AHIR al NAS: `Tancament 863 ms · esborrat 60 166 ms`):
+            // `_waitGone` mirava el disc durant 60 s SENSE TORNAR A PROVAR
+            // l'esborrat; el fitxer que havia quedat (el `.prproj` encara agafat per
+            // Premiere o pel client SMB) no es reintentava fins a esgotar el marge,
+            // i aleshores la passada entrada per entrada l'esborrava AL PRIMER
+            // intent. Eren 60 s tirats.
+            // ARA el guió fa 12 intents cada 600 ms (≈7 s) i acaba AIXÍ QUE la
+            // carpeta desapareix: `[IO.Directory]::Delete` (natiu, un sol recorregut)
+            // → `attrib -R -S -H` només als intents 2 i 6 (recanç per a fitxers de
+            // només lectura) → `Remove-Item -Recurse -Force` com a últim recurs.
+            // I deixa un rastre (`_wipe_trace.log`, UTF-8 SENSE BOM) amb el motiu
+            // EXACTE de cada intent fallit: així se sap QUIN fitxer bloqueja.
+            var trace = tracePath ? ("'" + tq + "'") : "($env:TEMP + '\\fp_wipe_trace.log')";
             var script = "$ErrorActionPreference='SilentlyContinue';" +
                 "$p='" + q + "';" +
-                "if(Test-Path -LiteralPath $p){" +
-                "attrib -R -S -H ($p+'\\*.*') /S /D | Out-Null;" +
-                "Remove-Item -LiteralPath $p -Recurse -Force" +
-                "}";
+                "$t=" + trace + ";" +
+                "[IO.File]::WriteAllText($t, ('inici ' + (Get-Date -Format o) + [Environment]::NewLine));" +
+                "for($i=1; $i -le 12; $i++){" +
+                    "if(-not (Test-Path -LiteralPath $p)){ break };" +
+                    "try{[IO.Directory]::Delete($p,$true)}catch{ [IO.File]::AppendAllText($t, ('intent ' + $i + ' : ' + $_.Exception.Message + [Environment]::NewLine)) };" +
+                    "if(-not (Test-Path -LiteralPath $p)){ break };" +
+                    "if($i -eq 2 -or $i -eq 6){ attrib -R -S -H ($p+'\\*.*') /S /D 2>$null | Out-Null };" +
+                    "Start-Sleep -Milliseconds 600" +
+                "};" +
+                "if(Test-Path -LiteralPath $p){ Remove-Item -LiteralPath $p -Recurse -Force 2>$null };" +
+                "[IO.File]::AppendAllText($t, ('fi ' + (Get-Date -Format o) + ' queda=' + (Test-Path -LiteralPath $p) + [Environment]::NewLine))";
             var enc = this._b64utf16(script);
             if (!enc) return { started: false, pid: 0, why: 'sense btoa' };
             var r = null;
@@ -1492,6 +1520,30 @@
                 if (Date.now() - t0 >= limit) return false;
                 await this.delay(250);
             }
+        },
+
+        /**
+         * _logWipeTrace: bufa al log el rastre del guió d'esborrat natiu
+         * (`_wipe_trace.log`, vegeu `_rmTreeProc`). S'usa quan la via nativa es
+         * queda amb restes: diu QUIN intent falla i amb quin error, o siga quin
+         * fitxer bloqueja (Premiere, client SMB) i per què — sense endevinar.
+         */
+        _logWipeTrace: function() {
+            try {
+                var root = this._extRoot();
+                var cep = window.cep || window.__adobe_cep__ || null;
+                if (!root || !cep || !cep.fs || typeof cep.fs.readFile !== 'function') return;
+                var r = cep.fs.readFile(root + '\\_wipe_trace.log');
+                if (!r || (r.err && r.err !== 0)) return;
+                var lines = String(r.data || '').split(/\r?\n/);
+                var n = 0;
+                for (var i = 0; i < lines.length && n < 6; i++) {
+                    var ln = String(lines[i] || '').replace(/^\s+|\s+$/g, '');
+                    if (!ln) continue;
+                    this.log('   · rastre esborrat: ' + ln, 'WARN');
+                    n++;
+                }
+            } catch (e) { }
         },
 
         /**
@@ -1861,17 +1913,27 @@
             // Un doble de prova (`o.fs`) NO ha de llançar processos: els tests han
             // de ser deterministes i no tocar el disc de debò.
             if (!o.fs && norm && mod.canRemove(fs) && mod.exists(fs, norm)) {
+                var tProc = Date.now();
                 var pr = await this._rmTreeProc(norm);
                 if (pr.started) {
-                    var gone = await this._waitGone(mod, fs, norm, (o.procWaitMs != null ? o.procWaitMs : 30000));
+                    // (2026-11-09 · #253) Marge pensat per a arbres grans al NAS: si
+                    // s'esgota, es passa a la passada entrada per entrada MENTRES el
+                    // procés encara esborra, que és el pitjor dels mons. La via
+                    // nativa retorna només `pid` (cep.process no dóna codi d'eixida),
+                    // així que l'exit es comprova al disc cada 250 ms i s'ix de seguida.
+                    var gone = await this._waitGone(mod, fs, norm, (o.procWaitMs != null ? o.procWaitMs : 30000));   // 30 s (#253): només compta si el borrat FALLA. Els reintents del fitxer que queda (Premiere/SMB) els fa el guió de `_rmTreeProc` (12 intents × 600 ms), no esta espera
                     if (gone) {
-                        this.log('🗑️ [FS] Carpeta esborrada (motor cep.process/PowerShell): ' + norm, 'DEBUG');
+                        this.log('🗑️ [FS] Carpeta esborrada (motor cep.process/PowerShell, ' +
+                            (Date.now() - tProc) + ' ms): ' + norm, 'DEBUG');
                         return {
                             ok: true, path: norm, attempts: 1, removed: 0, files: 0, dirs: 0,
                             failed: [], leftovers: [], reason: 'ESBORRADA', via: 'proc'
                         };
                     }
-                    this.log('⚠️ [FS] El procés de esborrat ha deixat restes: es reintenta entrada per entrada (' + norm + ')', 'WARN');
+                    this.log('⚠️ [FS] El procés de esborrat ha deixat restes (' + (Date.now() - tProc) +
+                        ' ms): es reintenta entrada per entrada (' + norm + ')', 'WARN');
+                    // (2026-11-09 · #253) Diu QUIN fitxer bloqueja i amb quin error.
+                    if (typeof this._logWipeTrace === 'function') { this._logWipeTrace(); }
                 } else if (pr.why) {
                     this.log('ℹ️ [FS] Via nativa no disponible (' + pr.why + '): esborrat amb ' + pick.kind, 'DEBUG');
                 }

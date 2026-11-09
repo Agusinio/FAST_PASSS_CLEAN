@@ -29,7 +29,7 @@
 #   ... -File .\bin\check_all.ps1 -Full              # detall per consola
 #   ... -File .\bin\check_all.ps1 -AcceptJsx         # re-sella el baseline jsx
 #
-# Sortida: ALL GREEN | setup 29/29 | js 61/61 | smoke 369/369 | dead 0 | jsx intacte
+# Sortida: ALL GREEN | setup 35/35 | js 65/65 | smoke 990/990 | dead 0 | jsx intacte
 # Exit:    0 = tot OK - 1 = algun FAIL - 2 = error d'entorn
 # ============================================================================
 param(

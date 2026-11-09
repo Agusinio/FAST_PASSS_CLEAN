@@ -507,6 +507,37 @@ window.__runTests = async function () {
         FM._calcSeparacioSuperposats([{ prefix: 'X', time: 0 }, { prefix: 'Y', time: 0 }]).length === 0 &&
         FM._calcSeparacioSuperposats([]).length === 0);
 
+    // ── 12b-bis. BUG #250 (2026-11-09): el 00:00 és de l'INICI, no d'un ítem aliè ──
+    // Cas real TNM_V3 08/11 (`FASTPASS.log` 10:33:09-10): `20 +++IPD EIZENKOT+++` (ítem
+    // SENSE agrupació, durada 0:00) cau fora del clip (-18,16 s) i el clamp de
+    // `placeUngroupedMarkers` el clavava a 0,00; F8 separava el clúster i movia el
+    // marcador d'INICI `22i intro` (1r estructural del bloc) a 00:00:03:00.
+    // Ara: (a) la fase de no agrupats no el col·loca; (b) si de cas hi arriba, F8
+    // desplaça l'ALIÈ i l'inici es queda al 00:00.
+    ph('12b-bis-bug250-inici-zero');
+    var f250 = FM._calcSeparacioSuperposats([
+        { prefix: '20', time: 0, seq: 69, comment: '20 - +++IPD EIZENKOT+++', color: 7 },
+        { prefix: '22i', time: 0, seq: 70, comment: '22i - intro', color: 6, inici: true }
+    ], { gap: 3, tol: 0.20 });
+    ok('#250: amb `inici` el 00:00 es queda a l\'inici del bloc i l\'ítem aliè va a +3 s',
+        f250.length === 1 && f250[0].prefix === '20' && f250[0].timeSec === 3,
+        JSON.stringify(f250.map(function (p) { return p.prefix + '@' + p.timeSec; })));
+    var f250no = FM._calcSeparacioSuperposats([
+        { prefix: '20', time: 0, seq: 69, color: 7 },
+        { prefix: '22i', time: 0, seq: 70, color: 6 }
+    ], { gap: 3, tol: 0.20 });
+    ok('#250: regressió documentada · sense el flag `inici` guanyava l\'aliè (seq 69) i l\'inici anava a 3 s',
+        f250no.length === 1 && f250no[0].prefix === '22i' && f250no[0].timeSec === 3,
+        JSON.stringify(f250no.map(function (p) { return p.prefix + '@' + p.timeSec; })));
+    ok('#250: `_potOcuparElZero` barra el 00:00 a tot el que no és l\'inici',
+        typeof FM._potOcuparElZero === 'function' &&
+        FM._potOcuparElZero('20', '22i') === false &&
+        FM._potOcuparElZero('22i', '22i') === true &&
+        FM._potOcuparElZero('22I', '22i') === true &&
+        FM._potOcuparElZero('20', null) === true &&
+        FM._potOcuparElZero('', '22i') === false,
+        'tipus=' + typeof FM._potOcuparElZero);
+
     // ── 12c. BUG #193 (2026-10-27): inici del bloc i finestres degenerades ──
     // Cas real TNM_V1 26/10: `01 TE-1`/`01 TD-1` són GRAFICS (classe=GRAFIC al manifest)
     // però arriben SENSE hora (escaleta_bounds els anul·la la Prevista) → queien a

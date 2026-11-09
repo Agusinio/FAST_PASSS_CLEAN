@@ -102,8 +102,17 @@
          *   3) Buida tambe les copies de marcadors de subtitols que viuen FORA de
          *      la carpeta (respatller C:/temp de l'editor SRT): sobreviuen a
          *      l'esborrat i es podrien re-injectar al projecte nou.
-         *   4) Reinicia la sessio (State.reset preservant HOY/AHIR) i torna a crear
-         *      el projecte de zero (flux NOU).
+         *   4) Deixa l'estat a punt per al botó MAIN i ACABA.
+         *      (2026-11-09 · NOVA ORDE DE L'USUARI) El RESET JA NO recrea el
+         *      projecte: només TANCA i ESBORRA. La recreació la fa el botó MAIN
+         *      (CREAR), que és qui ha de decidir si el bloc s'ha de crear de nou.
+         *      (2026-11-09 · #252) El RESET NO fixa cap data: el panell queda en
+         *      HOY. Abans desava `workTarget='yesterday'` + `workTargetDay` per a
+         *      recrear a la carpeta d'ahir, i eixe record deixava el botó MAIN amb
+         *      la data d'ahir a la selecció («mig penjat»). `checkContext` recalcula
+         *      `dateDir` a cada poll amb `_targetDateDir()`, així que NO desar res és
+         *      el que garantix que, sense Ctrl, MAIN siga sempre el bloc d'AVUI; per
+         *      a recrear un altre dia, Ctrl+clic (mode correcció).
          */
         runReset: async function () {
             log('♻️ [RESET] Petició de reset general del bloc seleccionat');
@@ -186,6 +195,7 @@
                 // el RESET continuava, xocava amb els fitxers bloquejats i deia
                 // «Esborrat INCOMPLET» sense explicar el motiu real. Ara, si el
                 // projecte no es pot tancar, NO s'esborra res i s'avisa.
+                const tTanc = Date.now();   // ⏱️ (2026-11-09 · #253) temps per etapa
                 if (openPath) {
                     if (this._pathInside(openPath, folder)) {
                         log('🔒 [RESET] Tancant el projecte obert: ' + openPath);
@@ -206,11 +216,15 @@
 
                 // Premiere allibera els handles una mica DESPRES de tancar: sense
                 // aquesta espera el primer intent xoca amb EPERM/EBUSY i deixa restes.
-                await getUtils().delay(700);
+                // (2026-11-09 · #253) 700 ms → 400 ms: `_rmTreeProc` ja reintenta
+                // dins del mateix procés de PowerShell i, si cal, lleva els atributs.
+                const msTanc = Date.now() - tTanc;
+                await getUtils().delay(400);
 
                 // ── 3. ESBORRAT ABSOLUT + VERIFICACIO ──────────────────────────
                 // Més intents que per defecte (6 x 500 ms): a la xarxa, Windows pot
                 // trigar un parell de segons a alliberar el .prproj i l'Auto-Save.
+                const tWipe = Date.now();
                 const wipe = await getUtils().wipeFolder(folder, { maxAttempts: 6, waitMs: 500 });
                 if (!wipe.ok) {
                     log('⛔ [RESET] Esborrat INCOMPLET: NO es crea cap projecte sobre les restes.', 'ERROR');
@@ -228,6 +242,8 @@
                 }
                 log('🗑️ [RESET] Carpeta esborrada del tot: ' + folder +
                     ' (' + wipe.files + ' fitxers, ' + wipe.dirs + ' carpetes, intent ' + wipe.attempts + ')');
+                log('⏱️ [RESET] Tancament ' + msTanc + ' ms · esborrat ' + (Date.now() - tWipe) +
+                    ' ms (motor ' + (wipe.via || '?') + ')', 'INFO');
 
                 // ── 2b. RESTES FORA DE LA CARPETA (marcadors SRT a C:/temp) ────
                 // Les copies de marcadors de C:/temp NO s'esborren amb la carpeta i
@@ -243,24 +259,60 @@
                     log("⚠️ [RESET] No s'han pogut buidar les copies de marcadors: " + eBk.message, 'WARN');
                 }
 
-                // ── 3. REINICIAR sessió (preservant el mode HOY/AHIR) i crear de zero ──
+                // ── 3. ESTAT LLEST PER AL BOTÓ MAIN (CREAR) ────────────────────
+                // (2026-11-09 · DECISIÓ DE L'USUARI) El RESET JA NO recrea el
+                // projecte: només tanca el projecte i buida la carpeta.
+                // (2026-11-09 · #252) El panell queda en HOY. Sense Ctrl, el botó
+                // MAIN és SEMPRE del bloc d'avui: ací NO es desa la data del bloc
+                // esborrat. Abans es fixava el mode correcció ('yesterday' +
+                // `workTargetDay`) perquè MAIN recreara a la carpeta d'ahir, i eixe
+                // record deixava el MAIN mig penjat recordant la data d'ahir.
+                // `checkContext` recalcula `State.dateDir` a cada poll amb
+                // `_targetDateDir()`, així que deixar `dateDir` a null és el que
+                // garantix que el següent poll torne a HOY.
+                let esAvui = false;
+                let ymdAvui = '';
                 try {
-                    const prevWorkTarget = (FASTPASS_UI.State && FASTPASS_UI.State.workTarget) || 'today';
-                    if (FASTPASS_UI.State && typeof FASTPASS_UI.State.reset === 'function') {
-                        FASTPASS_UI.State.reset();
-                        FASTPASS_UI.State.workTarget = prevWorkTarget;
-                    }
-                    if (window.FASTPASS_UI.State) window.FASTPASS_UI.State.dateDir = dateSeg;
+                    try {
+                        ymdAvui = String(getUtils().getFormattedDate() || '').replace(/["\s]/g, '').trim();
+                    } catch (eYmd) { ymdAvui = ''; }
+                    esAvui = !!(dateSeg && ymdAvui && dateSeg === ymdAvui);
                     if (window.SrtEditor && typeof window.SrtEditor.reset === 'function') {
                         window.SrtEditor.reset();
+                    }
+                    if (FASTPASS_UI.State && typeof FASTPASS_UI.State.reset === 'function') {
+                        FASTPASS_UI.State.reset();
+                    }
+                    if (window.FASTPASS_UI.State) {
+                        // (2026-11-09 · #252) RESET = panell en HOY: cap data
+                        // heretada del bloc esborrat (vegeu el comentari de dalt).
+                        window.FASTPASS_UI.State.dateDir = null;
+                        window.FASTPASS_UI.State.projectDateDir = null;
+                        window.FASTPASS_UI.State.workTarget = 'today';
+                        window.FASTPASS_UI.State.workTargetDay = null;
                     }
                 } catch (eReset) {
                     log('⚠️ [RESET] Error reiniciant estat: ' + eReset.message, 'WARN');
                 }
 
-                log('🔁 [RESET] Tornant a crear el projecte de zero (flux NOU)...', 'INFO');
-                getUtils().status('RESET: esborrat. Tornant a crear el projecte...', 'warn');
-                await this._runNew();
+                // ── 4. COMPROVACIÓ FINAL: la carpeta s'ha quedat BUIDA ─────────
+                // `wipeFolder` ja verifica les restes; esta lectura és la prova
+                // del que l'usuari espera del 🔄 (cap `.prproj` ni `.prproj.lock`).
+                const disc = this._projOnDisk(folder);
+                if (disc.nPrproj > 0 || disc.lock) {
+                    log('⚠️ [RESET] Carpeta esborrada però ENCARA hi ha senyals de projecte a ' + folder +
+                        ' (' + disc.nPrproj + ' .prproj' + (disc.lock ? ' + .lock' : '') + '): revisa el log.', 'WARN');
+                    getUtils().status('RESET: carpeta buidada, però hi queden fitxers de projecte. Mira el log.', 'warn');
+                } else {
+                    log('✅ [RESET] Projecte tancat i carpeta BUIDA (cap .prproj ni .lock): ' + folder, 'INFO');
+                    log('👉 [RESET] Prem MAIN (CREAR): crearà el projecte d\'HOY (' +
+                        (ymdAvui || 'avui') + ').', 'INFO');
+                    if (!esAvui) {
+                        log('ℹ️ [RESET] El bloc esborrat era del ' + dateSeg +
+                            '. Per a recrear eixe dia: Ctrl+clic a MAIN.', 'INFO');
+                    }
+                    getUtils().status('RESET fet: carpeta buida. Prem MAIN per a crear el projecte d\'avui.', 'exito');
+                }
             } catch (e) {
                 getUtils().handleError(e, 'Reset');
             } finally {
@@ -335,6 +387,36 @@
             var seg = this._normPath(folder).split('\\');
             var d = (seg.length >= 2) ? String(seg[seg.length - 2]) : '';
             return /^\d{4}_\d{2}_\d{2}$/.test(d) ? d : '';
+        },
+
+        /**
+         * _projOnDisk: què hi ha REALMENT a la carpeta del bloc (llegit amb `cep.fs`,
+         * el mateix motor que la resta de comprovacions de carpetes).
+         *
+         * PER QUÈ (2026-11-09 · #251): el RESET ha de deixar la carpeta BUIDA de
+         * projecte i eixa és la seua prova externa: `wipeFolder` diu que no queden
+         * restes, però el que l'operador espera del 🔄 és que no hi haja ni
+         * `.prproj` ni `.prproj.lock` (el lock el deixa Premiere al costat del
+         * projecte i també compta com a «projecte viu»).
+         * @param {string} folder - carpeta del bloc (<base>/<programa>/<data>/<bloc>)
+         * @returns {{nPrproj:number, lock:boolean}}
+         */
+        _projOnDisk: function (folder) {
+            var out = { nPrproj: 0, lock: false };
+            try {
+                var d = String(folder == null ? '' : folder).replace(/[\\/]+$/, '');
+                if (!d) return out;
+                var fs = window.cep && window.cep.fs;
+                if (!fs || typeof fs.readdir !== 'function') return out;
+                var r = fs.readdir(d);
+                if (!r || r.err !== 0 || !r.data) return out;
+                for (var i = 0; i < r.data.length; i++) {
+                    var name = String(r.data[i]);
+                    if (/\.prproj$/i.test(name)) out.nPrproj++;
+                    if (/\.prproj\.lock$/i.test(name)) out.lock = true;
+                }
+                return out;
+            } catch (e) { return out; }
         },
 
         /**
@@ -466,14 +548,14 @@
                             if (!fotoAuto.ok) {
                                 log('⛔ [NOU] Sense escaleta del bloc ' + ctx.bloque + ' i la FOTO ha fallat: ' + fotoAuto.error, 'ERROR');
                                 getUtils().status("Bloc " + ctx.bloque + ": no hi ha escaleta i la FOTO ha fallat (" + fotoAuto.error + ")", "error");
-                                return;
+                                return false;
                             }
                             jsonMeta = await reader.ensureLocalCopy(ctx, datePrefixJson, { localOnly: true });
                             jsonData = jsonMeta ? await reader.load(jsonMeta.path) : null;
                             if (!jsonData) {
                                 log('⛔ [NOU] La FOTO ha generat ' + fotoAuto.filename + ' però no s\'ha pogut carregar.', 'ERROR');
                                 getUtils().status("Bloc " + ctx.bloque + ": la FOTO no ha deixat una escaleta carregable", "error");
-                                return;
+                                return false;
                             }
                             log('📷 [NOU] Escaleta de la FOTO carregada: ' + ((jsonMeta && jsonMeta.name) || fotoAuto.filename));
                             // (2026-09-22) Comprovem que la nova escaleta contingui REALMENT el nostre bloc
@@ -609,7 +691,7 @@
                     if ((!fotoOk && !escSistemaOk) || !jsonData) {
                         log("⛔ [NOU] No es crea el projecte: " + detallG + ". Fes FOTO quan el bloc acabi d'emetre.", "ERROR");
                         getUtils().status("No es crea el projecte: " + detallG, "error");
-                        return;
+                        return false;
                     }
                     log((fotoOk ? "📷 [NOU] FOTO local (" + fotoFilename + ")" : "📡 [NOU] Escaleta del sistema") +
                         " amb el bloc en emissió (" + detallG + "): es crea el projecte PROVISIONAL. Completa'l amb ACTUALITZAR.", "WARN");
@@ -659,7 +741,7 @@
                     } else {
                         getUtils().status("No es crea el projecte: falta el tema del bloc", "error");
                     }
-                    return;
+                    return false;
                 }
 
                 // ── (#121, 2026-09-30) DURADA REAL DEL CLEANFEED (no el snapshot del JSON) ──
@@ -1403,9 +1485,14 @@
                 if (FASTPASS_UI.Core && FASTPASS_UI.Core.Context) {
                     await FASTPASS_UI.Core.Context.checkContext();
                 }
+                // (2026-11-09) RETORN EXPLÍCIT: `runReset` el necessita per a saber
+                // si el projecte s'ha recreat de debò (abans sempre tornava `undefined`
+                // i el RESET no podia distingir «fet» d'un avortament silenciós).
+                return true;
         
             } catch (e) {
                 FASTPASS_UI.Utils.log("💥 Error crític a runNew: " + e.message, "ERROR");
+                return false;
             }
         },
 

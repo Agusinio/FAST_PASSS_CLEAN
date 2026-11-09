@@ -20,7 +20,8 @@
  *     fitxer bloquejat NO atura la resta, que NO es diu "ok" si queden restes i
  *     que els reintents funcionen.
  *  B) GUARDES ESTATIQUES sobre els fitxers REALS: runReset usa `wipeFolder`
- *     (mai `deleteFolder`), AVORTA si `!wipe.ok` ABANS de `_runNew()`, te la
+ *     (mai `deleteFolder`), AVORTA si `!wipe.ok` i JA NO recrea el projecte
+ *     (des del 09/11 el 🔄 només tanca i esborra; recrea el botó MAIN), te la
  *     guarda de carpeta (`isInsideFolder` + tram del bloc) i buida les copies de
  *     marcadors (`wipeMarkersForProject`). Cache-busts d'index.html al dia.
  *
@@ -337,14 +338,19 @@
             // ── 5) GUARDES ESTATIQUES sobre els fitxers REALS del repo ────────
             var fmb = noComments(await readRepo('js/workflows/flow_mainButton.js'));
             var iReset = fmb.indexOf('runReset: async function');
-            var iNew = (iReset >= 0) ? fmb.indexOf('await this._runNew()', iReset) : -1;
-            var iGuard = (iReset >= 0) ? fmb.indexOf('if (!wipe.ok)', iReset) : -1;
-            var body = (iReset >= 0 && iNew > iReset) ? fmb.slice(iReset, iNew) : '';
+            // (2026-11-09 · nova orde de l'usuari) `runReset` JA NO crida `_runNew`:
+            // el RESET només tanca el projecte i esborra la carpeta, i la recreació
+            // la fa el botó MAIN. Per això el final del cos es pren per la funció
+            // SEGÜENT del mateix objecte i no per la crida a `_runNew`.
+            var iEndReset = (iReset >= 0) ? fmb.indexOf('_normPath: function', iReset) : -1;
+            var body = (iReset >= 0 && iEndReset > iReset) ? fmb.slice(iReset, iEndReset) : '';
+            var iNew = body.indexOf('this._runNew()');       // ha de ser -1
+            var iGuard = body.indexOf('if (!wipe.ok)');
             ok('#175/13 runReset usa `wipeFolder` (motor verificat) i ja NO `deleteFolder`',
                 /wipeFolder\(/.test(body) && !/deleteFolder\(/.test(body),
                 'wipe=' + /wipeFolder\(/.test(body) + ' * delete=' + /deleteFolder\(/.test(body));
-            ok('#175/14 runReset AVORTA si `!wipe.ok` ABANS de `_runNew()`',
-                iGuard > iReset && iGuard < iNew, 'iReset=' + iReset + ' * iGuard=' + iGuard + ' * iNew=' + iNew);
+            ok('#175/14 runReset AVORTA si `!wipe.ok` i ja NO recrea res (`_runNew` fora)',
+                iGuard > 0 && iNew === -1, 'iGuard=' + iGuard + ' * iNew=' + iNew + ' * cos=' + body.length);
             ok('#175/15 runReset valida la carpeta abans d\'esborrar (isInsideFolder + tram = bloc)',
                 /isInsideFolder\(folder, baseProj\)/.test(body) && /lastSeg !== blocSeg/.test(body),
                 'isInside=' + /isInsideFolder\(folder, baseProj\)/.test(body) + ' * tram=' + /lastSeg !== blocSeg/.test(body));
@@ -353,6 +359,43 @@
                 'delay=' + /getUtils\(\)\.delay\(\d+\)/.test(body));
             ok('#175/17 runReset buida les copies de marcadors de fora la carpeta',
                 /wipeMarkersForProject\(folder\)/.test(body), 'crida=' + /wipeMarkersForProject\(folder\)/.test(body));
+
+            // ── 5-bis) RESET = TANCAR I ESBORRAR (2026-11-09 · DECISIÓ DE L'USUARI) ──
+            // El RESET va arribar a recrear el projecte (`_runNew` + verificació al
+            // disc). L'usuari va manar llevar-ho: que el 🔄 només tanque i buide, i
+            // que la recreació la faça MAIN. Esta guarda impedix que torne a créixer.
+            ok('#RESET/1 runReset ja NO recrea el projecte (cap `_runNew` ni `_waitProjectCreated`)',
+                iNew === -1 && fmb.indexOf('_waitProjectCreated') === -1 && fmb.indexOf('_countPrproj') === -1,
+                'runNew=' + iNew + ' * wait=' + fmb.indexOf('_waitProjectCreated') +
+                ' * count=' + fmb.indexOf('_countPrproj'));
+            ok('#RESET/2 runReset diu que la carpeta ha quedat BUIDA i demana el botó MAIN',
+                /carpeta BUIDA/.test(body) && /Prem MAIN \(CREAR\)/.test(body) && /dateSeg/.test(body),
+                'buida=' + /carpeta BUIDA/.test(body) + ' * main=' + /Prem MAIN \(CREAR\)/.test(body));
+
+            var iRn = fmb.indexOf('_runNew: async function');
+            var iUp = (iRn >= 0) ? fmb.indexOf('_runUpdate: async function', iRn) : -1;
+            var srcNew = (iRn >= 0 && iUp > iRn) ? fmb.slice(iRn, iUp) : '';
+            ok('#RESET/3 `_runNew` torna `true` al final i `false` als avortaments + catch',
+                /return true;/.test(srcNew) && (srcNew.match(/return false;/g) || []).length >= 5,
+                'true=' + /return true;/.test(srcNew) + ' * false=' + (srcNew.match(/return false;/g) || []).length);
+            ok('#RESET/4 `_projOnDisk` llig el disc amb `cep.fs.readdir` i filtra `.prproj` i `.lock`',
+                /_projOnDisk: function/.test(fmb) && /fs\.readdir\(d\)/.test(fmb) &&
+                fmb.indexOf('prproj$/i.test') !== -1 && fmb.indexOf('.prproj\\.lock$') !== -1,
+                'metode=' + /_projOnDisk: function/.test(fmb) +
+                ' * lock=' + (fmb.indexOf('.prproj\\.lock$') !== -1));
+
+
+            // ── 5-ter) EL RESET DEIXA EL PANELL EN HOY (2026-11-09 · #252) ──────
+            // Un bloc d'AHIR resetejat no ha de deixar el MAIN recordant eixa data:
+            // sense Ctrl, el botó MAIN és SEMPRE del bloc d'avui (abans es desava
+            // `workTarget='yesterday'` + `workTargetDay` i el MAIN quedava mig penjat).
+            ok('#RESET/5 runReset deixa el panell en HOY (no desa la data del bloc esborrat)',
+                /State\.workTarget = 'today'/.test(body) && body.indexOf("'yesterday'") === -1 &&
+                /State\.workTargetDay = null/.test(body) && /State\.dateDir = null/.test(body) &&
+                /State\.projectDateDir = null/.test(body),
+                'today=' + /State\.workTarget = 'today'/.test(body) +
+                ' * yesterday=' + (body.indexOf("'yesterday'") !== -1) +
+                ' * dayNull=' + /State\.workTargetDay = null/.test(body));
 
             var ed = noComments(await readRepo('js/editor/srt_editor.js'));
             ok('#175/18 srt_editor: `wipeMarkersForProject` filtra per `projectKey`',
@@ -396,7 +439,7 @@
                 }
                 return out;
             }
-            var U = srcMethods(ut, ['_b64utf16', '_rmTreeProc', '_waitGone', '_wipeFs', 'wipeFolder']);
+            var U = srcMethods(ut, ['_b64utf16', '_rmTreeProc', '_waitGone', '_wipeFs', 'wipeFolder', '_logWipeTrace', '_extRoot']);
 
             ok('#175/19 utils: `wipeFolder` + `isInsideFolder` i CAP `fs.rmSync` (s\'aturava al 1r error)',
                 /wipeFolder: async function/.test(ut) && /isInsideFolder: function/.test(ut) && !/fs\.rmSync\(/.test(ut),
@@ -404,10 +447,10 @@
 
             var idx = await readRepo('index.html');
             ok('#175/20 index.html carrega `19_Fs_Wipe.js` i ha pujat els cache-busts',
-                /19_Fs_Wipe\.js\?v=2/.test(idx) && /utils\.js\?v=32/.test(idx) &&
-                /flow_mainButton\.js\?v=47/.test(idx) && /srt_editor\.js\?v=90/.test(idx),
-                'modul=' + /19_Fs_Wipe\.js\?v=2/.test(idx) + ' * utils=' + /utils\.js\?v=32/.test(idx) +
-                ' * main=' + /flow_mainButton\.js\?v=47/.test(idx) + ' * srt=' + /srt_editor\.js\?v=90/.test(idx));
+                /19_Fs_Wipe\.js\?v=2/.test(idx) && /utils\.js\?v=34/.test(idx) &&
+                /flow_mainButton\.js\?v=51/.test(idx) && /srt_editor\.js\?v=94/.test(idx),
+                'modul=' + /19_Fs_Wipe\.js\?v=2/.test(idx) + ' * utils=' + /utils\.js\?v=34/.test(idx) +
+                ' * main=' + /flow_mainButton\.js\?v=51/.test(idx) + ' * srt=' + /srt_editor\.js\?v=94/.test(idx));
 
             // ── 5a-bis) #213 · LLANÇADOR OCULT (2026-11-02) ─────────────────────
             // `cep.process.createProcess` NO busca al PATH: amb 'wscript.exe' a
@@ -470,6 +513,38 @@
                 ut.indexOf('_rmTreeProc(norm)') > 0 && ut.indexOf('_rmTreeProc(norm)') < ut.indexOf('mod.wipe(fs, path') &&
                 /via: 'proc'/.test(ut) && /rep\.via = pick\.kind/.test(ut),
                 'guarda=' + /if \(!o\.fs && norm/.test(ut) + ' * ordre=' + (ut.indexOf('_rmTreeProc(norm)') < ut.indexOf('mod.wipe(fs, path')));
+
+            // (2026-11-09 · #253) El RESET tardava molt per a un simple borrat de
+            // carpeta: `attrib /S /D` recorria TOT l'arbre (al NAS) i DESPRES
+            // `Remove-Item -Recurse` el tornava a recórrer, i `Remove-Item` va peça
+            // a peça per damunt del proveïdor de PowerShell. Ara la via ràpida és
+            // `[IO.Directory]::Delete` (nativa) i `attrib`/`Remove-Item` queden de
+            // recanç: només s'executen si encara queden restes, dins del MATEIX procés.
+            ok('#RESET/6 `_rmTreeProc` esborra amb `[IO.Directory]::Delete` i `attrib` només de recanç',
+                rmBody.indexOf('[IO.Directory]::Delete') > 0 &&
+                rmBody.indexOf('attrib -R -S -H') > rmBody.indexOf('[IO.Directory]::Delete') &&
+                rmBody.indexOf('attrib -R -S -H') < rmBody.indexOf('Remove-Item -LiteralPath') &&
+                /-EncodedCommand/.test(rmBody),
+                'fast=' + (rmBody.split('[IO.Directory]::Delete').length - 1) +
+                ' * attrib=' + (rmBody.split('attrib -R -S -H').length - 1) +
+                ' * rm=' + (rmBody.split('Remove-Item -LiteralPath').length - 1));
+
+            // (2026-11-09 · #253 · 2a passada) Log del RESET d'un bloc d'AHIR:
+            // `Tancament 863 ms · esborrat 60 166 ms`. Els 60 s NO eren el borrat:
+            // `_waitGone` mirava el disc sense TORNAR A PROVAR res, i el fitxer que
+            // havia quedat (el `.prproj` encara agafat) només s'intentava una volta.
+            // Ara els reintents van DINS del mateix procés de PowerShell i el marge
+            // de fora només compta si el borrat falla de debò.
+            ok('#RESET/7 `_rmTreeProc` reintenta dins del procés (12 × 600 ms) i deixa rastre del bloqueig',
+                /for\(\$i=1; \$i -le 12; \$i\+\+\)\{/.test(rmBody) &&
+                /Start-Sleep -Milliseconds 600/.test(rmBody) &&
+                /if\(\$i -eq 2 -or \$i -eq 6\)\{ attrib -R -S -H/.test(rmBody) &&
+                /_wipe_trace\.log/.test(rmBody) && /\[IO\.File\]::AppendAllText/.test(rmBody) &&
+                /_logWipeTrace\(\)/.test(ut) && /o\.procWaitMs : 30000/.test(ut),
+                'bucle=' + /for\(\$i=1/.test(rmBody) + ' * espera=' + /Milliseconds 600/.test(rmBody) +
+                ' * rastre=' + /_wipe_trace\.log/.test(rmBody) + ' * bufa=' + /_logWipeTrace\(\)/.test(ut) +
+                ' * marge=' + /o\.procWaitMs : 30000/.test(ut));
+
 
             // El guio de PowerShell viatja en base64 UTF-16LE: ni espais ni cometes
             // poden trencar-lo (rutes amb espais, accents i prefix UNC).
@@ -778,12 +853,12 @@
                 ok('#196 la prova de comportament de `_resolveDateDir` no ha llancat', false, eRD && eRD.message);
             }
 
-            ok('cache-busts: flow_render 40 · flow_mapa 35 · srt_editor 90 · 15_FFmpeg 14 · 21_GrafZonaGris 4',
+            ok('cache-busts: flow_render 40 · flow_mapa 35 · srt_editor 94 · 15_FFmpeg 14 · 21_GrafZonaGris 4',
                 /flow_render\.js\?v=40/.test(idx) && /flow_mapa\.js\?v=35/.test(idx) &&
-                /srt_editor\.js\?v=90/.test(idx) && /15_FFmpeg_Logic\.js\?v=14/.test(idx) &&
+                /srt_editor\.js\?v=94/.test(idx) && /15_FFmpeg_Logic\.js\?v=14/.test(idx) &&
                 /21_GrafZonaGris_Logic\.js\?v=4/.test(idx),
                 'render=' + /flow_render\.js\?v=40/.test(idx) + ' * mapa=' + /flow_mapa\.js\?v=35/.test(idx) +
-                ' * srt=' + /srt_editor\.js\?v=90/.test(idx) +
+                ' * srt=' + /srt_editor\.js\?v=94/.test(idx) +
                 ' * ffmpeg=' + /15_FFmpeg_Logic\.js\?v=14/.test(idx) +
                 ' * gz=' + /21_GrafZonaGris_Logic\.js\?v=4/.test(idx));
 
