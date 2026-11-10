@@ -17,14 +17,42 @@
 | Què | Valor |
 |---|---|
 | Versió de l'extensió | **0.9.8** a `CSXS/manifest.xml` (bundle + panell), títol d'`index.html`, `package.json` |
-| Validació vigent | `ALL GREEN \| setup 35/35 \| js 65/65 \| smoke 1048/1048 \| dead 0 \| jsx intacte` |
+| Validació vigent | `ALL GREEN \| setup 35/35 \| js 65/65 \| smoke 1053/1053 \| dead 0 \| jsx intacte` |
 | `.jsx` | **0 fitxers tocats** en esta tanda (segell de `check_all` intacte) |
 | Branca | `main` net, sense ahead/behind |
 | Git | `E:\PortableGit\bin\git.exe` (**no** està al `PATH`) |
 
 ## 2 · Què s'ha fet en este traspàs
 
-> **Última entrada (2026-11-10 h · `SRT_SEAM_DEDUP`: el text repetit a les fronteres del buit
+> **Última entrada (2026-11-10 j · BUG #256, 3a part: UN sol congelat per GRAFISME).** Sobre el
+> projecte **TNC V2** de la vespra, l'usuari: «Se han generado 3 congelados. Y los 3 son
+> iguales. Simplificalo. El freeze del Tema-Titol es lo mismo que el freeze titulillo». Tenia
+> raó: `_freezeTemaTitol` (cada Tema-Títol gran) no passava pel cache i capturava sempre el seu
+> propi `Snapshots\freeze_<ts>.png` → 2 grans + 1 titulillo = 3 PNG idèntics. Ara les dos vies
+> comparteixen `_stillCache[_stillKey(…)]` (clau de contingut `prog:<PROG>:<vN>`) i
+> `_findStillInChy` ABANS d'inserir res: si el PNG ja hi és, només es fa el `Clips.insert`
+> estirat (cap insert temporal, ni export QE, ni import). Nom únic `freeze_<slug>_<ts>.png`
+> (`_stillSlug` → `tnv_v1`); `_findStillInChy` accepta els noms antics (`freeze_titulillo_*`,
+> `freeze_<ts>.png`) i **ignora `freeze_graf_*`**; `titolet.reuseFreeze` mana a les dos vies via
+> `_reuseFreeze`. Proves `#WOTT/82`–`#WOTT/83`; smoke 1051 → **1053**. **BUG #256 TANCAT** el
+> 10/11 per decisió de l'usuari («Perfecto! Ya puedes cerrar ese bug»), sense prova en viu pròpia:
+> la comprovació queda per a la primera passada real (recorda que els 3 PNG que ja té el TNC V2
+> **no s'esborren sols**). Fitxa a `BUGS.md` §2 (#256) i `docs/CHANGELOG.md` (entrada `2026-11-10 j`).
+>
+
+> **Entrada anterior (2026-11-10 i · BUG #256, 2a part: un sol congelat del titulillo per
+> PROGRAMA).** Petició de l'usuari: «congelamos dos archivos diferentes pero el contenido es el
+> mismo exactamente … que se reaproveche el png importado cada vez que fuese necesario». La clau
+> del cache deixa de ser el nom del mèdia i passa a ser el **contingut** del grafisme
+> (`_stillKey` → `prog:TNV:v1`, via `_stillProgramToken` sobre `Wott_<PROG>_<vN>_…`; fora de
+> convenció, `file:<nom>`), i abans de capturar es mira **una volta per sessió** el bin CHY
+> (`_findStillInChy`): si ja hi ha un `freeze_titulillo_*.png` d'una corrida anterior s'adopta
+> (ni export QE ni import). El PNG nou es bateja `freeze_titulillo_<tok>_<ts>.png`; config
+> `titolet.reuseFreeze` (`false` = capturar sempre). Proves `#WOTT/79`–`#WOTT/81`; smoke
+> 1050 → **1051**. Pendent de **validar en viu**. Detall a `BUGS.md` #256 (2a part) i
+> `docs/CHANGELOG.md`.
+>
+> **Entrada anterior (2026-11-10 h · `SRT_SEAM_DEDUP`: el text repetit a les fronteres del buit
 > s'esborra sol).** Petició de l'usuari: «eliminar el texto duplicado del srt INT acabado de
 > importar … editar el texto del primer y último SINT». Els `.srt` sintètics es generen amb handles
 > d'àudio, així que el primer clip que el 🧩 encaixa en un buit sol repetir la cua del subtítol

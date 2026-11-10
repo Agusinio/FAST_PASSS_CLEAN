@@ -205,10 +205,19 @@
         // El titulillo és el MATEIX per a tot el bloc i el frame que es congela també
         // (el del final del clip). Amb 2 Tema-Títol grans es capturava dos voltes el
         // MATEIX PNG: insert temporal + captura QE + import d'un duplicat al bin CHY.
-        // Ara: `{ 'nom_del_titulillo': 'freeze_titulillo_<ts>.png' }`. Si l'entrada
-        // apunta a un PNG que ja no és al projecte (p. ex. després d'un RESET), la
-        // col·locació falla i es torna a capturar (autocorrecció).
+        //
+        // (2026-11-10 · BUG #256, 2a part) La clau és el CONTINGUT, no el fitxer: dos
+        // wotts DISTINTS del mateix programa (`Wott_TNV_v1_01dp_…` i `Wott_TNV_v1_03_…`)
+        // porten el MATEIX grafisme i, per tant, el MATEIX frame congelat. Clau =
+        // `_stillKey(petit)` → `prog:TNV:v1`; si el nom no seguix la convenció cau a
+        // `file:<nom>` (com abans). I amb `_stillProbed` es mira UNA vola per sessió si
+        // el bin CHY ja té un congelat (`freeze_titulillo_*.png`) d'una corrida
+        // anterior: si n'hi ha, s'adopta i no s'exporta ni s'importa res (config
+        // `titolet.reuseFreeze`; `false` = capturar sempre).
+        // Si l'entrada apunta a un PNG que ja no és al projecte (p. ex. després d'un
+        // RESET), la col·locació falla i es torna a capturar (autocorrecció).
         _stillCache: null,
+        _stillProbed: false,    // ja s'ha mirat si el bin CHY té un congelat del titulillo
 
         /**
          * _dupKey: identitat del wott per a la guarda NO-DUPLICAR.
@@ -1002,114 +1011,143 @@
                 return { success: true, duration: 0 };
             }
 
-            // 1. Inserir Wott TEMPORALMENT a la zona lliure (clip sol, sense cap altre clip)
-            // (2026-10-08) ⚠️ ABANS es cridava a cegues i es capturava el frame igualment. Sense
-            // clip temporal, el TC de captura cau damunt del PROGRAMA i el PNG surt amb el VÍDEO
-            // DE V1 en lloc del grafisme (cas real TNM V3 08/10 13:39: PNG de 524 KB en lloc de
-            // 35 KB + «ERR_CLIP_NOT_FOUND_AT_119.12» en voler esborrar el temporal). Ara es
-            // VERIFICA que el clip hi sigui i, si no s'hi pot posar, es col·loca NOMÉS el clip
-            // viu (sense congelat) en lloc d'un congelat FALS amb imatge del programa.
-            let resTemp = String(await callJSX(`Clips.insert('${escapedWott}', ${T_THEME}, ${TEMP_TC}, null, 'video')`) || '');
-            let tmpClip = null;
-            for (let iIns = 0; iIns < 3; iIns++) {
-                if (iIns > 0) {
-                    await utils.delay(400);
-                    resTemp = String(await callJSX(`Clips.insert('${escapedWott}', ${T_THEME}, ${TEMP_TC}, null, 'video')`) || '');
+            // ── ♻️ UN SOL CONGELAT PER GRAFISME (2026-11-10 · #256c) ─────────────────────
+            // L'usuari (TNC V2, 10/11): «Se han generado 3 congelados. Y los 3 son iguales.
+            // El freeze del Tema-Titol es lo mismo que el freeze titulillo». Cert: el
+            // Tema-Títol gran i el titulillo petit són el MATEIX grafisme del programa, però
+            // cada Tema-Títol feia la seua captura (`freeze_<ts>.png`) i eixien 3 PNG
+            // idèntics al projecte (2 grans + 1 del titulillo). Ara les DOS vies comparteixen
+            // `_stillCache` (clau de contingut `prog:<PROG>:<vN>`, la de `_stillKey`) i la
+            // cerca al bin CHY (`_findStillInChy`): si el congelat d'eixe grafisme ja
+            // existix, NO es fa insert temporal, ni export QE, ni import.
+            let fileName = null;
+            let snapPath = null;
+            let cap = null;
+            if (this._reuseFreeze()) {
+                const kStill = this._stillKey(wottName);
+                if (!this._stillCache) this._stillCache = {};
+                fileName = this._stillCache[kStill] || null;
+                if (!fileName && !this._stillProbed) {
+                    this._stillProbed = true;         // `Project.items` té cost: UNA volta
+                    const fChy = await this._findStillInChy(wottName);
+                    if (fChy) { fileName = fChy; this._stillCache[kStill] = fChy; }
                 }
-                await utils.delay(300);
-                try {
-                    const clTmp = (await getClipsLogic().getTrackClips(T_THEME, 'video')) || [];
-                    tmpClip = clTmp.filter(c => Math.abs(c.start - TEMP_TC) < 0.5)[0] || null;
-                } catch (eVT) { tmpClip = null; }
-                if (tmpClip) break;
+                if (fileName) {
+                    log(`   ♻️ [_freeze] «${String(wottName).substring(0, 40)}…» el CONGELAT «${fileName}» ja existix per a este grafisme (${kStill}) → reutilitzat (cap captura ni import)`);
+                }
             }
-            if (!tmpClip) {
-                log(`   ⚠️ [_freeze] Wott temporal NO inserit a V${T_THEME} @ ${TEMP_TC.toFixed(2)}s (${resTemp || 'sense resposta'}) → SENSE congelat: només clip viu`, "WARN");
-                const rLive = String(await callJSX(`Clips.insert('${escapedWott}', ${T_THEME}, ${placeTime}, null, 'video')`) || '');
-                if (isErrRes(rLive)) {
-                    log(`   ❌ [_freeze] Ni el clip viu s'ha pogut inserir (${rLive}) → rètol NO col·locat`, "ERROR");
+            if (!fileName) {
+                // 1. Inserir Wott TEMPORALMENT a la zona lliure (clip sol, sense cap altre clip)
+                // (2026-10-08) ⚠️ ABANS es cridava a cegues i es capturava el frame igualment. Sense
+                // clip temporal, el TC de captura cau damunt del PROGRAMA i el PNG surt amb el VÍDEO
+                // DE V1 en lloc del grafisme (cas real TNM V3 08/10 13:39: PNG de 524 KB en lloc de
+                // 35 KB + «ERR_CLIP_NOT_FOUND_AT_119.12» en voler esborrar el temporal). Ara es
+                // VERIFICA que el clip hi sigui i, si no s'hi pot posar, es col·loca NOMÉS el clip
+                // viu (sense congelat) en lloc d'un congelat FALS amb imatge del programa.
+                let resTemp = String(await callJSX(`Clips.insert('${escapedWott}', ${T_THEME}, ${TEMP_TC}, null, 'video')`) || '');
+                let tmpClip = null;
+                for (let iIns = 0; iIns < 3; iIns++) {
+                    if (iIns > 0) {
+                        await utils.delay(400);
+                        resTemp = String(await callJSX(`Clips.insert('${escapedWott}', ${T_THEME}, ${TEMP_TC}, null, 'video')`) || '');
+                    }
+                    await utils.delay(300);
+                    try {
+                        const clTmp = (await getClipsLogic().getTrackClips(T_THEME, 'video')) || [];
+                        tmpClip = clTmp.filter(c => Math.abs(c.start - TEMP_TC) < 0.5)[0] || null;
+                    } catch (eVT) { tmpClip = null; }
+                    if (tmpClip) break;
+                }
+                if (!tmpClip) {
+                    log(`   ⚠️ [_freeze] Wott temporal NO inserit a V${T_THEME} @ ${TEMP_TC.toFixed(2)}s (${resTemp || 'sense resposta'}) → SENSE congelat: només clip viu`, "WARN");
+                    const rLive = String(await callJSX(`Clips.insert('${escapedWott}', ${T_THEME}, ${placeTime}, null, 'video')`) || '');
+                    if (isErrRes(rLive)) {
+                        log(`   ❌ [_freeze] Ni el clip viu s'ha pogut inserir (${rLive}) → rètol NO col·locat`, "ERROR");
+                        return { success: false, duration: 0 };
+                    }
+                    // (2026-10-16 · #171) Retall COHERENT → clip ESTIRABLE amb el ratolí.
+                    const rEst2 = await getClipsLogic().endCoherent(T_THEME, placeTime, cutTime, 'video', '_freeze·anim');
+                    log(`   🎞️ [_freeze] Clip animació inserit a V${T_THEME} @ ${placeTime.toFixed(2)}s→${cutTime.toFixed(2)}s (SENSE congelat) [${rEst2}]`);
+                    return { success: true, duration: 0 };
+                }
+    
+                // 2. Capturar l'ÚLTIM frame del wott temporal. El TC es pren del final REAL del
+                //    clip temporal (no de TEMP_TC + 8 s: si el mèdia és més curt, aquell instant
+                //    cauria fora del clip i el PNG sortiria buit).
+                let tmpDur = CUT_OFFSET;
+                if (tmpClip && isFinite(tmpClip.end) && tmpClip.end > TEMP_TC + 0.05) {
+                    tmpDur = Math.min(CUT_OFFSET, tmpClip.end - TEMP_TC);
+                }
+                // Instant del frame congelat. (2026-10-06, 5a passada) Amb `opts.frameMid` es captura
+                // al 60 % del clip: quan la part viva és el clip SENCER, el darrer frame cau a
+                // l'animació de sortida (o al final del mèdia) i el PNG sortiria BUID → «congelat
+                // invisible» (l'usuari ho veia com un congelat innecessari).
+                // (2026-10-12) `opts.grabFrac` permet que cada flux tingui el SEU instant de
+                // captura (TITOLET vs TRADUCCIÓ); si no arriba, mana la clau del TITOLET.
+                const grabFrac = (Number(o.grabFrac) > 0) ? Number(o.grabFrac)
+                    : ((cfg && cfg.titolet && Number(cfg.titolet.freezeGrabFrac) > 0) ? Number(cfg.titolet.freezeGrabFrac) : 0);
+                const grabOff = (o.frameMid === true && grabFrac > 0)
+                    ? Math.min(tmpDur - REV_FRAME, Math.max(REV_FRAME, tmpDur * grabFrac))
+                    : (tmpDur - REV_FRAME);
+                let snapTC = Math.max(TEMP_TC + REV_FRAME, TEMP_TC + grabOff);
+                // ── GUARDA (2026-10-22 · BUG #183): el clip temporal HA DE COBRIR l'instant ──
+                // Si `snapTC` cau fora del clip (el `end` del DOM pot vindre amb el frame
+                // inclusiu, o el mèdia pot ser més curt que la durada estimada), QE exporta el
+                // PROGRAMA: el PNG ix amb el vídeo de V1 i sense el rètol. Es pregunta a
+                // Premiere on és el clip i, si no cobrix, s'ancora a la meitat del temporal o
+                // s'abandona el congelat (mai un PNG del programa fent-se passar per un rètol).
+                const covOk = (c) => !!(c && isFinite(Number(c.start)) && isFinite(Number(c.end)) &&
+                    Math.abs(Number(c.start) - TEMP_TC) <= 0.5 && Number(c.end) > snapTC + 0.005);
+                const readCover = async (tc) => {
+                    try {
+                        const raw = await callJSX(`Clips.at(${T_THEME}, ${(tc + 0.02).toFixed(4)}, 'video')`);
+                        return (raw && raw !== 'null') ? JSON.parse(raw) : null;
+                    } catch (e) { return null; }
+                };
+                let cov = await readCover(snapTC);
+                if (!covOk(cov)) {
+                    const mid = TEMP_TC + Math.max(REV_FRAME, Math.min(tmpDur, CUT_OFFSET) * 0.5);
+                    log(`   ⚠️ [_freeze] el clip temporal NO cobrix ${snapTC.toFixed(2)}s (${cov ? 'clip ' + Number(cov.start).toFixed(2) + '→' + Number(cov.end).toFixed(2) : 'cap clip a la pista'}) → es captura a ${mid.toFixed(2)}s`, 'WARN');
+                    snapTC = mid;
+                    cov = await readCover(snapTC);
+                }
+                if (!covOk(cov)) {
+                    log(`   ❌ [_freeze] Cap clip temporal cobrint l'instant de captura a V${T_THEME} → congelat ABANDONAT (només clip viu)`, 'ERROR');
+                    try { await callJSX(`Clips.removeAt(${T_THEME}, ${TEMP_TC}, 'video')`); } catch (eRm) { }
+                    const rOnly = String(await callJSX(`Clips.insert('${escapedWott}', ${T_THEME}, ${placeTime}, null, 'video')`) || '');
+                    if (isErrRes(rOnly)) return { success: false, duration: 0 };
+                    await getClipsLogic().endCoherent(T_THEME, placeTime, cutTime, 'video', '_freeze·anim');
+                    log(`   🎞️ [_freeze] Clip animació inserit a V${T_THEME} @ ${placeTime.toFixed(2)}s→${cutTime.toFixed(2)}s (SENSE congelat)`);
+                    return { success: true, duration: 0 };
+                }
+                await callJSX(`Timeline.set(${snapTC})`);
+                await utils.delay(400);
+    
+                const folder = await callJSX("Context.folder()");
+                // (2026-11-10 · #256c) Nom ÚNIC (el mateix que el titulillo): `freeze_<slug>_<ts>.png`
+                const slug = this._stillSlug(wottName);
+                snapPath = `${folder}\\Snapshots\\freeze_${slug ? slug + '_' : ''}${Date.now()}.png`;
+                cap = await this._capturePng(snapPath.replace(/\.png$/i, ''), snapTC);
+                const snapResult = cap.res;
+                
+                // Tornar el cabezal a la posició original per restaurar la vista
+                await callJSX(`Timeline.set(${cutTime})`);
+                log(`   📍 [_freeze] Cabezal retornat a ${cutTime.toFixed(2)}s`);
+    
+                // 3. Eliminar el Wott temporal de la pista
+                // Esborrar NOMÉS el clip temporal (és a TEMP_TC). Amb diversos Tema‑Titol
+                // col·locats, l'índex 0 seria el primer clip legítim del bloc.
+                try {
+                    const rmT = await callJSX(`Clips.removeAt(${T_THEME}, ${TEMP_TC}, 'video')`);
+                    log(`   🗑️ [_freeze] Wott temporal eliminat de V${T_THEME} @ ${TEMP_TC.toFixed(2)}s (${rmT})`);
+                } catch (eRT) {
+                    log(`   ⚠️ [_freeze] No s'ha pogut eliminar el temporal: ${eRT.message}`, "WARN");
+                }
+    
+                if (!cap.ok) {
+                    log(`   ❌ [_freeze] Congelat SENSE PNG a ${snapPath} (via ${cap.via || 'cap'} → ${snapResult}) → no es col·loca res`, "ERROR");
                     return { success: false, duration: 0 };
                 }
-                // (2026-10-16 · #171) Retall COHERENT → clip ESTIRABLE amb el ratolí.
-                const rEst2 = await getClipsLogic().endCoherent(T_THEME, placeTime, cutTime, 'video', '_freeze·anim');
-                log(`   🎞️ [_freeze] Clip animació inserit a V${T_THEME} @ ${placeTime.toFixed(2)}s→${cutTime.toFixed(2)}s (SENSE congelat) [${rEst2}]`);
-                return { success: true, duration: 0 };
-            }
-
-            // 2. Capturar l'ÚLTIM frame del wott temporal. El TC es pren del final REAL del
-            //    clip temporal (no de TEMP_TC + 8 s: si el mèdia és més curt, aquell instant
-            //    cauria fora del clip i el PNG sortiria buit).
-            let tmpDur = CUT_OFFSET;
-            if (tmpClip && isFinite(tmpClip.end) && tmpClip.end > TEMP_TC + 0.05) {
-                tmpDur = Math.min(CUT_OFFSET, tmpClip.end - TEMP_TC);
-            }
-            // Instant del frame congelat. (2026-10-06, 5a passada) Amb `opts.frameMid` es captura
-            // al 60 % del clip: quan la part viva és el clip SENCER, el darrer frame cau a
-            // l'animació de sortida (o al final del mèdia) i el PNG sortiria BUID → «congelat
-            // invisible» (l'usuari ho veia com un congelat innecessari).
-            // (2026-10-12) `opts.grabFrac` permet que cada flux tingui el SEU instant de
-            // captura (TITOLET vs TRADUCCIÓ); si no arriba, mana la clau del TITOLET.
-            const grabFrac = (Number(o.grabFrac) > 0) ? Number(o.grabFrac)
-                : ((cfg && cfg.titolet && Number(cfg.titolet.freezeGrabFrac) > 0) ? Number(cfg.titolet.freezeGrabFrac) : 0);
-            const grabOff = (o.frameMid === true && grabFrac > 0)
-                ? Math.min(tmpDur - REV_FRAME, Math.max(REV_FRAME, tmpDur * grabFrac))
-                : (tmpDur - REV_FRAME);
-            let snapTC = Math.max(TEMP_TC + REV_FRAME, TEMP_TC + grabOff);
-            // ── GUARDA (2026-10-22 · BUG #183): el clip temporal HA DE COBRIR l'instant ──
-            // Si `snapTC` cau fora del clip (el `end` del DOM pot vindre amb el frame
-            // inclusiu, o el mèdia pot ser més curt que la durada estimada), QE exporta el
-            // PROGRAMA: el PNG ix amb el vídeo de V1 i sense el rètol. Es pregunta a
-            // Premiere on és el clip i, si no cobrix, s'ancora a la meitat del temporal o
-            // s'abandona el congelat (mai un PNG del programa fent-se passar per un rètol).
-            const covOk = (c) => !!(c && isFinite(Number(c.start)) && isFinite(Number(c.end)) &&
-                Math.abs(Number(c.start) - TEMP_TC) <= 0.5 && Number(c.end) > snapTC + 0.005);
-            const readCover = async (tc) => {
-                try {
-                    const raw = await callJSX(`Clips.at(${T_THEME}, ${(tc + 0.02).toFixed(4)}, 'video')`);
-                    return (raw && raw !== 'null') ? JSON.parse(raw) : null;
-                } catch (e) { return null; }
-            };
-            let cov = await readCover(snapTC);
-            if (!covOk(cov)) {
-                const mid = TEMP_TC + Math.max(REV_FRAME, Math.min(tmpDur, CUT_OFFSET) * 0.5);
-                log(`   ⚠️ [_freeze] el clip temporal NO cobrix ${snapTC.toFixed(2)}s (${cov ? 'clip ' + Number(cov.start).toFixed(2) + '→' + Number(cov.end).toFixed(2) : 'cap clip a la pista'}) → es captura a ${mid.toFixed(2)}s`, 'WARN');
-                snapTC = mid;
-                cov = await readCover(snapTC);
-            }
-            if (!covOk(cov)) {
-                log(`   ❌ [_freeze] Cap clip temporal cobrint l'instant de captura a V${T_THEME} → congelat ABANDONAT (només clip viu)`, 'ERROR');
-                try { await callJSX(`Clips.removeAt(${T_THEME}, ${TEMP_TC}, 'video')`); } catch (eRm) { }
-                const rOnly = String(await callJSX(`Clips.insert('${escapedWott}', ${T_THEME}, ${placeTime}, null, 'video')`) || '');
-                if (isErrRes(rOnly)) return { success: false, duration: 0 };
-                await getClipsLogic().endCoherent(T_THEME, placeTime, cutTime, 'video', '_freeze·anim');
-                log(`   🎞️ [_freeze] Clip animació inserit a V${T_THEME} @ ${placeTime.toFixed(2)}s→${cutTime.toFixed(2)}s (SENSE congelat)`);
-                return { success: true, duration: 0 };
-            }
-            await callJSX(`Timeline.set(${snapTC})`);
-            await utils.delay(400);
-
-            const folder = await callJSX("Context.folder()");
-            const snapPath = `${folder}\\Snapshots\\freeze_${Date.now()}.png`;
-            const cap = await this._capturePng(snapPath.replace(/\.png$/i, ''), snapTC);
-            const snapResult = cap.res;
-            
-            // Tornar el cabezal a la posició original per restaurar la vista
-            await callJSX(`Timeline.set(${cutTime})`);
-            log(`   📍 [_freeze] Cabezal retornat a ${cutTime.toFixed(2)}s`);
-
-            // 3. Eliminar el Wott temporal de la pista
-            // Esborrar NOMÉS el clip temporal (és a TEMP_TC). Amb diversos Tema‑Titol
-            // col·locats, l'índex 0 seria el primer clip legítim del bloc.
-            try {
-                const rmT = await callJSX(`Clips.removeAt(${T_THEME}, ${TEMP_TC}, 'video')`);
-                log(`   🗑️ [_freeze] Wott temporal eliminat de V${T_THEME} @ ${TEMP_TC.toFixed(2)}s (${rmT})`);
-            } catch (eRT) {
-                log(`   ⚠️ [_freeze] No s'ha pogut eliminar el temporal: ${eRT.message}`, "WARN");
-            }
-
-            if (!cap.ok) {
-                log(`   ❌ [_freeze] Congelat SENSE PNG a ${snapPath} (via ${cap.via || 'cap'} → ${snapResult}) → no es col·loca res`, "ERROR");
-                return { success: false, duration: 0 };
             }
 
             // 4. Inserir ara el Wott d'animació a placeTime (0→CUT_OFFSET)
@@ -1150,12 +1188,19 @@
                 log(`   ⚠️ [_freeze] Final real del clip viu NO llegit (${eAt.message}) → congelat a ${cutTime.toFixed(2)}s`, "WARN");
             }
 
-            // 5. Importar PNG al bin CHY (el congelat ja és a snapPath: `_capturePng` prova
-            //    `Render.snapshot` (via QE `exportFramePNG`) i deixa `Render.frame` de reserva;
-            //    `cap.via` diu quina de les dues ha escrit el PNG)
-            const fileName = snapPath.split("\\").pop();
-            const importPayload = JSON.stringify([snapPath]);
-            await callJSX(`IO.importFiles('${utils.escape(importPayload)}', 'CHY')`);
+            // 5. Importar PNG al bin CHY — NOMÉS si s'ha capturat ara (el congelat ja és a
+            //    snapPath: `_capturePng` prova `Render.snapshot` (via QE `exportFramePNG`) i
+            //    deixa `Render.frame` de reserva; `cap.via` diu quina de les dues ha escrit
+            //    el PNG). (2026-11-10 · #256c) Si el PNG s'ha reaprofitat, no s'importa res.
+            if (!fileName) {
+                fileName = snapPath.split("\\").pop();
+                const importPayload = JSON.stringify([snapPath]);
+                await callJSX(`IO.importFiles('${utils.escape(importPayload)}', 'CHY')`);
+                if (this._reuseFreeze()) this._stillCache[this._stillKey(wottName)] = fileName;
+                log(`   📥 [_freeze] PNG «${fileName}» importat al bin CHY (un sol congelat per grafisme)`);
+            } else {
+                log(`   ♻️ [_freeze] PNG «${fileName}» reaprofitat → cap import al bin CHY`);
+            }
 
             // 6. Determinar durada i inserir PNG estirat a la pista des de cutReal fins a stretchEnd
             //    (`cutReal` = final REAL del grafisme, JS:630; `stretchEnd` segueix sent el final
@@ -1169,7 +1214,16 @@
             }
             // (2026-10-01 · #129) Insert sense endSec: el PNG estirat no ha de retallar el darrer
             // clip de la pista.
-            await callJSX(`Clips.insert('${utils.escape(fileName)}', ${T_THEME}, ${cutReal}, null, 'video')`);
+            const insPng = String(await callJSX(`Clips.insert('${utils.escape(fileName)}', ${T_THEME}, ${cutReal}, null, 'video')`) || '');
+            // (2026-11-10 · #256c) El PNG reaprofitat pot no existir ja (RESET del bin CHY o
+            // projecte nou amb la mateixa sessió): s'oblida del cache perquè el pròxim bloc el
+            // torne a capturar, i s'avisa. El clip VIU ja és a la pista, així que el rètol no
+            // es perd (només queda sense congelat en eixe bloc).
+            if (isErrRes(insPng)) {
+                if (this._stillCache) delete this._stillCache[this._stillKey(wottName)];
+                log(`   ⚠️ [_freeze] el congelat «${fileName}» no s'ha pogut insertar (${insPng}) → s'oblida del cache (es capturarà al pròxim bloc)`, 'WARN');
+                return { success: true, duration: 0 };
+            }
             // (2026-10-16 · #171) Retall COHERENT (no `Clips.endAt`): així el congelat queda
             // ESTIRABLE amb el ratolí. Si el still no acceptara l'outPoint (5 s per defecte),
             // `endCoherent` ja re-fixa el final amb `endAt` i avisa.
@@ -4955,6 +5009,110 @@
         },
 
         /**
+         * _stillProgramToken: identitat del GRAFISME del titulillo a partir del nom.
+         *
+         * (2026-11-10 · BUG #256, 2a part) El nom dels wotts porta la identitat del
+         * grafisme: `Wott_TNV_v1_01dp_00.01_…_Tema-Titol_…mov` → programa `TNV` i
+         * versió `v1`. Dos ítems distints del mateix bloc generen fitxers DISTINTS però
+         * amb el MATEIX grafisme; eixa identitat és la que fa que el congelat es puga
+         * reaprofitar encara que el `.mov` siga un altre.
+         * @param {{name:string}} petit - Titulillo (wott) triat
+         * @returns {{tok:string, ver:string}} buits si el nom no seguix la convenció
+         */
+        _stillProgramToken: function (x) {
+            const n = String((x && x.name) || x || '');
+            const m = n.match(/(?:^|[_-])w[o]?tt[_-]([A-Za-z0-9]{2,6})(?:[_-](v[0-9]+))?(?:[_-]|$)/i);
+            if (!m) return { tok: '', ver: '' };
+            return { tok: String(m[1]).toUpperCase(), ver: String(m[2] || '').toLowerCase() };
+        },
+
+        /**
+         * _stillKey: clau del cache del congelat = CONTINGUT del grafisme.
+         * `prog:TNV:v1` si el nom seguix la convenció de wotts; `file:<nom>` si no.
+         * @param {{name:string}} petit
+         * @returns {string}
+         */
+        _stillKey: function (x) {
+            // (2026-11-10 · #256c) Accepta l'objecte wott ({name}) o el NOM directe: el
+            // congelat del Tema-Títol gran (`_freezeTemaTitol`) rep un string.
+            const p = this._stillProgramToken(x);
+            if (p.tok) return 'prog:' + p.tok + (p.ver ? ':' + p.ver : '');
+            return 'file:' + String((x && x.name) || x || '');
+        },
+
+        /**
+         * _stillSlug: tros del nom per batejar el PNG del congelat (`tnv_v1`).
+         * Serveix perquè `_findStillInChy` reconega el PNG d'una corrida anterior.
+         * @param {{name:string}|string} x
+         * @returns {string} `''` si el nom no seguix la convenció de wotts
+         */
+        _stillSlug: function (x) {
+            const p = this._stillProgramToken(x);
+            if (!p.tok) return '';
+            return p.tok.toLowerCase() + (p.ver ? '_' + p.ver : '');
+        },
+
+        /**
+         * _reuseFreeze: ¿es reaprofita el PNG del congelat? (`titolet.reuseFreeze`).
+         * (2026-11-10 · #256c) Abans només ho mirava `_freezeTitulilloStill`; ara és un
+         * sol interruptor per a les DOS vies (titulillo i Tema-Títol gran).
+         * @returns {boolean} cert si es pot reutilitzar (per defecte SÍ)
+         */
+        _reuseFreeze: function () {
+            let TTo = {};
+            try { TTo = (FASTPASS_UI.Config.get().titolet) || {}; } catch (eO) { TTo = {}; }
+            return (TTo.reuseFreeze !== false);
+        },
+
+        /**
+         * _findStillInChy: busca al bin CHY un congelat del titulillo JA IMPORTAT.
+         *
+         * (2026-11-10 · BUG #256, 2a i 3a part) Reaprofitar el PNG d'una corrida anterior
+         * estalvia l'export QE + l'import: el frame congelat és el mateix. Es prefereix
+         * el que porta el token del programa (`freeze_tnv_v1_<ts>.png`); si només n'hi ha
+         * dels antics (`freeze_titulillo_<tok>_<ts>.png`, `freeze_titulillo_<ts>.png`,
+         * `freeze_<ts>.png`) també es reaprofita, que és el que demana l'usuari («que es
+         * reaproveche el png importado cada vez que fuese necesario»). La fan servir les
+         * DOS vies del congelat (titulillo i Tema-Títol gran). `freeze_graf_*` (mapa) no
+         * és un congelat de chyron i mai no s'adopta.
+         * @param {{name:string}|string} x - Wott o nom del wott
+         * @returns {Promise<string|null>} nom del mèdia al projecte
+         */
+        _findStillInChy: async function (x) {
+            const tok = this._stillProgramToken(x).tok;
+            // (2026-11-10 · #256c) Noms acceptats: `freeze_<slug>_<ts>.png` (el nou, comú
+            // per al titulillo i el Tema-Títol gran), `freeze_titulillo_<tok>_<ts>.png` i
+            // `freeze_titulillo_<ts>.png` (antics). `freeze_graf_*` (mapa) NO és un congelat
+            // de chyron i mai no s'adopta.
+            const RE_PNG = /^freeze_(?!graf_)(?:titulillo_)?(?:(?:[a-z]{2,6})(?:_v\d+)?_)?\d{10,}\.png$/i;
+            // Tria el millor candidat d'una llista d'ítems del projecte (`Project.items`).
+            const pick = (raw) => {
+                let arr = null;
+                try { arr = JSON.parse(raw || '[]'); } catch (eP) { return null; }
+                if (!Array.isArray(arr)) return null;
+                const pngs = arr
+                    .filter(i => i && Number(i.type) !== 2)      // els bins no són mèdia
+                    .map(i => String((i && i.name) || ''))
+                    .filter(n => RE_PNG.test(n));
+                if (pngs.length === 0) return null;
+                if (!tok) return pngs[0];
+                // 1) El del MATEIX programa (`freeze_tnv_v1_<ts>.png`, `freeze_titulillo_tnv_<ts>.png`).
+                const mine = pngs.filter(n => n.toUpperCase().indexOf('_' + tok + '_') !== -1);
+                if (mine.length > 0) return mine[0];
+                // 2) Els antics (sense token al nom): el projecte és del mateix programa.
+                const legacy = pngs.filter(n => !/_tn[a-z]{1,3}_/i.test(n));
+                return (legacy.length > 0) ? legacy[0] : null;
+            };
+            try {
+                // 1) El bin CHY (és on van a parar els congelats importats).
+                let found = pick(await callJSX("FASTPASS.Project.items('CHY')"));
+                // 2) Si el bin no existix (o està buit), l'arrel del projecte.
+                if (!found) found = pick(await callJSX('FASTPASS.Project.items()'));
+                return found || null;
+            } catch (eF) { return null; }
+        },
+
+        /**
          * _placeStillAt: col·loca un PNG (still JA importat al bin CHY) en el rang exacte
          * [startSec, endSec] d'una pista, de manera NO DESTRUCTIVA.
          *
@@ -5027,6 +5185,18 @@
          * (2026-11-09 · BUG #256) El PNG es captura **una sola volta per titulillo**: este
          * mètode mira primer `_stillCache` i, si eixe titulillo ja té congelat, només el
          * col·loca amb `_placeStillAt` (el frame és el mateix a tot el bloc).
+         *
+         * (2026-11-10 · BUG #256, 2a part) La clau del cache és el CONTINGUT del grafisme
+         * (`_stillKey`: `Wott_TNV_v1_…` → `prog:TNV:v1`), no el nom del fitxer, i abans de
+         * capturar es mira UNA volta si el bin CHY ja té un `freeze_<slug>_*.png`
+         * (`_findStillInChy`): així el congelat s'exporta i s'importa una sola volta per
+         * programa, no una per `.mov` ni una per corrida. Desactivable amb
+         * `titolet.reuseFreeze = false`.
+         *
+         * (2026-11-10 · BUG #256, 3a part) Eixa mateixa caché i eixa mateixa cerca les fa
+         * servir el Tema-Títol gran (`_freezeTemaTitol`): el titulillo i el Tema-Títol són el
+         * MATEIX grafisme del programa, així que el bloc sencer (2 grans + 1 titulillo) es
+         * queda amb **un sol PNG** en compte de tres.
          * @param {{name:string, dur:number}} petit - Titulillo (wott) triat
          * @param {number} track - Pista de Tema-Títol
          * @param {number} startSec - IN del congelat (final de l'entrant)
@@ -5041,15 +5211,36 @@
             // El titulillo és COMÚ a tot el bloc i el frame que es congela és el mateix:
             // amb 2 Tema-Títol grans es feien DOS congelats (insert temporal + QE +
             // import d'un PNG duplicat al bin CHY) del MATEIX frame. Ara, si ja s'ha
-            // capturat per a este titulillo, s'usa eixe PNG (ja importat) i no es torna
-            // a capturar. No cal ni zona de programa buida: només es col·loca un mèdia
-            // que ja existix.
+            // capturat, s'usa eixe PNG (ja importat) i no es torna a capturar. No cal ni
+            // zona de programa buida: només es col·loca un mèdia que ja existix.
+            //
+            // (2026-11-10 · BUG #256, 2a part) La clau és el CONTINGUT (`_stillKey`), no
+            // el nom del fitxer: dos wotts distints del mateix programa són el MATEIX
+            // grafisme. I si el bin CHY ja té un congelat d'una corrida anterior
+            // (`freeze_titulillo_*.png`) s'adopta: ni export ni import.
+            let TTo = {};
+            try { TTo = (FASTPASS_UI.Config.get().titolet) || {}; } catch (eO) { TTo = {}; }
+            const useCache = this._reuseFreeze();
             if (!this._stillCache) this._stillCache = {};
-            const sKey = String(petit.name);
-            const sCached = this._stillCache[sKey];
+            const sKey = this._stillKey(petit);
+            let sCached = useCache ? this._stillCache[sKey] : null;
+            let sWhy = sCached ? 'mem' : '';
+            // Només UNA volta per sessió: llegir el bin CHY (`Project.items`) té cost.
+            if (useCache && !sCached && !this._stillProbed) {
+                this._stillProbed = true;
+                const found = await this._findStillInChy(petit);
+                if (found) {
+                    this._stillCache[sKey] = found;
+                    sCached = found;
+                    sWhy = 'chy';
+                    log(`   ♻️ [Titol·Petit] «${label}»: el CONGELAT ja era al bin CHY (${found}) → reutilitzat (cap export ni import)`);
+                }
+            }
             if (sCached) {
                 if (await this._placeStillAt(sCached, track, startSec, endSec, label)) {
-                    log(`   ♻️ [Titol·Petit] «${label}»: el CONGELAT ja estava capturat (${sCached}) → reutilitzat (no es torna a fer el freeze)`);
+                    if (sWhy === 'mem') {
+                        log(`   ♻️ [Titol·Petit] «${label}»: el CONGELAT ja estava capturat (${sCached}) → reutilitzat (no es torna a fer el freeze)`);
+                    }
                     return true;
                 }
                 log(`   ⚠️ [Titol·Petit] «${label}»: el congelat reutilitzat (${sCached}) no s'ha pogut col·locar → es captura de nou`, 'WARN');
@@ -5109,7 +5300,11 @@
                 // `exportFramePNG`) i deixa `Render.frame` com a reserva, i VERIFICA que el PNG
                 // s'hagi escrit (mida > 0). El 2026-10-05 es va donar la QE per morta per ERROR:
                 // vegeu el bloc de `_capturePng` (línia ~376).
-                const capBase = `${folder}\\Snapshots\\freeze_titulillo_${Date.now()}`;
+                // (2026-11-10 · #256c) Nom ÚNIC del congelat: `freeze_<slug>_<ts>.png`
+                // (`slug` = `tnv_v1`). És el mateix esquema que fa servir `_freezeTemaTitol`,
+                // així les dos vies es reconeixen el PNG entre elles i al bin CHY.
+                const capSlug = this._stillSlug(petit);
+                const capBase = `${folder}\\Snapshots\\freeze_${capSlug ? capSlug + '_' : ''}${Date.now()}`;
                 const cap = await this._capturePng(capBase, snapTC);
                 const snapPath = cap.path;
                 await callJSX(`Timeline.set(${startSec})`);
@@ -5133,7 +5328,7 @@
                     // bloc (2n Tema-Títol gran) reutilitza ESTE congelat en compte de
                     // capturar-ne un duplicat. La col·locació (no destructiva) viu a
                     // `_placeStillAt`, compartida amb el camí de reutilització.
-                    this._stillCache[sKey] = fName;
+                    if (useCache) this._stillCache[sKey] = fName;
                     return await this._placeStillAt(fName, track, startSec, endSec, label);
                 }
                 log(`   ⚠️ [Titol·Petit] Snapshot del congelat NO usable (${pngSospitos ? 'PNG del programa descartat' : cap.res})`, 'WARN');

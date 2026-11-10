@@ -1,13 +1,13 @@
 # FEATURES — catàleg únic d'implementacions
 
-> **Únic lloc** on viu l'estat de les funcionalitats i implementacions. Actualitzat: **2026-11-06**.
+> **Únic lloc** on viu l'estat de les funcionalitats i implementacions. Actualitzat: **2026-11-10**.
 > Els bugs viuen a [`BUGS.md`](BUGS.md).
 >
 > Tres estats possibles: **validada** (provada en viu a Premiere),
 > **pendent de validar** (codi fet, falta la prova en viu),
 > **en cua** (dissenyada o apuntada, sense codi).
 
-**Resum**: 41 validades · 9 pendents de validar · 7 en cua.
+**Resum**: 41 validades · 11 pendents de validar · 7 en cua.
 
 ---
 
@@ -92,7 +92,7 @@
 
 ---
 
-## 2 · Pendents de validar (10)
+## 2 · Pendents de validar (11)
 
 Codi fet, **només** falta la prova en viu a Premiere. El rètol cremat `TITOLET_ROI_PER_ROL` es
 prova amb un cleanFeed real (`2026_10_25/V3/TNM_V3`, bloc vertical); referència tècnica:
@@ -112,6 +112,8 @@ prova amb un cleanFeed real (`2026_10_25/V3/TNM_V3`, bloc vertical); referència
 
 
 | `A1_SEP_IA` | **Separació de fonts per IA** (el pla B de `AUDIO_IA_DEREVERB`, ara executable): MDX-Net **`Kim_Vocal_2.onnx`** (UVR) corregut amb **sherpa-onnx + ONNX Runtime natius**, **sense Python ni PyTorch** (decidit 05/11: no n'hi ha a l'equip i no cal). Trau **dos stems independents** (veu / música) en compte de restar: no necessita sincronia de plantilla, ni guany, ni `lag`, i per tant no li afecta la reverb/EQ/retard de la careta. CLI `A1Sep` (font **`bin\sep\src\A1Sep.cs`**) amb JSON de mètriques (RTF, temps per etapa, RMS, bandes, cua, RAM); el model necessita l'etiquetatge de metadata de `bin\sep\src\add_uvr_metadata.py` perquè sherpa-onnx el carregue (cap pes tocat). Traçabilitat, hashes i llicències a **`bin\sep\PROVENANCE.md`**. ⚠️ **Els binaris viuen a `E:\A1_SEP_CORE\bin\` i NO a la carpeta de l'extensió**; l'extensió només guarda les dades i les fonts. **BLOQUEIG DIAGNOSTICAT (05/11)**: és **Trend Micro Apex One** — `TMiACAgentSvc` (*Application Control*) + `TMBMServer` (*Unauthorized Change Prevention*) — que impedix `CreateProcess` → **`Acceso denegado` als ~25 s** (el procés no arranca: 0 línies de stdout). **Passa igual amb l'exe ja firmat** (`77CC4F3B…B964F46`) **i igual des d'una còpia a `%TEMP%`**: no és permís NTFS ni ruta, és **política de consola** (Defender està parat i `Get-MpThreatDetection` buit). **Cal excepció d'IT**: paquet llest (tiquet per a pegar, hashes, certificat, fonts, mostres) a `\\dades_c.ad-ccrtv.local\DADES_c\Usuaris\gonz_agu\carpetesWin7\Documents\IT_A1SEP_2026-11-05\` — `00_COS_DEL_TICKET.txt` + `02_HASHES_SHA256.txt`. La resta actual (`mode='null'`) es queda com a pla A per als casos que sí casen | **Prova cega ja muntada a `…\2026_11_04\V1\A1_CLEAN\`** (`A1_REF_A.wav` / `A1_REF_B.wav`, ordre aleatori, clau i mètriques a `A1_AB_CLAU.json` i guia a `LLEGEIX-ME.txt`) sobre `TNM_V1_CLIP.mp4` (7,68 s, careta `3CatInfo_TNC_careta_sense_alpha.WAV` a 10,2792 s). Mesura feta (48 kHz): cua 0–0,24 s **−25,81 → −71,32 dBFS** (la resta actual: −52,23), banda de veu 300–3400 Hz **−0,10 dB**, veu a −0,44 dB de la mescla (substituïble sense tocar guany), **corr(música, plantilla) = 0,954** i **corr(veu, plantilla) = 0,005**, veu+música−mescla **−66,2 dB**, RTF **0,50** (20 fils, 2,5 GB de RAM, 3,85 s per a 7,68 s). **Pendent**: que l'usuari trie a orella (A o B) i, si guanya la IA, la integració al panell com a `mode='sep'` |
+| `CHYRON_FREEZE_REUSE` | **Un sol congelat per GRAFISME: el titulillo i els Tema-Títol grans comparteixen el mateix PNG** (BUG #256, 2a i 3a part; peticions de l'usuari 10/11: «congelamos dos archivos diferentes pero el contenido es el mismo exactamente … que se reaproveche el png importado cada vez que fuese necesario» i, al dia següent, sobre el projecte TNC V2, «Se han generado 3 congelados. Y los 3 son iguales. Simplificalo. El freeze del Tema-Titol es lo mismo que el freeze titulillo»). | **resolt** (10/11, tancat per decisió de l'usuari) | La clau del cache del congelat passa a ser el **CONTINGUT** del grafisme (`_stillKey` → `prog:TNV:v1`, extret del nom del wott amb `_stillProgramToken`: `Wott_<PROG>_<vN>_…`; si el nom no seguix la convenció, `file:<nom>` com abans) i, abans de capturar, es mira **una volta per sessió** el bin CHY (`_findStillInChy` → `Project.items('CHY')`): si ja hi ha un `freeze_titulillo_*.png` d'una corrida anterior **s'adopta** (ni export QE ni `IO.importFiles`), amb preferència pel del mateix programa i mai el d'un altre. El PNG nou es bateja **`freeze_<slug>_<ts>.png`** (`_stillSlug` → `tnv_v1`), el MATEIX esquema per a les dos vies. **3a part (10/11)**: `_freezeTemaTitol` (el Tema-Títol gran) ja no captura sempre el seu propi `Snapshots\freeze_<ts>.png`; abans de res mira la mateixa caché (`_stillCache[_stillKey(wottName)]`) i el mateix `_findStillInChy`, i si el PNG hi és només fa el `Clips.insert` estirat (cap insert temporal, cap export QE, cap `IO.importFiles`): 2 Tema-Títol grans + 1 titulillo = **1 sol PNG** al projecte en compte de 3. `_findStillInChy` accepta el nom nou i els antics (`freeze_titulillo_<tok>_<ts>.png`, `freeze_titulillo_<ts>.png`, `freeze_<ts>.png`) i **rebutja `freeze_graf_*`** (el congelat del flow_mapa no és un chyron). Config `titolet.reuseFreeze` (`true` per defecte; `false` = capturar sempre) mana a les DOS vies (`_reuseFreeze`). Logs: `♻️ [Titol·Petit] «…»: el CONGELAT ja era al bin CHY (…) → reutilitzat (cap export ni import)` i `♻️ [_freeze] «…» el CONGELAT «…» ja existix per a este grafisme (prog:TNV:v1) → reutilitzat (cap captura ni import)`. Fitxers: `js/workflows/flow_chyrons.js?v=106`, `js/core/11_Configuracio.js?v=48`, `index.html` · Com es prova: obrir un bloc amb **diversos** Tema-Títol grans: al log ha d'haver-hi **una sola** captura i cap import de la resta; al bin CHY, **un sol** `freeze_tnv_v1_…png` (i `♻️ [_freeze]` als Tema-Títol grans). Refer el bloc i tornar a col·locar els chyrons: el log ha de dir «ja **era al bin CHY** … reutilitzat» i no s'ha de capturar res. Amb `titolet.reuseFreeze:false` s'ha de capturar sempre. Proves `#WOTT/79`–`#WOTT/83` |
+
 
 
 

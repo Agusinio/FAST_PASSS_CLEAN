@@ -423,7 +423,7 @@
                 '109, Scanner 27, Srt_Logic 26, Config 46)',
                 /srt_editor\.js\?v=99/.test(html) && /flow_srt\.js\?v=21/.test(html) &&
                 /main\.js\?v=109/.test(html) && /Scanner\.js\?v=27/.test(html) &&
-                /10_Srt_Logic\.js\?v=28/.test(html) && /11_Configuracio\.js\?v=47/.test(html));
+                /10_Srt_Logic\.js\?v=28/.test(html) && /11_Configuracio\.js\?v=48/.test(html));
 
             var cfg = noComments(await readRepo('js/core/11_Configuracio.js'));
             ok('#F3/26 config: srtSyntheticGapTolSec (default 0,2 s + getter)',

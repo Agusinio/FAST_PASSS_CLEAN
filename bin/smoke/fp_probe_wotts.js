@@ -249,8 +249,8 @@
                 /if \(placeEnd !== null && \(placeEnd - slot\.start\) > REV_FRAME \+ 0\.001\) \{/.test(chySrc) &&
                 /placeEnd = gridDown\(placeEnd - REV_FRAME\);/.test(chySrc));
             var idxW = await readRepo('index.html');
-            ok('#WOTT/24 cache-bust al dia (4_Context 36, flow_chyrons 103, Scanner 27)',
-                /4_Context\.js\?v=36/.test(idxW) && /flow_chyrons\.js\?v=104/.test(idxW) &&
+            ok('#WOTT/24 cache-bust al dia (4_Context 36, flow_chyrons 106, Scanner 27)',
+                /4_Context\.js\?v=36/.test(idxW) && /flow_chyrons\.js\?v=106/.test(idxW) &&
                 /Scanner\.js\?v=27/.test(idxW),
                 (idxW.match(/4_Context\.js\?v=\d+/) || '') + ' ' +
                 (idxW.match(/flow_chyrons\.js\?v=\d+/) || '') + ' ' +
@@ -664,9 +664,9 @@
             ok('#WOTT/43 retall del clip sencer: 3 → 1 frame i un de 2 frames NO es toca (mai <1)',
                 rC === null && rD !== null && fN(rD) === 1,
                 '2f=' + (rC === null ? 'intacte' : fN(rC)) + ' 3f=' + (rD === null ? 'n/d' : fN(rD)));
-            ok('#WOTT/44 el retall del sencer deixa traça (✂️ CLIP SENCER) i cache-bust flow_chyrons 103',
+            ok('#WOTT/44 el retall del sencer deixa traça (✂️ CLIP SENCER) i cache-bust flow_chyrons 106',
                 chySrc.indexOf('✂️ [') > 0 && chySrc.indexOf('CLIP SENCER') > 0 &&
-                /flow_chyrons\.js\?v=104/.test(idxW),
+                /flow_chyrons\.js\?v=106/.test(idxW),
                 (idxW.match(/flow_chyrons\.js\?v=\d+/) || ''));
 
             // ── N2. CUA DE SEGURETAT DE TOTS ELS WOTTS (2026-11-02 · #218, 03/11) ──
@@ -782,7 +782,9 @@
                 // pista destí). Mesurat al TNC V3 del 22/10: el PNG del titullet pesava
                 // 1.077.396 B (un frame del programa) contra 21.229 B del congelat bo.
                 var iStill = chySrc.indexOf('_freezeTitulilloStill: async function');
-                var stillSrc = (iStill >= 0) ? chySrc.slice(iStill, iStill + 8000) : '';
+            // (2026-11-10 · #256b) Finestra ampliada: `_freezeTitulilloStill` ha crescut amb
+            // la clau per contingut i el reús del PNG del bin CHY (abans 8000 ja no hi arribava).
+            var stillSrc = (iStill >= 0) ? chySrc.slice(iStill, iStill + 14000) : '';
                 ok('#WOTT/49 _freezeTitulilloStill: zona VALIDADA amb _freezeZone (no _v6FreeTC), cobertura i descart pel TAMANY del PNG',
                     stillSrc.length > 0 &&
                     /const z = \(zone && typeof zone === 'object'\) \? zone : await this\._freezeZone\(needZone\)/.test(stillSrc) &&
@@ -793,11 +795,11 @@
                     /const LIMIT_PROGRAMA = 400 \* 1024/.test(stillSrc) &&
                     /const pngSospitos = cap\.ok && Number\(cap\.bytes\) > LIMIT_PROGRAMA/.test(stillSrc) &&
                     /if \(cap\.ok && !pngSospitos\)/.test(stillSrc) &&
-                    /flow_chyrons\.js\?v=104/.test(idxW),
+                    /flow_chyrons\.js\?v=106/.test(idxW),
                     'still=' + stillSrc.length +
                     ' zoneAvansCaptura=' + (stillSrc.indexOf('_freezeZone(needZone)') > -1 && stillSrc.indexOf('_freezeZone(needZone)') < stillSrc.indexOf('_capturePng(capBase')) +
                     ' v6=' + (stillSrc.indexOf('const TEMP_TC = await this._v6FreeTC') === -1 ? 'fora' : 'DINS') +
-                    ' v100=' + /flow_chyrons\.js\?v=104/.test(idxW));
+                    ' v100=' + /flow_chyrons\.js\?v=106/.test(idxW));
             } finally {
                 UI.Utils.callJSX = savedCJZ;
             }
@@ -814,7 +816,8 @@
                 var savedCJ2 = UI.Utils.callJSX, savedLog2 = UI.Utils.log;
                 var savedCap2 = CHY2._capturePng, savedV62 = CHY2._v6FreeTC;
                 var savedGTC2 = LGC.getTrackClips, savedEC2 = LGC.endCoherent;
-                var savedCache2 = CHY2._stillCache;
+                var savedCache2 = CHY2._stillCache, savedProbe2 = CHY2._stillProbed;
+                var CHY_ITEMS = [];   // contingut simulat del bin CHY (Project.items)
                 var N_CAP = 0, N_IMP = 0, INS = [], MOVES = [], LOGS = [], TL = [], FREE = 4000, NOIDX = false;
                 try {
                     UI.Utils.log = function (m) { LOGS.push(String(m)); };
@@ -837,6 +840,7 @@
                             return 'OK';
                         }
                         if (/^IO\.importFiles\(/.test(s)) { N_IMP++; return 'OK'; }
+                        if (/^FASTPASS\.Project\.items\('CHY'\)$/.test(s)) return JSON.stringify(CHY_ITEMS);
                         if (/^Context\.folder\(\)$/.test(s)) return 'Z:' + BS + 'PROJ';
                         return 'OK';
                     };
@@ -848,6 +852,7 @@
                         return { ok: true, bytes: 21229, res: 'QE', path: base + '.png' };
                     };
                     CHY2._stillCache = null;
+                    CHY2._stillProbed = false;
                     var ZONE = { ok: true, tc: 3000, via: 'preferit' };
                     var pA = { name: 'Tema_Titol_petit_600279.mov', dur: 1.0 };
                     // 2 congelats del MATEIX titulillo (2 Tema-Títol grans al bloc)
@@ -857,7 +862,7 @@
                         r75a === true && r75b === true && N_CAP === 1 && N_IMP === 1,
                         'res=' + r75a + '/' + r75b + ' captures=' + N_CAP + ' imports=' + N_IMP);
 
-                    var pngIns = INS.filter(function (i) { return i.name.indexOf('freeze_titulillo_') === 0; });
+                    var pngIns = INS.filter(function (i) { return i.name.indexOf('freeze_') === 0; });
                     var reuseLog = LOGS.filter(function (l) {
                         return l.indexOf('CONGELAT ja estava capturat') !== -1 && l.indexOf('reutilitzat') !== -1;
                     });
@@ -875,22 +880,90 @@
 
                     // El PNG reutilitzat ja no es pot col·locar (p. ex. després d'un RESET) →
                     // s'oblida l'entrada i es captura de nou.
-                    CHY2._stillCache[pA.name] = 'freeze_titulillo_antic.png';
+                    CHY2._stillCache[CHY2._stillKey(pA)] = 'freeze_titulillo_antic.png';
                     var capAbans = N_CAP;
                     NOIDX = true;
                     var r78 = await CHY2._freezeTitulilloStill(pA, 6, 400, 420, 'buit 4', ZONE);
                     NOIDX = false;
                     ok('#WOTT/78 (#256) si el congelat reutilitzat no es pot col·locar → eixida del cache i CAPTURA de nou (autocorrecció)',
                         r78 === false && N_CAP === capAbans + 1 &&
-                        CHY2._stillCache[pA.name] !== 'freeze_titulillo_antic.png' &&
+                        CHY2._stillCache[CHY2._stillKey(pA)] !== 'freeze_titulillo_antic.png' &&
                         LOGS.filter(function (l) { return l.indexOf('es captura de nou') !== -1; }).length === 1,
-                        'res=' + r78 + ' captures=' + N_CAP + ' cache=' + CHY2._stillCache[pA.name]);
+                        'res=' + r78 + ' captures=' + N_CAP + ' cache=' + CHY2._stillCache[CHY2._stillKey(pA)]);
+
+                    // ── (2026-11-10 · #256, 2a part) CLAU PER CONTINGUT + REÚS DEL BIN CHY ──
+                    // Queixa de l'usuari: «Hay ocasiones en que tenemos que hacer un congelado
+                    // del titulillo … congelamos dos archivos diferentes pero el contenido es el
+                    // mismo exactamente … que se reaproveche el png importado cada vez que fuese
+                    // necesario». El titulillo de dos notícies són DOS .mov distints
+                    // (`Wott_TNV_v1_01dp_…` i `Wott_TNV_v1_03_…`) però el MATEIX grafisme.
+                    CHY2._stillCache = {};
+                    CHY2._stillProbed = true;      // cap PNG al bin: no cal mirar-lo
+                    var cap79 = N_CAP, imp79 = N_IMP;
+                    var pC = { name: 'Wott_TNV_v1_01dp_00.01_Dona pas directe pluges_582027_Tema-Titol_Alerta_.00582355.mov', dur: 1.0 };
+                    var pD = { name: 'Wott_TNV_v1_03_00.01_ALERTA PER FORTES PLUGES_581872_Tema-Titol_Pluges_.00581872.mov', dur: 1.0 };
+                    var r79a = await CHY2._freezeTitulilloStill(pC, 6, 500, 520, 'buit 5', ZONE);
+                    var r79b = await CHY2._freezeTitulilloStill(pD, 6, 600, 620, 'buit 6', ZONE);
+                    ok('#WOTT/79 (#256b) dos .mov DISTINTS del mateix programa = MATEIX grafisme (clau prog:TNV:v1) → UNA captura i UN import',
+                        r79a === true && r79b === true && N_CAP === cap79 + 1 && N_IMP === imp79 + 1 &&
+                        CHY2._stillKey(pC) === 'prog:TNV:v1' && CHY2._stillKey(pC) === CHY2._stillKey(pD),
+                        'cap=' + (N_CAP - cap79) + ' imp=' + (N_IMP - imp79) + ' key=' + CHY2._stillKey(pC));
+
+                    // El bin CHY ja té el congelat d'una corrida anterior: ni export ni import.
+                    CHY2._stillCache = null;
+                    CHY2._stillProbed = false;
+                    CHY_ITEMS = [{ name: 'freeze_titulillo_tnv_1792672636408.png', type: 1 }];
+                    var cap80 = N_CAP, imp80 = N_IMP, mv80 = MOVES.length;
+                    var r80 = await CHY2._freezeTitulilloStill(pC, 6, 700, 720, 'buit 7', ZONE);
+                    ok('#WOTT/80 (#256b) si el bin CHY ja té un freeze_titulillo_*.png es reaprofita: 0 exports i 0 imports',
+                        r80 === true && N_CAP === cap80 && N_IMP === imp80 && MOVES.length === mv80 + 1 &&
+                        LOGS.filter(function (l) { return l.indexOf('ja era al bin CHY') !== -1; }).length === 1,
+                        'res=' + r80 + ' cap=' + (N_CAP - cap80) + ' imp=' + (N_IMP - imp80) + ' moves=' + (MOVES.length - mv80));
+
+                    // El congelat del bin CHY és d'un ALTRE programa (TNV) → no serveix per a TNM.
+                    CHY2._stillCache = null;
+                    CHY2._stillProbed = false;
+                    var cap81 = N_CAP;
+                    var pE = { name: 'Wott_TNM_V_16_00.00_SANCHEZ ELS NOMS_Tema-Titol_Govern_.00625919.mov', dur: 1.0 };
+                    var r81 = await CHY2._freezeTitulilloStill(pE, 6, 800, 820, 'buit 8', ZONE);
+                    ok('#WOTT/81 (#256b) un congelat d\'un ALTRE programa (TNV) no es reaprofita per a TNM: es captura el propi',
+                        r81 === true && N_CAP === cap81 + 1 && CHY2._stillKey(pE) === 'prog:TNM',
+                        'res=' + r81 + ' cap=' + (N_CAP - cap81) + ' key=' + CHY2._stillKey(pE));
+
+                    // ── (2026-11-10 · #256c) UN SOL CONGELAT PER GRAFISME ────────────────
+                    // TNC V2 (10/11): «Se han generado 3 congelados. Y los 3 son iguales. El
+                    // freeze del Tema-Titol es lo mismo que el freeze titulillo». El Tema-Títol
+                    // gran ha de REUTILITZAR el PNG que ja va capturar el titulillo (mateixa
+                    // clau de contingut): sense insert temporal, ni export, ni import.
+                    CHY2._stillCache = {};
+                    CHY2._stillCache[CHY2._stillKey(pC)] = 'freeze_tnv_v1_1792672636408.png';
+                    CHY2._stillProbed = true;
+                    var cap82 = N_CAP, imp82 = N_IMP, ins82 = INS.length;
+                    var r82 = await CHY2._freezeTemaTitol(pC.name, 900, 950, 'T82', { tempTC: 3000, zoneOk: true });
+                    var pngIns82 = INS.slice(ins82).filter(function (i) { return i.name.indexOf('freeze_') === 0; });
+                    ok('#WOTT/82 (#256c) el Tema-Títol gran reaprofita el congelat del titulillo: 0 captures, 0 imports i el PNG ja importat',
+                        r82 && r82.success === true && N_CAP === cap82 && N_IMP === imp82 &&
+                        pngIns82.length === 1 && pngIns82[0].name === 'freeze_tnv_v1_1792672636408.png',
+                        'res=' + JSON.stringify(r82) + ' cap=' + (N_CAP - cap82) + ' imp=' + (N_IMP - imp82) + ' png=' + JSON.stringify(pngIns82));
+
+                    // `_findStillInChy` accepta el nom nou i els antics, i ignora `freeze_graf_*`
+                    // (el congelat del flow_mapa NO és un congelat de chyron).
+                    CHY2._stillProbed = false; CHY2._stillCache = null;
+                    CHY_ITEMS = [{ name: 'freeze_graf_1792672636408.png', type: 1 }];
+                    var f83a = await CHY2._findStillInChy(pC);
+                    CHY_ITEMS = [{ name: 'freeze_tnv_v1_1792672636409.png', type: 1 }, { name: 'freeze_titulillo_1792672636410.png', type: 1 }];
+                    var f83b = await CHY2._findStillInChy(pC);
+                    ok('#WOTT/83 (#256c) _findStillInChy: ignora freeze_graf_* (mapa) i reconeix el nom nou freeze_<slug>_<ts>.png',
+                        f83a === null && f83b === 'freeze_tnv_v1_1792672636409.png' && CHY2._stillSlug(pC) === 'tnv_v1',
+                        'graf=' + f83a + ' nou=' + f83b + ' slug=' + CHY2._stillSlug(pC));
+                    CHY_ITEMS = [];
                 } finally {
                     UI.Utils.callJSX = savedCJ2;
                     UI.Utils.log = savedLog2;
                     CHY2._capturePng = savedCap2;
                     CHY2._v6FreeTC = savedV62;
                     CHY2._stillCache = savedCache2;
+                    CHY2._stillProbed = savedProbe2;
                     LGC.getTrackClips = savedGTC2;
                     LGC.endCoherent = savedEC2;
                 }

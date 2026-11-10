@@ -272,6 +272,17 @@
                                //    al final detectat, només s'estalvia l'últim segon
                                //    d'animació (el frame congelat ja és el grafisme format:
                                //    `freezeGrabFrac` = 60 % del clip). 0 = comportament antic.
+        // ♻️ (2026-11-10 · BUG #256, 2a i 3a part) CONGELAT REUTILITZAT. El frame que es congela
+        // és el MATEIX a tot el bloc i entre blocs del mateix programa, però abans cada
+        // congelat feia el seu export (QE) + import (un PNG duplicat al bin CHY): «congelamos
+        // dos archivos diferentes pero el contenido es el mismo exactamente … que se
+        // reaproveche el png importado»; i, al dia següent, «Se han generado 3 congelados. Y
+        // los 3 son iguales … El freeze del Tema-Titol es lo mismo que el freeze titulillo».
+        // Amb `true`, el PNG s'exporta i s'importa UNA sola volta i el reaprofiten les DOS
+        // vies (`_freezeTitulilloStill` i `_freezeTemaTitol`), en memòria o del bin CHY d'una
+        // corrida anterior (la clau és el CONTINGUT del grafisme, `Wott_<PROG>_<vN>_…`).
+        // `false` = capturar sempre.
+        reuseFreeze: true,
     };
 
     // 🎬 TEMA-TÍTOL · SORTIDA i TRANSICIONS (2026-10-07)
