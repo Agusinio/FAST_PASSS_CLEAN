@@ -42,7 +42,12 @@
 > acordada: **preferim sobrar un clip (traure'l és fàcil) que quedar-se sense ell**; això revisa
 > #224-b (el clip que només toca la vora ara SÍ que entra si el SINT el té entre les dos àncores).
 > Proves noves `#F3/103`–`#F3/106` (i `#F3/72` reescrit). `index.html` passa a
-> `10_Srt_Logic.js?v=27` i `srt_editor.js?v=97`. **Pendent**: prova en viu de l'usuari.
+> `10_Srt_Logic.js?v=27` i `srt_editor.js?v=97`. **TANCAT EN VIU el 10/11** («Ahora hace
+> exactamente lo que quería»): amb eixa prova queden tancats **#261** (validat en viu) i, en
+> cascada per decisió de l'usuari, **#224**, **#224-b**, **#224-c**, **#259** i **#260**.
+> Catàleg: **22 pendents · 158 resolts/tancats**; `FEATURES.md` passa el reompliment a §1.1
+> (`SRT_SINT_FILL`, `resolt`) i deixa **9** pendents de validar. **Següent**: #256, #257 i #258
+> (altres fluxos del SINT/editor, sense prova en viu encara).
 >
 > **Entrada anterior (2026-11-10 c · BUG #260): el clip SINT conserva el ROIG en editar-lo.**
 > Report de l'usuari: «cuando ya se han colocado [los SINT], si intentas editarlos cambian de
