@@ -8,7 +8,7 @@
 > **Un sol handoff.** Prohibit tornar a crear diaris a `.roo/`, `plans/HANDOFF_*` o llistes de
 > pendents a `INFO/` (històric fusionat a [`docs/archive/`](archive/), 2026-11-06).
 
-**Últim traspàs:** 2026-11-10 · **Versió del codi:** 0.9.8 · **Branca:** `main` (commits locals `b282ac9` + `42ebb97` (#258) + `3763848` (#259) + `3738404` (#260) + `7e7dd63` + `0bc166a` (#261), **sense push**: `git-remote-https` ix 128 en este equip)
+**Últim traspàs:** 2026-11-10 · **Versió del codi:** 0.9.8 · **Branca:** `main` (commits locals `b282ac9` + `42ebb97` (#258) + `3763848` (#259) + `3738404` (#260) + `7e7dd63` + `0bc166a` (#261) + `3755f13` (tancament del bloc SINT), **pujats a `origin` el 10/11** amb `E:\PortableGit\bin\git.exe` (`6b6b8c3..3755f13 main -> main`); el `git-remote-https` del PATH fallava amb 128, el de PortableGit **sí que puja**)
 
 ---
 
