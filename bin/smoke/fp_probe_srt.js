@@ -421,9 +421,9 @@
                 /Ctrl\+clic = SUBTÍTOLS SINTÈTICS/.test(html));
             ok('#F3/25 index: cache-busts F3 (srt_editor 98, flow_srt 21, main ' +
                 '109, Scanner 27, Srt_Logic 26, Config 46)',
-                /srt_editor\.js\?v=98/.test(html) && /flow_srt\.js\?v=21/.test(html) &&
+                /srt_editor\.js\?v=99/.test(html) && /flow_srt\.js\?v=21/.test(html) &&
                 /main\.js\?v=109/.test(html) && /Scanner\.js\?v=27/.test(html) &&
-                /10_Srt_Logic\.js\?v=27/.test(html) && /11_Configuracio\.js\?v=46/.test(html));
+                /10_Srt_Logic\.js\?v=28/.test(html) && /11_Configuracio\.js\?v=47/.test(html));
 
             var cfg = noComments(await readRepo('js/core/11_Configuracio.js'));
             ok('#F3/26 config: srtSyntheticGapTolSec (default 0,2 s + getter)',
@@ -1354,6 +1354,97 @@
             } catch (e262) {
                 ok('#F3/107-110 eix del mapa (#262): sense excepcio', false, e262 && (e262.message + ' | ' + e262.stack));
             }
+
+        // ═══ F3.7 · TEXT DUPLICAT A LES FRONTERES DEL BUIT (2026-11-10) ═══
+        // El SINT es genera amb handles d'àudio: el primer/últim clip que entra a
+        // un buit sol repetir la cua/capçalera del veí. Només s'edita el TEXT de
+        // l'entrada SINT (ni el temps ni les oficials).
+        try {
+            var seam1 = P.trimSeamDuplicates([
+                { index: 1, texts: ['Ahir vam parlar', 'amb la gent'], startSec: 0, endSec: 2 },
+                { index: 2, texts: ['amb la gent', 'de Barcelona. Ara toca'], startSec: 2.12, endSec: 4, sint: true }
+            ]);
+            ok('#F3/111 funcional: el primer SINT no repetix la cua del subtítol anterior',
+                seam1.words === 3 && seam1.trims.length === 1 && seam1.trims[0].applied === true &&
+                seam1.trims[0].side === 'right' &&
+                seam1.entries[1].texts.join(' ') === 'de Barcelona. Ara toca' &&
+                near(seam1.entries[1].startSec, 2.12) && near(seam1.entries[1].endSec, 4) &&
+                seam1.entries[0].texts.join(' ') === 'Ahir vam parlar amb la gent',
+                'words=' + seam1.words + ' t=' + JSON.stringify(seam1.entries[1].texts));
+            var seam2 = P.trimSeamDuplicates([
+                { index: 1, texts: ['Ara parlarem', 'del temps'], startSec: 0, endSec: 2, sint: true },
+                { index: 2, texts: ['del temps', 'i de la pluja'], startSec: 2.12, endSec: 4 }
+            ]);
+            ok("#F3/112 funcional: l'últim SINT no repetix el cap del subtítol següent",
+                seam2.words === 2 && seam2.trims.length === 1 && seam2.trims[0].side === 'left' &&
+                seam2.entries[0].texts.join(' ') === 'Ara parlarem' &&
+                seam2.entries[1].texts.join(' ') === 'del temps i de la pluja',
+                'words=' + seam2.words + ' a=' + JSON.stringify(seam2.entries[0].texts));
+        } catch (eSeam) {
+            ok('#F3/111-112 text duplicat a les fronteres: sense excepcio', false, eSeam && (eSeam.message + ' | ' + eSeam.stack));
+        }
+
+        // GUARDES: dos oficials no es toquen; una sola paraula no és duplicat; si el
+        // SINT quedara buit tampoc no es retalla (es diu el motiu).
+        try {
+            var seam3 = P.trimSeamDuplicates([
+                { index: 1, texts: ['la gent de Barcelona'], startSec: 0, endSec: 2 },
+                { index: 2, texts: ['la gent de Barcelona'], startSec: 2.12, endSec: 4 }
+            ]);
+            var seam4 = P.trimSeamDuplicates([
+                { index: 1, texts: ['ho va dir el nen'], startSec: 0, endSec: 2 },
+                { index: 2, texts: ['nen i la mare'], startSec: 2.12, endSec: 4, sint: true }
+            ]);
+            var seam5 = P.trimSeamDuplicates([
+                { index: 1, texts: ['i res més'], startSec: 0, endSec: 2 },
+                { index: 2, texts: ['i res més'], startSec: 2.12, endSec: 4, sint: true }
+            ]);
+            ok('#F3/113 guardes: oficials intactes, 1 sola paraula no compta i mai no es buida un SINT',
+                seam3.words === 0 && seam3.trims.length === 0 &&
+                seam4.words === 0 && seam4.trims.length === 0 &&
+                seam5.words === 0 && seam5.trims.length === 1 && seam5.trims[0].reason === 'buit' &&
+                seam5.entries[1].texts.join(' ') === 'i res més',
+                '3=' + seam3.words + '/' + seam3.trims.length + ' 4=' + seam4.words + '/' + seam4.trims.length +
+                ' 5=' + seam5.words + '/' + seam5.trims.length + ':' + (seam5.trims[0] && seam5.trims[0].reason));
+        } catch (eSeam3) {
+            ok('#F3/113 guardes del text duplicat: sense excepcio', false, eSeam3 && (eSeam3.message + ' | ' + eSeam3.stack));
+        }
+
+        // Integració dins de la fusió 🧩: el SINT que entra repetint el veí queda
+        // sense eixa part i el clip conserva el seu TEMPS (només canvia el text).
+        try {
+            var baseSeam = [
+                { index: 1, texts: ['La gent del barri'], startSec: 0, endSec: 2 },
+                { index: 2, texts: ['Fins aviat amics'], startSec: 20, endSec: 22 }
+            ];
+            var sintSeam = [
+                { index: 1, texts: ['La gent del barri', 'ha votat'], startSec: 2.5, endSec: 5 },
+                { index: 2, texts: ['i res més', 'ha passat'], startSec: 5, endSec: 8 }
+            ];
+            var resSeam = P.mergeSyntheticGaps(baseSeam, sintSeam, { tolSec: 0.2, anchorEdges: false });
+            var firstSeam = null;
+            for (var qs = 0; qs < resSeam.entries.length; qs++) {
+                if (resSeam.entries[qs].sint) { firstSeam = resSeam.entries[qs]; break; }
+            }
+            ok('#F3/114 integració: la fusió lleva el text repetit de la frontera i no mou el temps',
+                resSeam.seamWords === 4 && (resSeam.seamTrims || []).length === 1 &&
+                !!firstSeam && firstSeam.texts.join(' ') === 'ha votat' &&
+                near(firstSeam.startSec, 2.12) &&
+                resSeam.entries[0].texts.join(' ') === 'La gent del barri',
+                'words=' + resSeam.seamWords + ' trims=' + (resSeam.seamTrims || []).length +
+                ' first=' + (firstSeam && firstSeam.texts.join(' ')) + ' start=' + (firstSeam && firstSeam.startSec));
+            var resOff = P.mergeSyntheticGaps(baseSeam, sintSeam, { tolSec: 0.2, anchorEdges: false, trimSeamDup: false });
+            var firstOff = null;
+            for (var qo = 0; qo < resOff.entries.length; qo++) {
+                if (resOff.entries[qo].sint) { firstOff = resOff.entries[qo]; break; }
+            }
+            ok('#F3/115 `trimSeamDup:false` desactiva el retall (config `srtSyntheticTrimDup`)',
+                resOff.seamWords === 0 && (resOff.seamTrims || []).length === 0 &&
+                !!firstOff && firstOff.texts.join(' ') === 'La gent del barri ha votat',
+                'words=' + resOff.seamWords + ' first=' + (firstOff && firstOff.texts.join(' ')));
+        } catch (eSeam4) {
+            ok('#F3/114-115 text duplicat dins de la fusio: sense excepcio', false, eSeam4 && (eSeam4.message + ' | ' + eSeam4.stack));
+        }
 
         } catch (eC) {
             ok('#F3 guardes del flux/UI/config: sense excepció', false, eC && (eC.message + ' | ' + eC.stack));

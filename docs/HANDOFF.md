@@ -17,14 +17,25 @@
 | Què | Valor |
 |---|---|
 | Versió de l'extensió | **0.9.8** a `CSXS/manifest.xml` (bundle + panell), títol d'`index.html`, `package.json` |
-| Validació vigent | `ALL GREEN \| setup 35/35 \| js 65/65 \| smoke 1043/1043 \| dead 0 \| jsx intacte` |
+| Validació vigent | `ALL GREEN \| setup 35/35 \| js 65/65 \| smoke 1048/1048 \| dead 0 \| jsx intacte` |
 | `.jsx` | **0 fitxers tocats** en esta tanda (segell de `check_all` intacte) |
 | Branca | `main` net, sense ahead/behind |
 | Git | `E:\PortableGit\bin\git.exe` (**no** està al `PATH`) |
 
 ## 2 · Què s'ha fet en este traspàs
 
-> **Última entrada (2026-11-10 g · BUG #262: l'eix de l'editor = IN del primer clip de V1).**
+> **Última entrada (2026-11-10 h · `SRT_SEAM_DEDUP`: el text repetit a les fronteres del buit
+> s'esborra sol).** Petició de l'usuari: «eliminar el texto duplicado del srt INT acabado de
+> importar … editar el texto del primer y último SINT». Els `.srt` sintètics es generen amb handles
+> d'àudio, així que el primer clip que el 🧩 encaixa en un buit sol repetir la cua del subtítol
+> anterior i l'últim la capçalera del següent. `SrtParser.trimSeamDuplicates` busca el solapament
+> MÀXIM cua↔cap (paraula a paraula, normalitzada) i el lleva **només del SINT**; ni el temps ni les
+> entrades oficials es toquen. Guardes: mínim 2 paraules, mai no es buida una entrada, màxim el 80 %
+> del text. Config `srtSyntheticTrimDup` / `srtSyntheticTrimDupMinWords`; opció `trimSeamDup` de
+> `mergeSyntheticGaps`; log `🧩 SRT_EDIT: N frontera(es) amb text repetit → M paraula(es) llevades
+> del SINT`. Proves `#F3/111`–`#F3/115`; smoke 1043 → **1048**. Pendent de **validar en viu**.
+>
+> **Entrada anterior (2026-11-10 g · BUG #262 TANCAT: l'eix de l'editor = IN del primer clip de V1).**
 > Report de l'usuari: «en tallar o trimear V1 a mitjan edició, els subtítols i la WF es desplacen i
 > ja no quadren amb el habla, encara que recarregue el SRT». L'eix (`_axisOrigin` = media que cau al
 > TL 0) eixia de `segs[0]`, i amb el tag del MP4 sense coincidir (`mode='v1'`) `segs` porta **tots**
@@ -35,7 +46,8 @@
 > `s` més baix i l'eix = `m − s` (exactament el seu IN si el clip arranca al TL 0). Res
 > d'heurístiques: ni el mínim inPoint (#223), ni el material que suma més durada, ni «el clip que
 > cau al TL 0»; si V1 està buit, cau al primer clip de la resta de pistes. Proves noves:
-> `#F3/107`–`#F3/110`; smoke 1039 → **1043**. Pendent de **validar en viu**.
+> `#F3/107`–`#F3/110`; smoke 1039 → **1043**. **TANCAT el 10/11**: l'usuari el va validar en viu
+> («Se referencia correctament») → `BUGS.md` passa a **21 pendents · 160 resolts/tancats**.
 >
 > **Entrada anterior (2026-11-10 f · BUG #257 TANCAT per decisió de l'usuari).** Ordre rebuda:
 > «Cierra 257». **No hi ha canvi de codi**: el 09/11 ja es va mesurar amb els fitxers reals i el codi
@@ -241,16 +253,16 @@ incomplixen:
 
 | On | Què hi ha | Quantes |
 |---|---|---|
-| `BUGS.md` **§1.1** | Bugs **amb codi o diagnòstic**, pendents de validar en viu | 20 |
+| `BUGS.md` **§1.1** | Bugs **amb codi o diagnòstic**, pendents de validar en viu | 19 |
 | `BUGS.md` **§1.2** | Noves sense diagnòstic ni codi | 0 |
 | `BUGS.md` **§1.3** | Decisions pendents de l'usuari | 2 (`#116`, `#242`) |
-| `BUGS.md` **§2** | Resolts i tancats (orde cronològic) | 159 |
+| `BUGS.md` **§2** | Resolts i tancats (orde cronològic) | 160 |
 | `FEATURES.md` **§1** | Implementacions validades | 41 |
-| `FEATURES.md` **§2** | Implementades, **pendents de validar en viu** | 9 |
+| `FEATURES.md` **§2** | Implementades, **pendents de validar en viu** | 10 |
 | `FEATURES.md` **§3** | En cua / per implementar | 7 |
 | `FEATURES.md` **§4** | Descartades per decisió | 3 |
 
-Els 20 de `BUGS.md` §1.1 (per número): `#262`, `#258`, `#256`, `#212`, `#210`, `#209`, `#206`, `#205`,
+Els 19 de `BUGS.md` §1.1 (per número): `#258`, `#256`, `#212`, `#210`, `#209`, `#206`, `#205`,
 `#197`, `#202`, `#232`, `#233`, `#237`, `#235`, `#236`, `#239`, `#241`, `#245`, `#249`, `#234`.
 Els 7 de `FEATURES.md` §3: `XARXES_TC00`, `NNEWS`, `MARKERS_INVARIANT`, `SRT_GUARD`,
 `JSON_DIETA`, `AUDIO_IA_DEREVERB`, `OCR_FRAME_CABEZAL`.

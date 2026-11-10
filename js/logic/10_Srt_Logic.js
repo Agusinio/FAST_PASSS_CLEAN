@@ -713,6 +713,122 @@
         },
 
         /**
+         * _rawWords: les paraules d'una entrada en la seua forma ORIGINAL (amb
+         * accents i majúscules) per a poder tornar a escriure el text tal com
+         * estava quan se li'n lleva un tros. Les que no tenen cap caràcter
+         * alfanumèric (guions, punts suspensius solts) es descarten.
+         * @param {Array<string>} texts
+         * @returns {Array<string>}
+         */
+        _rawWords: function (texts) {
+            var s = String((texts || []).join(' ')).replace(/\s+/g, ' ').trim();
+            if (!s) return [];
+            var w = s.split(' '), out = [];
+            for (var i = 0; i < w.length; i++) {
+                if (this._normText(w[i])) out.push(w[i]);
+            }
+            return out;
+        },
+
+        /**
+         * _wrapWords: torna a repartir en línies (màxim `maxChars` per línia) un
+         * text al qual se li ha llevat un tros. Els textos INTACTES no es toquen.
+         * @param {Array<string>} words
+         * @param {number} [maxChars=42]
+         * @returns {Array<string>}
+         */
+        _wrapWords: function (words, maxChars) {
+            var lim = (maxChars != null && isFinite(Number(maxChars))) ? Math.max(12, Math.floor(Number(maxChars))) : 42;
+            var lines = [], cur = '';
+            for (var i = 0; i < (words || []).length; i++) {
+                var w = String(words[i] || '');
+                if (!w) continue;
+                if (!cur) { cur = w; continue; }
+                if ((cur + ' ' + w).length <= lim) cur = cur + ' ' + w;
+                else { lines.push(cur); cur = w; }
+            }
+            if (cur) lines.push(cur);
+            return lines;
+        },
+
+        /**
+         * trimSeamDuplicates (2026-11-10 · reompliment 🧩): lleva el TEXT repetit a
+         * les FRONTERES d'un buit reomplert amb SINT.
+         *
+         * PER QUÈ: els `.srt` sintètics es generen amb handles d'àudio (el motor
+         * transcriu uns segons ABANS del tall), així que el PRIMER sintètic que
+         * entra a un buit sol repetir la cua del subtítol anterior i l'ÚLTIM la
+         * capçalera del següent → el mateix text es llig dos voltes.
+         *
+         * REGLA (d'usuari, 10/11): només s'edita el TEXT de l'entrada SINT. Les
+         * entrades del SRT normal no es toquen MAI (ni text, ni `startSec`, ni
+         * `endSec`) i el temps no es mou. Es compara la CUA de l'esquerra amb el
+         * CAP de la dreta paraula a paraula (normalitzades: sense accents ni
+         * puntuació) i la part repetida es lleva al costat que ve del SINT; si els
+         * dos són SINT, al de la dreta (el més nou).
+         *
+         * GUARDES: mínim `minWords` paraules (una de sola coincidix per casualitat
+         * massa sovint); mai no es buida una entrada (si repetix TOT el seu text es
+         * deixa com estava i es diu el motiu); mai no se'n lleva més de `maxShare`
+         * del text de l'entrada (un solapament enorme pot ser una repetició
+         * legítima).
+         *
+         * @param {Array} entries
+         * @param {Object} [opts] - { minWords:2, maxShare:0.8, maxChars:42 }
+         * @returns {{entries:Array, trims:Array, words:number}}
+         *   trims: {leftSec, rightSec, side:'left'|'right', n, words:Array<string>,
+         *           from:string, to:string, applied:boolean, reason:''|'buit'|'share'}
+         */
+        trimSeamDuplicates: function (entries, opts) {
+            var o = opts || {};
+            var minWords = (o.minWords != null && isFinite(Number(o.minWords))) ? Math.max(1, Math.floor(Number(o.minWords))) : 2;
+            var maxShare = (o.maxShare != null && isFinite(Number(o.maxShare))) ? Number(o.maxShare) : 0.8;
+            if (!(maxShare > 0)) maxShare = 1;
+            var maxChars = (o.maxChars != null && isFinite(Number(o.maxChars))) ? Math.max(12, Math.floor(Number(o.maxChars))) : 42;
+            var list = this.cloneEntries(entries);
+            var trims = [], wordsOut = 0;
+            for (var i = 0; i + 1 < list.length; i++) {
+                var a = list[i], b = list[i + 1];
+                // Només s'edita el costat SINT; dos oficials seguits no es toquen.
+                var side = b.sint ? 'right' : (a.sint ? 'left' : '');
+                if (!side) continue;
+                var aw = this._rawWords(a.texts), bw = this._rawWords(b.texts);
+                var lim = Math.min(aw.length, bw.length);
+                if (lim < minWords) continue;
+                // Solapament MÀXIM entre la cua de `a` i el cap de `b`.
+                var k = 0, j, n;
+                for (n = lim; n >= minWords; n--) {
+                    var same = true;
+                    for (j = 0; j < n; j++) {
+                        if (this._normText(aw[aw.length - n + j]) !== this._normText(bw[j])) { same = false; break; }
+                    }
+                    if (same) { k = n; break; }
+                }
+                if (!k) continue;
+                var wl = (side === 'right') ? bw : aw;
+                var rec = {
+                    leftSec: a.startSec, rightSec: b.startSec, side: side, n: k,
+                    words: (side === 'right') ? wl.slice(0, k) : wl.slice(wl.length - k),
+                    from: wl.join(' '), to: '', applied: false, reason: ''
+                };
+                if (wl.length - k <= 0) {
+                    rec.reason = 'buit';            // tot el text ja està al veí
+                } else if (k > maxShare * wl.length) {
+                    rec.reason = 'share';           // massa text: pot ser repetició legítima
+                } else {
+                    var nw = (side === 'right') ? bw.slice(k) : aw.slice(0, aw.length - k);
+                    rec.to = nw.join(' ');
+                    rec.applied = true;
+                    if (side === 'right') b.texts = this._wrapWords(nw, maxChars);
+                    else a.texts = this._wrapWords(nw, maxChars);
+                    wordsOut += k;
+                }
+                trims.push(rec);
+            }
+            return { entries: list, trims: trims, words: wordsOut };
+        },
+
+        /**
          * mergeSyntheticGaps: fusiona el SRT normal amb els SINTETICS.
          * Nomes AFEGEIX; les entrades existents MAI es toquen (start/end/text).
          *
@@ -749,12 +865,13 @@
          *                         maxStretchSec=2, textNearSec=10,
          *                         anchorMap=null, minOverlapRatio=0.5,
          *                         anchorEdges=true, edgeGraceSec=2,
-         *                         squeezeDurSec=null }
+         *                         squeezeDurSec=null, trimSeamDup=true,
+         *                         trimSeamMinWords=2, trimSeamMaxShare=0.8 }
          * @returns {{entries:Array, added:Array, rejected:Array, gaps:Array,
          *            tolSec:number, minDurSec:number, gapSec:number,
          *            maxStretchSec:number, trimmed:number, sintCount:number,
          *            filledGaps:number, dropped:number, mapped:boolean,
-         *            anchorUsed:number}}
+         *            anchorUsed:number, seamTrims:Array, seamWords:number}}
          *   added:    {startSec,endSec,texts,reason:'buit'|'buit-ajustada',trimSec,
          *              factor,gapStartSec,gapEndSec}
          *   rejected: {startSec,endSec,texts,reason:'solapa'|'duplicat-text'|
@@ -803,7 +920,8 @@
                 entries: base, added: [], rejected: [], gaps: info.gaps, tolSec: tol,
                 minDurSec: minDur, gapSec: GAP, maxStretchSec: maxStretch,
                 trimmed: 0, sintCount: sint.length, filledGaps: 0, dropped: 0,
-                mapped: !!anchorMap, anchorUsed: anchorMap ? (Number(anchorMap.used) || 0) : 0
+                mapped: !!anchorMap, anchorUsed: anchorMap ? (Number(anchorMap.used) || 0) : 0,
+                seamTrims: [], seamWords: 0
             };
             if (sint.length === 0) return out;
             if (base.length === 0) return out;   // sense SRT normal no hi ha res a reomplir
@@ -1022,6 +1140,21 @@
                 return { index: 0, timeStr: '', texts: r.texts.slice(), startSec: r.startSec, endSec: r.endSec, sint: true };
             }));
             merged.sort(function (a, b) { return a.startSec - b.startSec; });
+            // 5-bis) (2026-11-10 · reompliment 🧩) TEXT REPETIT A LES FRONTERES:
+            //    els SINT es generen amb handles d'àudio, així que el primer clip
+            //    del buit sol repetir la cua del subtítol anterior i l'últim la
+            //    capçalera del següent. Només s'edita el TEXT de les entrades SINT
+            //    (ni el temps ni les oficials): vore `trimSeamDuplicates`.
+            if (o.trimSeamDup !== false) {
+                var seam = this.trimSeamDuplicates(merged, {
+                    minWords: o.trimSeamMinWords,
+                    maxShare: o.trimSeamMaxShare,
+                    maxChars: o.trimSeamMaxChars
+                });
+                merged = seam.entries;
+                out.seamTrims = seam.trims;
+                out.seamWords = seam.words;
+            }
             for (var m = 0; m < merged.length; m++) merged[m].index = m + 1;
             out.entries = merged;
             return out;

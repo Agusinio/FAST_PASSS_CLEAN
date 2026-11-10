@@ -676,6 +676,18 @@
                 //   que no hi tocara: 0/74 en comú). #224-b: el desfasament no es pren
                 //   d'una constant sinó del mapa per ancles (`SrtParser.mapAnchors`).
                 srtSyntheticMinPairs: (cfg.general.srtSyntheticMinPairs != null) ? cfg.general.srtSyntheticMinPairs : 3,
+                // - srtSyntheticTrimDup (2026-11-10 · reompliment 🧩): lleva el TEXT
+                //   repetit a les FRONTERES del buit. Els `.srt` sintetics es generen
+                //   amb handles d'àudio, així que el PRIMER clip que entra al buit sol
+                //   repetir la cua del subtítol anterior i l'ÚLTIM la capçalera del
+                //   següent. Només s'edita el text de l'entrada SINT: ni el temps ni
+                //   les entrades del SRT normal es toquen.
+                srtSyntheticTrimDup: (cfg.general.srtSyntheticTrimDup != null) ? !!cfg.general.srtSyntheticTrimDup : true,
+                // - srtSyntheticTrimDupMinWords (2026-11-10): mínim de PARAULES en comú
+                //   a la frontera per a considerar-ho text duplicat. Amb 1 una
+                //   coincidència casual («i», «de», un nom propi) retallaria frases
+                //   legítimes.
+                srtSyntheticTrimDupMinWords: (cfg.general.srtSyntheticTrimDupMinWords != null) ? cfg.general.srtSyntheticTrimDupMinWords : 2,
                 // - srtGapColorLabel (F3.6, 2026-10-23): índex de l'etiqueta de COLOR de
                 //   Premiere (0-15) amb què es pinten els clips SINT col·locats als BUITS
                 //   (pista S2). Defecte 7 = Mango (taronja): es distingix a simple vista

@@ -2573,7 +2573,12 @@
             // apretar els clips abans de descartar-ne cap: preferim que sobre.
             var res = P.mergeSyntheticGaps(base, sint, {
                 tolSec: tol, minDurSec: minDur, maxStretchSec: maxStretch, anchorMap: anch,
-                anchorEdges: true, edgeGraceSec: 2, squeezeDurSec: 0.12
+                anchorEdges: true, edgeGraceSec: 2, squeezeDurSec: 0.12,
+                // (2026-11-10 · reompliment 🧩) TEXT DUPLICAT A LES FRONTERES del buit:
+                // el primer/últim SINT sol repetir la cua/capçalera del veí perquè
+                // l'ASR transcriu amb handles d'àudio. Es lleva només del SINT.
+                trimSeamDup: (cfg && cfg.srtSyntheticTrimDup != null) ? !!cfg.srtSyntheticTrimDup : true,
+                trimSeamMinWords: (cfg && cfg.srtSyntheticTrimDupMinWords != null) ? Number(cfg.srtSyntheticTrimDupMinWords) : 2
             });
             // (2026-10-23) QUANTES frases compartixen (informatiu) · (BUG #224-c) sense
             // comptar les entrades `sint` ja encaixades: no són text del SRT oficial.
@@ -2630,6 +2635,25 @@
             this._gapAdded = P.cloneEntries(res.added);
             log("🧩 SRT_EDIT: " + this._gapAdded.length + " entrades SINT encaixades als buits de la taula (" +
                 res.trimmed + " retallades) · MOD a l'editor, sense exportar");
+            // (2026-11-10 · reompliment 🧩) TEXT REPETIT A LES FRONTERES: el SINT es
+            // genera amb handles d'àudio i el primer/últim clip sol repetir el veí.
+            // Només s'ha retallat el TEXT de l'entrada SINT (el temps no s'ha mogut).
+            var seamAll = res.seamTrims || [];
+            var seamYes = [], seamNo = [];
+            for (var sT = 0; sT < seamAll.length; sT++) {
+                (seamAll[sT].applied ? seamYes : seamNo).push(seamAll[sT]);
+            }
+            if (seamYes.length) {
+                log("🧩 SRT_EDIT: " + seamYes.length + " frontera(es) amb text repetit → " +
+                    (res.seamWords || 0) + " paraula(es) llevades del SINT (" +
+                    seamYes.map(function (t) {
+                        return (t.side === 'left' ? 'fi' : 'inici') + ' «' + t.words.join(' ') + '»';
+                    }).join(' · ') + ")");
+            }
+            if (seamNo.length) {
+                log("⚠️ SRT_EDIT: " + seamNo.length + " frontera(es) amb text repetit NO retallades (" +
+                    seamNo.map(function (t) { return t.reason + ' · ' + t.n + ' paraula(es)'; }).join(' | ') + ")", "WARN");
+            }
             // Base del RESET ♻️: la taula NORMAL sense sintetics (la fusio no
             // sobreescriu el fitxer). (BUG #224-c) `measBase`, no la viva: si la viva
             // és la MOD, el RESET intern no ha de deixar els clips sintetics.

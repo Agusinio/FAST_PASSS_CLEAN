@@ -205,7 +205,7 @@
             /flow_mainButton\.js\?v=51/.test(idx) && /flow_chyrons\.js\?v=104/.test(idx) &&
             /flow_graphics\.js\?v=27/.test(idx) && /flow_markers\.js\?v=70/.test(idx) &&
             /flow_mp4\.js\?v=8/.test(idx) &&
-            /flow_render\.js\?v=40/.test(idx) && /srt_editor\.js\?v=98/.test(idx),
+            /flow_render\.js\?v=40/.test(idx) && /srt_editor\.js\?v=99/.test(idx),
             (idx.match(/flow_mainButton\.js\?v=\d+/) || '') + ' ' +
             (idx.match(/flow_chyrons\.js\?v=\d+/) || '') + ' ' +
             (idx.match(/flow_graphics\.js\?v=\d+/) || '') + ' ' +
