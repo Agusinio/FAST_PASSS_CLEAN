@@ -895,10 +895,6 @@
                 // del SINT que hi ha ENTRE el clip que ja hi ha abans i el que ja hi
                 // ha després (exclusiu), caiguen on caiguen en el temps: així no es
                 // perd la del vore per un desquadre de TC ni pel mapa d'eixos.
-                // Si d'una vora no hi ha ancla (el veí no és al SINT), eixa vora es
-                // tanca per TEMPS amb `edgeGraceSec` de marge. Només s'usa este camí
-                // si el SINT compartix alguna frase amb el normal (`anyAnchor`): si
-                // no, és d'un altre bloc i es queda el criteri temporal de sempre.
                 var sel = [], selToc = [];
                 // a) Criteri temporal de sempre (BUG #224-b): els sintetics que hi
                 //    cauen al manco a MITGES. Si no n'hi ha cap a mitges, els que
@@ -941,7 +937,6 @@
                     }
                 }
                 if (sel.length === 0) continue;
-                sel.sort(function (a, b) { return cands[a].sintIdx - cands[b].sintIdx; });
                 sel.sort(function (a, b) { return cands[a].sintIdx - cands[b].sintIdx; });
                 // Dins del MATEIX buit, dos sintetics que se solapen són la mateixa
                 // frase comptada dos voltes: es queda el primer.
