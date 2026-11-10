@@ -287,13 +287,19 @@
                 'ancles=' + mapAnc.used + ' · amb-mapa=' + JSON.stringify(conMapa.added.map(function (a) { return a.startSec + '-' + a.endSec; })) +
                 ' · sense-mapa=' + JSON.stringify(senseMapa.rejected.map(function (r) { return r.texts[0] + ':' + r.reason; })));
 
-            // Amb mapa, la frase que només TOCA la vora del buit és del subtítol veí:
-            // només entra si hi cau al manco a mitges (`minOverlapRatio` = 0,5).
+            // Amb mapa, la frase que només TOCA la vora del buit també hi entra si
+            // el SINT la té ENTRE les dos ancles (BUG #261): el rang entre el clip
+            // que ja hi ha abans i el que ja hi ha després és el que falta, caiga on
+            // caiga en el temps. (Abans, BUG #224-b, es descartava perquè només hi
+            //queia a un 25 %; es preferix SOBRAR un clip —traure'l és fàcil— que
+            // quedar-se sense ell.)
             var ovBase = [E(0, 2, 'A'), E(10, 12, 'B')];
             var ovSint = [E(0, 2, 'A'), E(10, 12, 'B'), E(0.5, 2.5, 'vora'), E(4, 5, 'dins')];
             var ovMap = P.mergeSyntheticGaps(ovBase, ovSint, { tolSec: 0.2, anchorMap: P.mapAnchors(ovBase, ovSint) });
-            ok('#F3/72 fusió amb mapa: la frase que només toca la vora (25 %) NO entra al buit; la de dins sí',
-                ovMap.added.length === 1 && ovMap.added[0].texts[0] === 'dins',
+            ok('#F3/72 fusió amb mapa: tot el que el SINT té ENTRE les dos ancles entra al buit (també la de la vora)',
+                ovMap.added.length === 2 &&
+                ovMap.added.map(function (a) { return a.texts[0]; }).join(',') === 'vora,dins' &&
+                near(ovMap.added[0].startSec, 2.12),
                 JSON.stringify(ovMap.added.map(function (a) { return a.texts[0] + '@' + a.startSec; })));
             // (BUG #224-b) PER QUE LA CREDIBILITAT ES MIRA TAMBÉ AMB ANCLES: la finestra
             // de `alignmentCredible` (+-2,5 s al voltant de la MEDIANA) es buida quan el
@@ -415,9 +421,9 @@
                 /Ctrl\+clic = SUBTÍTOLS SINTÈTICS/.test(html));
             ok('#F3/25 index: cache-busts F3 (srt_editor 96, flow_srt 21, main ' +
                 '109, Scanner 27, Srt_Logic 26, Config 46)',
-                /srt_editor\.js\?v=96/.test(html) && /flow_srt\.js\?v=21/.test(html) &&
+                /srt_editor\.js\?v=97/.test(html) && /flow_srt\.js\?v=21/.test(html) &&
                 /main\.js\?v=109/.test(html) && /Scanner\.js\?v=27/.test(html) &&
-                /10_Srt_Logic\.js\?v=26/.test(html) && /11_Configuracio\.js\?v=46/.test(html));
+                /10_Srt_Logic\.js\?v=27/.test(html) && /11_Configuracio\.js\?v=46/.test(html));
 
             var cfg = noComments(await readRepo('js/core/11_Configuracio.js'));
             ok('#F3/26 config: srtSyntheticGapTolSec (default 0,2 s + getter)',
@@ -1161,6 +1167,58 @@
                     (r259b.rejected || []).map(function (x) { return x.reason; }).join(','));
             } catch (e259) {
                 ok('#F3/96-97 sintetics consecutius (#259): sense excepcio', false, e259 && (e259.message + ' | ' + e259.stack));
+            }
+
+            // ═══ (BUG #261 · 10/11) SINT: ES PERDIA EL CLIP DE CADA VORE ═══════
+            // En omplir un buit, el PRIMER i l'ÚLTIM clip del SINT podien quedar-se
+            // fora del buit (el mapa d'eixos els mou unes decimes i el filtre de
+            // solapament els descartava): l'usuari veia «en falta un al principi i un
+            // al final». Ara el que falta és el RANG de frases que el SINT té ENTRE
+            // el clip que ja hi ha abans i el que ja hi ha després (exclusiu).
+            try {
+                var base261 = [E(0, 2, 'a'), E(2, 4, 'b'), E(10, 12, 'e'), E(12, 14, 'f')];
+                var sint261 = [E(0, 2, 'a'), E(2, 4, 'b'), E(3.2, 4.6, 'c1'),
+                    E(4.8, 6.2, 'c2'), E(6.4, 7.8, 'c3'), E(8.0, 9.4, 'c4'),
+                    E(10, 12, 'e'), E(12, 14, 'f')];
+                var map261 = P.mapAnchors(base261, sint261);
+                var r261 = P.mergeSyntheticGaps(base261, sint261,
+                    { tolSec: 0.2, anchorMap: map261, squeezeDurSec: 0.12 });
+                var txt261 = r261.added.map(function (a) { return a.texts[0]; }).join(',');
+                ok('#F3/103 vores ancorades: entra el clip del PRINCIPI encara que el mapa el deixe fora del buit',
+                    map261.used >= 3 && r261.added.length === 4 && txt261 === 'c1,c2,c3,c4',
+                    'ancles=' + map261.used + ' added=' + txt261);
+                var r261v = P.mergeSyntheticGaps(base261, sint261,
+                    { tolSec: 0.2, anchorMap: map261, anchorEdges: false });
+                ok('#F3/104 `anchorEdges:false` torna el criteri temporal (el clip del vore es perd)',
+                    r261v.added.length === 3 && r261v.added[0].texts[0] === 'c2',
+                    'added=' + r261v.added.map(function (a) { return a.texts[0]; }).join(','));
+
+                // Sense ancla a la DRETA (el veí no és al SINT): la vora es tanca per
+                // temps amb `edgeGraceSec` i el clip que s'endinsa en el veí hi entra.
+                var base261b = [E(0, 2, 'a'), E(2, 4, 'b'), E(10, 12, 'e')];
+                var sint261b = [E(0, 2, 'a'), E(2, 4, 'b'), E(4.8, 6.2, 'c1'),
+                    E(6.4, 7.8, 'c2'), E(8.0, 9.4, 'c3'), E(9.6, 11.2, 'c4')];
+                var r261b = P.mergeSyntheticGaps(base261b, sint261b, { tolSec: 0.2 });
+                ok('#F3/105 sense ancla a la dreta, el clip que s\'endinsa en el veí SÍ que entra (vora per temps)',
+                    r261b.added.length === 4 &&
+                    r261b.added[3].texts[0] === 'c4' && near(r261b.added[3].endSec, 9.88),
+                    'added=' + r261b.added.map(function (a) { return a.texts[0] + '@' + a.startSec + '-' + a.endSec; }).join(' '));
+
+                // `squeezeDurSec`: si no hi caben amb la durada mínima, s'apreten tots
+                // (mai es descarta la cua: perdre un clip és pitjor que vore'l just).
+                var five261 = [];
+                for (var q261 = 0; q261 < 5; q261++) {
+                    five261.push({ startSec: 2 + q261 * 0.6, endSec: 2.5 + q261 * 0.6 });
+                }
+                var fgSq = P.fitClipsToGap(five261, 1, 3, { minDurSec: 0.4, squeezeDurSec: 0.12 });
+                var fgNo = P.fitClipsToGap(five261, 1, 3, { minDurSec: 0.4 });
+                ok('#F3/106 squeezeDurSec: si no caben amb la durada mínima s\'apreten tots (no es retalla la cua)',
+                    fgSq.clips.length === 5 && fgSq.dropped === 0 &&
+                    fgNo.clips.length === 3 && fgNo.dropped === 2,
+                    'amb-squeeze=' + fgSq.clips.length + '/drop' + fgSq.dropped +
+                    ' · sense=' + fgNo.clips.length + '/drop' + fgNo.dropped);
+            } catch (e261) {
+                ok('#F3/103-106 vores ancorades (#261): sense excepcio', false, e261 && (e261.message + ' | ' + e261.stack));
             }
 
             // ═══ (BUG #260 · 10/11) EL CLIP SINT CONSERVA EL ROIG EN EDITAR ════

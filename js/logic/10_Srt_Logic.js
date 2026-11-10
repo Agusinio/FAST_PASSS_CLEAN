@@ -610,9 +610,27 @@
             if (src.length === 0) return out;
             var gs = Number(gapStartSec) || 0, ge = Number(gapEndSec) || 0;
             var dur = ge - gs;
+            // (BUG #261 · 2026-11-10) `squeezeDurSec`: si hi ha MÉS clips que espai
+            // amb la durada mínima, s'ARRANGONEN tots fins a eixe terra (mai no es
+            // perd el darrer: perdre un clip del buit és molt pitjor que vore'l
+            // apretat; l'usuari ja el retocarà).
+            var floorDur = minDur;
+            if (o.squeezeDurSec != null && isFinite(Number(o.squeezeDurSec))) {
+                var sq = Number(o.squeezeDurSec);
+                if (sq >= 0.04 && sq < floorDur) floorDur = sq;
+            }
             // Quants clips hi caben amb la durada MÍNIMA i la separació de cada vora:
             //   n*minDur + (n+1)*GAP <= dur
             var maxN = Math.floor((dur - GAP) / (minDur + GAP) + 0.000001);
+            if (src.length > maxN && floorDur < minDur) {
+                // Amb el terra dur, caben TOTS si `available/n >= floorDur`; si no,
+                // es repartixen igualment i el water-filling ja els apreta.
+                var needAll = (dur - (src.length + 1) * GAP) / src.length;
+                if (needAll >= floorDur) {
+                    floorDur = Math.max(floorDur, Math.min(minDur, needAll));
+                    maxN = src.length;
+                }
+            }
             if (maxN < 1) {
                 out.reason = 'massa-curt';
                 out.dropped = src.length;
@@ -638,22 +656,22 @@
             if (f > maxStretch) { f = maxStretch; capped = true; }
             if (!capped) {
                 // Water-filling: les durades que caurien per davall del mínim es
-                // fixen a `minDur` i el que queda es repartix entre les altres.
+                // fixen a `floorDur` i el que queda es repartix entre les altres.
                 for (var iter = 0; iter <= n; iter++) {
                     var fixed = 0, freeSum = 0;
-                    for (i = 0; i < n; i++) { if (frozen[i]) fixed += minDur; else freeSum += src[i]; }
+                    for (i = 0; i < n; i++) { if (frozen[i]) fixed += floorDur; else freeSum += src[i]; }
                     if (freeSum <= 0) break;
                     f = (available - fixed) / freeSum;
                     if (f > maxStretch) { f = maxStretch; capped = true; break; }
                     var changed = false;
                     for (i = 0; i < n; i++) {
-                        if (!frozen[i] && src[i] * f < minDur) { frozen[i] = true; changed = true; }
+                        if (!frozen[i] && src[i] * f < floorDur) { frozen[i] = true; changed = true; }
                     }
                     if (!changed) break;
                 }
             }
             var durs = [];
-            for (i = 0; i < n; i++) durs.push(frozen[i] ? minDur : Math.max(minDur, src[i] * f));
+            for (i = 0; i < n; i++) durs.push(frozen[i] ? floorDur : Math.max(floorDur, src[i] * f));
             // Col·locació: separació GAP també amb els veïns OFICIALS (cap i cua).
             var t = gs + GAP, res = [];
             for (i = 0; i < n; i++) {
@@ -664,6 +682,34 @@
             out.factor = Math.round(f * 1000) / 1000;
             out.reason = capped ? 'no-omplit' : (out.dropped ? 'retallat' : 'buit');
             return out;
+        },
+
+        /**
+         * _sintIdxByText (BUG #261 · 2026-11-10): índex dins del SINT de la frase
+         * que coincidix amb `texts` (mateix text normalitzat) i que cau més a prop
+         * de `nearSec`. Serveix per a ANCORAR els vores d'un buit als clips que
+         * l'usuari encara té al timeline: el primer sintetic que s'hi ha de
+         * col·locar és el SEGUENT a l'ancla esquerra i l'últim l'ANTERIOR a la
+         * dreta (així no en falta cap encara que el TC vaja desquadrat).
+         * `maxDistSec` evita confondre una frase REPETIDA lluny (una altra
+         * repetició legítima del mateix text) amb l'ancla del veí.
+         * @param {Array} sint - taula SINT
+         * @param {Array<string>} texts - textos del clip oficial (ancla)
+         * @param {number} nearSec - TC on hauria de caure (desempat de frases repetides)
+         * @param {number} [maxDistSec=10] - distància màxima a `nearSec`
+         * @returns {number} índex (>=0) o -1 si el text no hi és (o és massa lluny)
+         */
+        _sintIdxByText: function (sint, texts, nearSec, maxDistSec) {
+            var key = this._normText((texts || []).join(' '));
+            if (!key) return -1;
+            var lim = (maxDistSec != null && isFinite(Number(maxDistSec))) ? Number(maxDistSec) : 10;
+            var best = -1, bestD = Infinity, near = Number(nearSec) || 0;
+            for (var i = 0; i < (sint || []).length; i++) {
+                if (this._normText((sint[i].texts || []).join(' ')) !== key) continue;
+                var d = Math.abs((Number(sint[i].startSec) || 0) - near);
+                if (d < bestD - 0.0001) { bestD = d; best = i; }
+            }
+            return (bestD <= lim) ? best : -1;
         },
 
         /**
@@ -685,11 +731,25 @@
          * del subtitol veí. Sense mapa (o si no en queda cap a mitges) es manté el
          * criteri llis de solapament per a no deixar el buit buit.
          *
+         * (2026-11-10 · BUG #261) VORES ANCORATS: el buit va del FINAL del clip
+         * anterior a l'INICI del següent. Amb `opts.anchorEdges` (per defecte sí)
+         * es busca al SINT la frase que coincidix amb EIXOS dos veïns i es col·loca
+         * EXACTAMENT el rang d'entrades que hi ha ENTRE les dos (exclusiu), caiguen
+         * on caiguen en el temps: abans, el clip del vore que queia mig dins del
+         * subtitol veí es descartava («solapa») i el buit quedava amb un forat a
+         * cada cap. Si d'una vora no hi ha ancla, es pren el veí més pròxim a
+         * `opts.edgeGraceSec` (només si el SINT compartix alguna frase amb el
+         * normal: si no, és d'un altre bloc i no s'inventa res).
+         * `opts.squeezeDurSec` passa a `fitClipsToGap` perquè no es descarte la
+         * cua del rang si el buit és just.
+         *
          * @param {Array} baseEntries - SRT normal
          * @param {Array} sintEntries - SRT sintetic (font de les entrades noves)
          * @param {Object} [opts] { tolSec=0.2, minDurSec=0.4, gapSec=0.12,
          *                         maxStretchSec=2, textNearSec=10,
-         *                         anchorMap=null, minOverlapRatio=0.5 }
+         *                         anchorMap=null, minOverlapRatio=0.5,
+         *                         anchorEdges=true, edgeGraceSec=2,
+         *                         squeezeDurSec=null }
          * @returns {{entries:Array, added:Array, rejected:Array, gaps:Array,
          *            tolSec:number, minDurSec:number, gapSec:number,
          *            maxStretchSec:number, trimmed:number, sintCount:number,
@@ -710,6 +770,11 @@
             var minDur = (o.minDurSec != null && isFinite(Number(o.minDurSec))) ? Number(o.minDurSec) : 0.4;
             var GAP = (o.gapSec != null && isFinite(Number(o.gapSec))) ? Number(o.gapSec) : 0.12;
             var maxStretch = (o.maxStretchSec != null && isFinite(Number(o.maxStretchSec))) ? Number(o.maxStretchSec) : 2;
+            // (BUG #261) Anclatge dels vores del buit als clips veïns del timeline.
+            var anchorEdges = (o.anchorEdges == null) ? true : !!o.anchorEdges;
+            var graceSec = (o.edgeGraceSec != null && isFinite(Number(o.edgeGraceSec))) ? Number(o.edgeGraceSec) : 2;
+            if (graceSec < 0) graceSec = 0;
+            var squeezeMin = (o.squeezeDurSec != null && isFinite(Number(o.squeezeDurSec))) ? Number(o.squeezeDurSec) : null;
             if (minDur < 0) minDur = 0;
             if (GAP < 0) GAP = 0;
             if (maxStretch < 1) maxStretch = 1;
@@ -767,14 +832,13 @@
                 var s0 = sint[i0];
                 var rec0 = {
                     startSec: s0.startSec, endSec: s0.endSec, texts: s0.texts.slice(),
-                    reason: '', trimSec: 0,
+                    reason: '', trimSec: 0, sintIdx: i0, offTram: false,
                     srcDurSec: (Number(s0.endSec) || 0) - (Number(s0.startSec) || 0)
                 };
-                if (s0.startSec < fromSec - tol || s0.endSec > toSec + tol) {
-                    rec0.reason = 'fora-del-tram';
-                    out.rejected.push(rec0);
-                    continue;
-                }
+                // (BUG #261) Fora del tram NO es descarta encara: pot ser el clip del
+                // vore d'un buit que s'ancora als veïns. Es decidix al final, si no
+                // s'ha col·locat enlloc.
+                if (s0.startSec < fromSec - tol || s0.endSec > toSec + tol) rec0.offTram = true;
                 var kS = this._normText((s0.texts || []).join(' '));
                 var hits = kS ? baseTextIdx[kS] : null;
                 if (hits) {
@@ -800,16 +864,45 @@
             for (var gi = 0; gi < info.gaps.length; gi++) {
                 if (info.gaps[gi].durSec >= minGap - 0.0001) gapsToFill.push(info.gaps[gi]);
             }
+            // 2-bis) (BUG #261 · 2026-11-10) ANCLES DELS VORES: per a cada buit, quin
+            //    és el clip oficial ANTERIOR (pot acabar DINS del buit) i el SEGÜENT
+            //    (pot començar abans del seu inici), i quina frase del SINT coincidix
+            //    amb cadascun. El reompliment és el rang (ancla esquerra, ancla dreta)
+            //    EXCLUSIU: el primer que s'hi col·loca és el SEGUENT al clip que ja
+            //    hi ha i l'últim és l'ANTERIOR al següent. Si d'una vora no hi ha
+            //    ancla es recorre a la gràcia temporal (`edgeGraceSec`).
+            var idxBySint = {};   // sintIdx → índex dins de `cands`
+            for (var ci0 = 0; ci0 < cands.length; ci0++) idxBySint[cands[ci0].sintIdx] = ci0;
+            var edgeAnchors = [], anyAnchor = false, gx, px, nx;
+            for (gx = 0; gx < gapsToFill.length; gx++) {
+                var gA = gapsToFill[gx], prevEnt = null, nextEnt = null;
+                for (px = 0; px < base.length; px++) {
+                    if (base[px].endSec >= gA.startSec - 0.0001) { prevEnt = base[px]; break; }
+                }
+                for (nx = base.length - 1; nx >= 0; nx--) {
+                    if (base[nx].startSec <= gA.endSec + 0.0001) { nextEnt = base[nx]; break; }
+                }
+                var ia = prevEnt ? this._sintIdxByText(sint, prevEnt.texts, prevEnt.startSec, near) : -1;
+                var ib = nextEnt ? this._sintIdxByText(sint, nextEnt.texts, nextEnt.startSec, near) : -1;
+                if (ia >= 0 || ib >= 0) anyAnchor = true;
+                edgeAnchors.push({ prevIdx: ia, nextIdx: ib });
+            }
             var usedFlags = [];   // candidates ja col·locades (o descartades) per un buit
             for (var g0 = 0; g0 < gapsToFill.length; g0++) {
                 var gap = gapsToFill[g0];
-                // QUINS sintetics cauen dins d'eixe buit (solapament real, no el toc).
-                // (BUG #224-b · 2026-11-09) Amb mapa per ancles s'exigix que la frase
-                // hi caiga al manco a MITGES (`minOverlapRatio`): la que només toca
-                // la vora és del subtitol del costat i ficar-la ací repetix o trenca
-                // el text oficial. Si no en quedara cap, es torna al criteri llis
-                // (toc) per a no deixar el buit buit.
+                var ea = edgeAnchors[g0] || { prevIdx: -1, nextIdx: -1 };
+                // (BUG #261 · 2026-11-10) El contingut del buit és el RANG de frases
+                // del SINT que hi ha ENTRE el clip que ja hi ha abans i el que ja hi
+                // ha després (exclusiu), caiguen on caiguen en el temps: així no es
+                // perd la del vore per un desquadre de TC ni pel mapa d'eixos.
+                // Si d'una vora no hi ha ancla (el veí no és al SINT), eixa vora es
+                // tanca per TEMPS amb `edgeGraceSec` de marge. Només s'usa este camí
+                // si el SINT compartix alguna frase amb el normal (`anyAnchor`): si
+                // no, és d'un altre bloc i es queda el criteri temporal de sempre.
                 var sel = [], selToc = [];
+                // a) Criteri temporal de sempre (BUG #224-b): els sintetics que hi
+                //    cauen al manco a MITGES. Si no n'hi ha cap a mitges, els que
+                //    només toquen la vora (per a no deixar el buit buit).
                 for (var ci = 0; ci < cands.length; ci++) {
                     if (usedFlags[ci]) continue;
                     var ov = Math.min(cands[ci].endSec, gap.endSec) - Math.max(cands[ci].startSec, gap.startSec);
@@ -819,8 +912,37 @@
                     else selToc.push(ci);
                 }
                 if (sel.length === 0 && selToc.length > 0) sel = selToc;
+                // b) (BUG #261 · 2026-11-10) UNIÓ del RANG ENTRE ANCLES: el que falta
+                //    al buit és el que el SINT té ENTRE el clip que ja hi ha abans i
+                //    el que ja hi ha després (exclusiu), caiga on caiga en el temps.
+                //    És el que garantix que no es perda el clip del vore quan el mapa
+                //    el deixa just fora del buit (símptoma: «en falta un al principi i
+                //    un al final»). Si d'una vora no hi ha ancla, eixa vora es tanca
+                //    per TEMPS amb `edgeGraceSec` de marge. Només s'usa este camí si
+                //    el SINT compartix alguna frase amb el normal (`anyAnchor`): si
+                //    no, és d'un altre bloc i no s'inventa res.
+                if (anchorEdges && anyAnchor) {
+                    var lo = -1, hi = -1, qi;
+                    if (ea.prevIdx >= 0) lo = ea.prevIdx + 1;
+                    else {
+                        for (qi = 0; qi < sint.length; qi++) {
+                            if (sint[qi].endSec > gap.startSec - graceSec - 0.0001) { lo = qi; break; }
+                        }
+                    }
+                    if (ea.nextIdx >= 0) hi = ea.nextIdx - 1;
+                    else {
+                        for (qi = sint.length - 1; qi >= 0; qi--) {
+                            if (sint[qi].endSec <= gap.endSec + graceSec + 0.0001) { hi = qi; break; }
+                        }
+                    }
+                    for (qi = lo; lo >= 0 && qi <= hi; qi++) {
+                        var cQi = idxBySint[qi];
+                        if (cQi != null && !usedFlags[cQi] && sel.indexOf(cQi) < 0) sel.push(cQi);
+                    }
+                }
                 if (sel.length === 0) continue;
-                sel.sort(function (a, b) { return cands[a].startSec - cands[b].startSec; });
+                sel.sort(function (a, b) { return cands[a].sintIdx - cands[b].sintIdx; });
+                sel.sort(function (a, b) { return cands[a].sintIdx - cands[b].sintIdx; });
                 // Dins del MATEIX buit, dos sintetics que se solapen són la mateixa
                 // frase comptada dos voltes: es queda el primer.
                 // (BUG #259 · 2026-11-10) ABANS es preguntava amb
@@ -862,7 +984,7 @@
                 // 3) ENCAIX: el segment s'estira (o s'arrangona) per a omplir el
                 //    buit amb la separació de 3 frames, com qualsevol clip oficial.
                 var fit = this.fitClipsToGap(segs, gap.startSec, gap.endSec,
-                    { gapSec: GAP, minDurSec: minDur, maxStretch: maxStretch });
+                    { gapSec: GAP, minDurSec: minDur, maxStretch: maxStretch, squeezeDurSec: squeezeMin });
                 for (var q = 0; q < sel.length; q++) {
                     var rec = cands[sel[q]];
                     usedFlags[sel[q]] = true;
@@ -891,7 +1013,8 @@
             //    existent (o entre dos que ja es toquen) → no s'hi posen.
             for (var nx = 0; nx < cands.length; nx++) {
                 if (usedFlags[nx]) continue;
-                cands[nx].reason = 'solapa';
+                // (BUG #261) Fora del tram de contingut real → eixe és el motiu.
+                cands[nx].reason = cands[nx].offTram ? 'fora-del-tram' : 'solapa';
                 out.rejected.push(cands[nx]);
             }
 

@@ -8,7 +8,7 @@
 > **Un sol handoff.** Prohibit tornar a crear diaris a `.roo/`, `plans/HANDOFF_*` o llistes de
 > pendents a `INFO/` (històric fusionat a [`docs/archive/`](archive/), 2026-11-06).
 
-**Últim traspàs:** 2026-11-10 · **Versió del codi:** 0.9.8 · **Branca:** `main` (commits locals `b282ac9` + `42ebb97` (#258) + `3763848` (#259) + l'últim (#260), **sense push**: `git-remote-https` ix 128 en este equip)
+**Últim traspàs:** 2026-11-10 · **Versió del codi:** 0.9.8 · **Branca:** `main` (commits locals `b282ac9` + `42ebb97` (#258) + `3763848` (#259) + `3738404` (#260) + `68cea36` (#261), **sense push**: `git-remote-https` ix 128 en este equip)
 
 ---
 
@@ -17,14 +17,34 @@
 | Què | Valor |
 |---|---|
 | Versió de l'extensió | **0.9.8** a `CSXS/manifest.xml` (bundle + panell), títol d'`index.html`, `package.json` |
-| Validació vigent | `ALL GREEN \| setup 35/35 \| js 65/65 \| smoke 1035/1035 \| dead 0 \| jsx intacte` |
+| Validació vigent | `ALL GREEN \| setup 35/35 \| js 65/65 \| smoke 1039/1039 \| dead 0 \| jsx intacte` |
 | `.jsx` | **0 fitxers tocats** en esta tanda (segell de `check_all` intacte) |
 | Branca | `main` net, sense ahead/behind |
 | Git | `E:\PortableGit\bin\git.exe` (**no** està al `PATH`) |
 
 ## 2 · Què s'ha fet en este traspàs
 
-> **Última entrada (2026-11-10 c · BUG #260): el clip SINT conserva el ROIG en editar-lo.**
+> **Última entrada (2026-11-10 d · BUG #261): els clips del VORE del buit ja no es perden.**
+> Report de l'usuari: «después de borrar clips y rellenar con SINT, falta uno al principio y uno
+> al final», amb la seua proposta textual: «buscar específicamente el último que tenemos (antes
+> del hueco) … y colocar el resto de clips SINT, hasta añadir el último, que debería coincidir
+> con el primer clip (después del hueco)». CAUSA: `mergeSyntheticGaps` triava els sintetics per
+> **solapament temporal** amb el buit; el clip del vore que el mapa d'eixos deixava just fora (o
+> que només hi queia a un 25 %, que és el que descartava `minOverlapRatio`) eixia com a «solapa»,
+> i `fitClipsToGap` **retallava la cua** si no hi cabien amb la durada mínima. SOLUCIÓ: (1)
+> **àncores de vora** (`opts.anchorEdges`, per defecte sí) — per a cada buit es busca al SINT la
+> frase que coincidix amb el clip oficial ANTERIOR i amb el SEGÜENT (`_sintIdxByText`, amb
+> tolerància `textNearSec` perquè una repetició llunyana no es confonga amb l'àncora) i s'**unix**
+> al criteri temporal el RANG d'entrades ENTRE les dos (exclusiu), caiguen on caiguen en el temps;
+> si falta una àncora, eixa vora es tanca per temps (`edgeGraceSec` 2 s); si el SINT no compartix
+> CAP frase amb el normal (`anyAnchor`) no s'inventa res. (2) `fitClipsToGap` accepta
+> `squeezeDurSec` (l'editor passa 0,12 s): s'apreten tots abans de retallar-ne cap. Política
+> acordada: **preferim sobrar un clip (traure'l és fàcil) que quedar-se sense ell**; això revisa
+> #224-b (el clip que només toca la vora ara SÍ que entra si el SINT el té entre les dos àncores).
+> Proves noves `#F3/103`–`#F3/106` (i `#F3/72` reescrit). `index.html` passa a
+> `10_Srt_Logic.js?v=27` i `srt_editor.js?v=97`. **Pendent**: prova en viu de l'usuari.
+>
+> **Entrada anterior (2026-11-10 c · BUG #260): el clip SINT conserva el ROIG en editar-lo.**
 > Report de l'usuari: «cuando ya se han colocado [los SINT], si intentas editarlos cambian de
 > color de rojo a verde, como los normales … quiero que quede claro cuál es su origen».
 > CAUSA: totes les reconstruccions de la taula creaven entrades **NOVES sense la marca `sint`**

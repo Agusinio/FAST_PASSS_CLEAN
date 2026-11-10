@@ -2544,8 +2544,14 @@
             // (BUG #224) Criteris dels OFICIALS: separació de 3 frames (0,12 s, la que
             // posa `GAP` al parser) i estirament fins a `srtSyntheticMaxStretch` (2×).
             var maxStretch = (cfg && cfg.srtSyntheticMaxStretch != null) ? Number(cfg.srtSyntheticMaxStretch) : 2;
+            // (BUG #261 · 2026-11-10) `anchorEdges` + `edgeGraceSec`: el reompliment
+            // s'ancora als clips veïns que JA hi ha (el primer sintetic que entra és
+            // el SEGÜENT al clip anterior i l'últim l'ANTERIOR al següent) i, si falta
+            // una ancla, s'afig un clip de gràcia a eixa vora. `squeezeDurSec` deixa
+            // apretar els clips abans de descartar-ne cap: preferim que sobre.
             var res = P.mergeSyntheticGaps(base, sint, {
-                tolSec: tol, minDurSec: minDur, maxStretchSec: maxStretch, anchorMap: anch
+                tolSec: tol, minDurSec: minDur, maxStretchSec: maxStretch, anchorMap: anch,
+                anchorEdges: true, edgeGraceSec: 2, squeezeDurSec: 0.12
             });
             // (2026-10-23) QUANTES frases compartixen (informatiu) · (BUG #224-c) sense
             // comptar les entrades `sint` ja encaixades: no són text del SRT oficial.
