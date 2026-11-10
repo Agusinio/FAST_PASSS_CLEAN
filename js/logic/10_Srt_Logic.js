@@ -803,13 +803,28 @@
                 sel.sort(function (a, b) { return cands[a].startSec - cands[b].startSec; });
                 // Dins del MATEIX buit, dos sintetics que se solapen són la mateixa
                 // frase comptada dos voltes: es queda el primer.
+                // (BUG #259 · 2026-11-10) ABANS es preguntava amb
+                // `_overlaps(..., tol)` i eixa tolerància de 0,2 s convertia en
+                // «duplicat» dos subtítols CONSECUTIUS normals (van PEGATS o a 3
+                // frames = 0,12 s, que també cau dins de la tolerància): dins d'un
+                // buit es descartava UN CLIP DE CADA DOS. Ara només és duplicat si
+                // es solapen DE DEBÒ (solapament majoritari) o si el text és el
+                // mateix; dos clips que només es toquen són dues frases i
+                // `fitClipsToGap` ja els deixa la separació de 3 frames.
                 var selOk = [];
                 for (var so = 0; so < sel.length; so++) {
                     var candRec = cands[sel[so]];
+                    var candDur = Math.max(0.001, (Number(candRec.endSec) || 0) - (Number(candRec.startSec) || 0));
+                    var candKey = this._normText((candRec.texts || []).join(' '));
                     var dupSel = false;
                     for (var sd = 0; sd < selOk.length; sd++) {
-                        if (this._overlaps(candRec.startSec, candRec.endSec,
-                            cands[selOk[sd]].startSec, cands[selOk[sd]].endSec, tol)) { dupSel = true; break; }
+                        var prevRec = cands[selOk[sd]];
+                        var prevDur = Math.max(0.001, (Number(prevRec.endSec) || 0) - (Number(prevRec.startSec) || 0));
+                        var ovSel = Math.min(Number(candRec.endSec) || 0, Number(prevRec.endSec) || 0) -
+                                    Math.max(Number(candRec.startSec) || 0, Number(prevRec.startSec) || 0);
+                        if (ovSel <= 0) continue;   // només es toquen → dues frases distintes
+                        var sameText = !!(candKey && candKey === this._normText((prevRec.texts || []).join(' ')));
+                        if (sameText || ovSel >= 0.5 * Math.min(candDur, prevDur)) { dupSel = true; break; }
                     }
                     if (dupSel) {
                         candRec.reason = 'duplicat';

@@ -414,10 +414,10 @@
                 html.indexOf('btnSrtDel') === -1 && /id="btnSrtFill"/.test(html) &&
                 /Ctrl\+clic = SUBTÍTOLS SINTÈTICS/.test(html));
             ok('#F3/25 index: cache-busts F3 (srt_editor 95, flow_srt 21, main ' +
-                '109, Scanner 27, Srt_Logic 24, Config 46)',
+                '109, Scanner 27, Srt_Logic 25, Config 46)',
                 /srt_editor\.js\?v=95/.test(html) && /flow_srt\.js\?v=21/.test(html) &&
                 /main\.js\?v=109/.test(html) && /Scanner\.js\?v=27/.test(html) &&
-                /10_Srt_Logic\.js\?v=24/.test(html) && /11_Configuracio\.js\?v=46/.test(html));
+                /10_Srt_Logic\.js\?v=25/.test(html) && /11_Configuracio\.js\?v=46/.test(html));
 
             var cfg = noComments(await readRepo('js/core/11_Configuracio.js'));
             ok('#F3/26 config: srtSyntheticGapTolSec (default 0,2 s + getter)',
@@ -1123,6 +1123,45 @@
                 ok('#F3/62-69 forma d\'ona (#223): sense excepció', false, eWf && (eWf.message + ' | ' + eWf.stack));
             }
 
+
+            // ═══ (BUG #259 · 10/11) SINT: es perdia UN CLIP DE CADA DOS ═════════
+            // `mergeSyntheticGaps` descartava com a «duplicat» dos subtítols
+            // CONSECUTIUS del SINT (van pegats o a 3 frames = 0,12 s) perquè el
+            // filtre preguntava amb `_overlaps(..., tol)`, i `tol`=0,2 s compta com
+            // a solapament el SIMPLE CONTACTE. Dins d'un buit es quedava un sí i un
+            // no. Es prova amb el codi REAL: 6 frases seguides dins d'un buit.
+            try {
+                var base259 = [
+                    { index: 1, timeStr: '', texts: ['inici'], startSec: 0, endSec: 2 },
+                    { index: 2, timeStr: '', texts: ['final'], startSec: 30, endSec: 32 }
+                ];
+                var sint259 = [];
+                for (var q259 = 0; q259 < 6; q259++) {
+                    sint259.push({
+                        index: q259 + 1, timeStr: '', texts: ['frase ' + (q259 + 1)],
+                        startSec: 4 + q259 * 2, endSec: 6 + q259 * 2   // PEGADES
+                    });
+                }
+                var r259 = P.mergeSyntheticGaps(base259, sint259, {});
+                var raz259 = (r259.rejected || []).map(function (x) { return x.reason; }).join(',');
+                ok('#F3/96 funcional: un SINT amb frases CONSECUTIVES ompli el buit SENCER (no 1 de cada 2)',
+                    r259.added.length === 6 && r259.entries.length === 8,
+                    'added=' + r259.added.length + ' entries=' + r259.entries.length + ' rejected=' + raz259);
+
+                // …i dos sintetics REALMENT solapats (el mateix instant) sí que són
+                // la mateixa frase: es queda un (l'anti-duplicat no s'ha perdut).
+                var sint259b = [
+                    { index: 1, timeStr: '', texts: ['una'], startSec: 10, endSec: 13 },
+                    { index: 2, timeStr: '', texts: ['altra'], startSec: 10.1, endSec: 12.9 }
+                ];
+                var r259b = P.mergeSyntheticGaps(base259, sint259b, {});
+                ok('#F3/97 funcional: dos SINT solapats DE DEBÒ continuen comptant com un (anti-duplicat intacte)',
+                    r259b.added.length === 1,
+                    'added=' + r259b.added.length + ' rejected=' +
+                    (r259b.rejected || []).map(function (x) { return x.reason; }).join(','));
+            } catch (e259) {
+                ok('#F3/96-97 sintetics consecutius (#259): sense excepcio', false, e259 && (e259.message + ' | ' + e259.stack));
+            }
 
         } catch (eC) {
             ok('#F3 guardes del flux/UI/config: sense excepció', false, eC && (eC.message + ' | ' + eC.stack));

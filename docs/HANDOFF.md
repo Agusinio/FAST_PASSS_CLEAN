@@ -8,7 +8,7 @@
 > **Un sol handoff.** Prohibit tornar a crear diaris a `.roo/`, `plans/HANDOFF_*` o llistes de
 > pendents a `INFO/` (històric fusionat a [`docs/archive/`](archive/), 2026-11-06).
 
-**Últim traspàs:** 2026-11-10 · **Versió del codi:** 0.9.8 · **Branca:** `main` (commit local `b282ac9` + el del #258, **sense push**: `git-remote-https` ix 128 en este equip)
+**Últim traspàs:** 2026-11-10 · **Versió del codi:** 0.9.8 · **Branca:** `main` (commits locals `b282ac9` + `42ebb97` (#258) + l'últim (#259), **sense push**: `git-remote-https` ix 128 en este equip)
 
 ---
 
@@ -17,12 +17,27 @@
 | Què | Valor |
 |---|---|
 | Versió de l'extensió | **0.9.8** a `CSXS/manifest.xml` (bundle + panell), títol d'`index.html`, `package.json` |
-| Validació vigent | `ALL GREEN \| setup 35/35 \| js 65/65 \| smoke 1027/1027 \| dead 0 \| jsx intacte` |
+| Validació vigent | `ALL GREEN \| setup 35/35 \| js 65/65 \| smoke 1030/1030 \| dead 0 \| jsx intacte` |
 | `.jsx` | **0 fitxers tocats** en esta tanda (segell de `check_all` intacte) |
 | Branca | `main` net, sense ahead/behind |
 | Git | `E:\PortableGit\bin\git.exe` (**no** està al `PATH`) |
 
 ## 2 · Què s'ha fet en este traspàs
+
+> **Última entrada (2026-11-10 b · BUG #259): els clips SINT ja no es perden «un sí, un no».**
+> L'usuari: «necesito que encuentres donde desaparecen los clips de subtítulos de los SINT…
+> Parece que se colocan en el timeline del editor de subtítulos, uno sí, uno no». **No era ni el
+> parser ni el warp** (el #257 ja va mesurar 85→85): era el filtre anti-duplicat de
+> `SrtParser.mergeSyntheticGaps` (`js/logic/10_Srt_Logic.js`), que preguntava
+> `_overlaps(cand, prev, tol)` amb **`tol` = 0,2 s** i `_overlaps` compta com a solapament el
+> **simple contacte**. Els subtítols consecutius d'un SINT van pegats o a 3 frames (0,12 s) →
+> dins d'un buit la meitat es declaraven «duplicat». **Mesurat amb el SINT real del 09/11**
+> (`…\SRT_SINTETICS\TN_MIGDIA_V3_intro__QUI_ES_LATACANT…_Subtitles.srt`): 85 entrades,
+> **0** parells realment solapats i **70 dels 84** parells consecutius dins de la tolerància.
+> Reproducció amb el codi real (proves `#F3/96`/`#F3/97`): 6 frases seguides dins d'un buit →
+> **3 de 6** vell vs **6 de 6** nou. Ara només és duplicat si se solapen de debò
+> (`ovSel > 0` i ≥ 50 % de la durada del més curt) o si el text és el mateix.
+> `index.html` passa a `10_Srt_Logic.js?v=25`.
 
 1. **#252 · El MAIN tornava a «recordar» la data d'ahir després del RESET** — report de
    l'usuari: «cuando reseteamos un proyecto de ayer, la selección del botón MAIN parece
