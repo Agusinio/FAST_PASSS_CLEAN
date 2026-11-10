@@ -413,11 +413,11 @@
             ok('#F3/24 index: 🧩 a la fila SUBTÍTOLS i 🗑 RETIRAT (Supr ho fa)',
                 html.indexOf('btnSrtDel') === -1 && /id="btnSrtFill"/.test(html) &&
                 /Ctrl\+clic = SUBTÍTOLS SINTÈTICS/.test(html));
-            ok('#F3/25 index: cache-busts F3 (srt_editor 95, flow_srt 21, main ' +
-                '109, Scanner 27, Srt_Logic 25, Config 46)',
-                /srt_editor\.js\?v=95/.test(html) && /flow_srt\.js\?v=21/.test(html) &&
+            ok('#F3/25 index: cache-busts F3 (srt_editor 96, flow_srt 21, main ' +
+                '109, Scanner 27, Srt_Logic 26, Config 46)',
+                /srt_editor\.js\?v=96/.test(html) && /flow_srt\.js\?v=21/.test(html) &&
                 /main\.js\?v=109/.test(html) && /Scanner\.js\?v=27/.test(html) &&
-                /10_Srt_Logic\.js\?v=25/.test(html) && /11_Configuracio\.js\?v=46/.test(html));
+                /10_Srt_Logic\.js\?v=26/.test(html) && /11_Configuracio\.js\?v=46/.test(html));
 
             var cfg = noComments(await readRepo('js/core/11_Configuracio.js'));
             ok('#F3/26 config: srtSyntheticGapTolSec (default 0,2 s + getter)',
@@ -1161,6 +1161,61 @@
                     (r259b.rejected || []).map(function (x) { return x.reason; }).join(','));
             } catch (e259) {
                 ok('#F3/96-97 sintetics consecutius (#259): sense excepcio', false, e259 && (e259.message + ' | ' + e259.stack));
+            }
+
+            // ═══ (BUG #260 · 10/11) EL CLIP SINT CONSERVA EL ROIG EN EDITAR ════
+            // En editar (warp de marcadors, IN/OUT, AJUSTAR) la taula es
+            // reconstruïa amb objectes NOUS sense `sint` → el clip sintètic passava
+            // a pintar-se verd («com els normals») i deixava de comptar com a SINT.
+            try {
+                var mix260 = [
+                    { index: 1, timeStr: '', texts: ['oficial'], startSec: 0, endSec: 2 },
+                    { index: 2, timeStr: '', texts: ['sintetic'], startSec: 2.12, endSec: 4, sint: true }
+                ];
+                var sc260 = P.scaleSegmentWithGaps(mix260, [0, 0.12, 0], 0, 10);
+                ok('#F3/98 funcional: `scaleSegmentWithGaps` (warp de marcadors) conserva la marca `sint`',
+                    sc260.length === 2 && !sc260[0].sint && sc260[1].sint === true,
+                    JSON.stringify(sc260.map(function (e) { return [e.startSec, e.endSec, !!e.sint]; })));
+                // Rang degenerat (newEnd <= newStart): tampoc no ha de perdre la marca.
+                var dg260 = P.scaleSegmentWithGaps(mix260, [0, 0.12, 0], 5, 5);
+                ok('#F3/99 funcional: `scaleSegmentWithGaps` amb rang degenerat conserva `sint`',
+                    dg260.length === 2 && dg260[1].sint === true && !dg260[0].sint,
+                    JSON.stringify(dg260.map(function (e) { return !!e.sint; })));
+                // IN/OUT/AJUSTAR (funcions pures que criden l'editor i el flux).
+                var ti260 = P.applyTrimIn(mix260, 0, 0.4);
+                var to260 = P.applyTrimOut(mix260, 1);
+                var ta260 = P.applyTimeAdjust(mix260, 20, 0.04);
+                ok('#F3/100 funcional: `applyTrimIn`/`applyTrimOut`/`applyTimeAdjust` conserven `sint`',
+                    ti260[1].sint === true && to260[1].sint === true && ta260[1].sint === true &&
+                    !ti260[0].sint && !to260[0].sint && !ta260[0].sint,
+                    'in=' + !!ti260[1].sint + ' out=' + !!to260[1].sint + ' ajustar=' + !!ta260[1].sint);
+            } catch (e260) {
+                ok('#F3/98-100 marca sint (#260): sense excepcio', false, e260 && (e260.message + ' | ' + e260.stack));
+            }
+
+            // (BUG #260) L'EDITOR: les reconstruccions de taula passen per
+            // `_entryCopy` (que conserva `sint`) i el clip SINT seleccionat es
+            // pinta amb el vel ROIG propi (`selSint`), no amb el de la vista.
+            try {
+                var ed260 = noComments(await readRepo('js/editor/srt_editor.js'));
+                var fnIn260 = (ed260.split('applyIn: function')[1] || '').split('applyOut: function')[0];
+                var fnOut260 = (ed260.split('applyOut: function')[1] || '').split('applyAdjust: function')[0];
+                var fnAdj260 = (ed260.split('applyAdjust: function')[1] || '').split('_entriesToTimeline: function')[0];
+                var fnWarp260 = (ed260.split('_applyAllMarkers: function')[1] || '').split('_applyMarkerDrag: function')[0];
+                ok('#F3/101 estàtic: `_entryCopy` conserva `sint` i el fan servir warp/IN/OUT/AJUSTAR',
+                    /_entryCopy: function \(e, deltaSec\)/.test(ed260) &&
+                    /if \(e\.sint\) c\.sint = true;/.test(ed260) &&
+                    (ed260.match(/this\._entryCopy\(/g) || []).length >= 5 &&
+                    !/return \{ index: /.test(fnIn260) && !/return \{ index: /.test(fnOut260) &&
+                    !/return \{ index: /.test(fnAdj260) &&
+                    !/result\.push\(\{ index: /.test(fnWarp260),
+                    'usos=' + (ed260.match(/this\._entryCopy\(/g) || []).length);
+                ok('#F3/102 estàtic: el clip SINT SELECCIONAT es pinta amb `selSint` (roig) i no amb el de la vista',
+                    /selSint: 'rgba\(255,64,64,0\.42\)'/.test(ed260) &&
+                    (ed260.match(/selSint: SINTF\.selSint/g) || []).length === 3 &&
+                    /fromSint \? st\.selSint : st\.sel/.test(ed260));
+            } catch (e260b) {
+                ok('#F3/101-102 editor (#260): sense excepcio', false, e260b && (e260b.message + ' | ' + e260b.stack));
             }
 
         } catch (eC) {

@@ -85,10 +85,14 @@
             if (result.length === 0) return [];
             var first = result[0], firstDur = first.endSec - first.startSec, originalStart = first.startSec;
             result[0] = { index: 1, timeStr: '', texts: first.texts.slice(), startSec: frame10Sec, endSec: frame10Sec + firstDur };
+            // (BUG #260 · 2026-11-10) La marca d'origen `sint` viatja amb l'entrada:
+            // si no, els clips SINT perdien el roig (i l'origen) en editar.
+            if (first.sint) result[0].sint = true;
             var offset = frame10Sec - originalStart;
             for (var i = 1; i < result.length; i++) {
                 var r = result[i];
                 result[i] = { index: i + 1, timeStr: '', texts: r.texts.slice(), startSec: r.startSec + offset, endSec: r.endSec + offset };
+                if (r.sint) result[i].sint = true;
             }
             return result;
         },
@@ -97,7 +101,11 @@
             if (!entries || entries.length === 0) return [];
             if (targetIdx < 0 || targetIdx >= entries.length) return [];
             var result = entries.slice(0, targetIdx + 1);
-            for (var i = 0; i < result.length; i++) result[i] = { index: i + 1, timeStr: '', texts: result[i].texts.slice(), startSec: result[i].startSec, endSec: result[i].endSec };
+            for (var i = 0; i < result.length; i++) {
+                var rs = result[i];
+                result[i] = { index: i + 1, timeStr: '', texts: rs.texts.slice(), startSec: rs.startSec, endSec: rs.endSec };
+                if (rs.sint) result[i].sint = true;   // (BUG #260) marca d'origen
+            }
             return result;
         },
 
@@ -111,7 +119,9 @@
             var ratio = durIdeal / currentDur, result = [];
             for (var i = 0; i < entries.length; i++) {
                 var e = entries[i], oldDur = e.endSec - e.startSec, newStart = firstIn + (e.startSec - firstIn) * ratio;
-                result.push({ index: i + 1, timeStr: '', texts: e.texts.slice(), startSec: newStart, endSec: newStart + oldDur * ratio });
+                var na = { index: i + 1, timeStr: '', texts: e.texts.slice(), startSec: newStart, endSec: newStart + oldDur * ratio };
+                if (e.sint) na.sint = true;   // (BUG #260) marca d'origen
+                result.push(na);
             }
             return result;
         },
@@ -129,7 +139,13 @@
             if (!clips || clips.length === 0) return [];
             if (!isFinite(newStart) || !isFinite(newEnd) || newEnd <= newStart) {
                 // Rang degenerat: retornar els clips sense canvis (clonats) per no col·lapsar
-                return clips.map(function (c) { return { index: c.index, timeStr: c.timeStr, texts: c.texts.slice(), startSec: c.startSec, endSec: c.endSec }; });
+                // (BUG #260 · 2026-11-10) La marca d'origen `sint` es CONSERVA: si no, el
+                // clip sintetic passava a comptar com a oficial despres d'una edicio.
+                return clips.map(function (c) {
+                    var o = { index: c.index, timeStr: c.timeStr, texts: c.texts.slice(), startSec: c.startSec, endSec: c.endSec };
+                    if (c.sint) o.sint = true;
+                    return o;
+                });
             }
             var FPS = 25;
             var GAP = 3 / FPS;      // 0.12s = 3 frames
@@ -184,7 +200,11 @@
             for (var i = 0; i < n; i++) {
                 var s = t;
                 var e = t + newDurs[i];
-                result.push({ index: i + 1, timeStr: '', texts: clips[i].texts.slice(), startSec: s, endSec: e });
+                // (BUG #260 · 2026-11-10) Es conserva la marca d'origen `sint` (fusio
+                // dels SINT): l'editor la fa servir per a pintar el clip de roig sempre.
+                var nc = { index: i + 1, timeStr: '', texts: clips[i].texts.slice(), startSec: s, endSec: e };
+                if (clips[i].sint) nc.sint = true;
+                result.push(nc);
                 t = e + newGaps[i + 1];
             }
             return result;

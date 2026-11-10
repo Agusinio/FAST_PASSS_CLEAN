@@ -1755,10 +1755,13 @@
             // (2026-11-09) ROIG per al SINT: abans era taronja i es confonia amb el
             // líla del NORMAL i el verd de la MOD. El roig no el fa servir cap altra
             // taula ni la WF (blau).
-            var SINTF = { fillSint: 'rgba(206,38,46,0.60)', strokeSint: 'rgba(255,138,138,0.95)' };
-            if (this._kind === 'SINT') return { fill: 'rgba(176,30,38,0.50)', stroke: 'rgba(255,150,150,0.95)', sel: 'rgba(255,110,110,0.85)', fillSint: SINTF.fillSint, strokeSint: SINTF.strokeSint };
-            if (this._kind === 'MOD') return { fill: 'rgba(32,160,120,0.45)', stroke: 'rgba(170,255,225,0.95)', sel: 'rgba(120,255,200,0.85)', fillSint: SINTF.fillSint, strokeSint: SINTF.strokeSint };
-            return { fill: 'rgba(143,74,212,0.45)', stroke: 'rgba(210,175,255,0.9)', sel: 'rgba(235,215,255,0.9)', fillSint: SINTF.fillSint, strokeSint: SINTF.strokeSint };
+            // (BUG #260 · 2026-11-10) `selSint`: el clip SINT seleccionat es pinta amb
+            // un vel ROIG (no amb el `sel` de la vista, que el tornava verd/morat):
+            // l'origen sintetic es veu SEMPRE, tant sense editar com editant.
+            var SINTF = { fillSint: 'rgba(206,38,46,0.60)', strokeSint: 'rgba(255,138,138,0.95)', selSint: 'rgba(255,64,64,0.42)' };
+            if (this._kind === 'SINT') return { fill: 'rgba(176,30,38,0.50)', stroke: 'rgba(255,150,150,0.95)', sel: 'rgba(255,110,110,0.85)', fillSint: SINTF.fillSint, strokeSint: SINTF.strokeSint, selSint: SINTF.selSint };
+            if (this._kind === 'MOD') return { fill: 'rgba(32,160,120,0.45)', stroke: 'rgba(170,255,225,0.95)', sel: 'rgba(120,255,200,0.85)', fillSint: SINTF.fillSint, strokeSint: SINTF.strokeSint, selSint: SINTF.selSint };
+            return { fill: 'rgba(143,74,212,0.45)', stroke: 'rgba(210,175,255,0.9)', sel: 'rgba(235,215,255,0.9)', fillSint: SINTF.fillSint, strokeSint: SINTF.strokeSint, selSint: SINTF.selSint };
         },
 
         /** _clipAtSec: index de l'entrada que cau davall `sec` (o -1). */
@@ -2776,7 +2779,9 @@
                 ctx.fillRect(x, by, w, bh);
                 if (isSel) {
                     // F3.1: el clip SELECCIONAT es veu de seguida (vel + marc blanc)
-                    ctx.fillStyle = st.sel;
+                    // (BUG #260) ... pero el SINT conserva el seu ROIG: el vel propi
+                    // del sintetic, no el de la vista.
+                    ctx.fillStyle = fromSint ? st.selSint : st.sel;
                     ctx.fillRect(x, by, w, bh);
                 }
                 if (fromSint && w >= 3) {
@@ -3287,6 +3292,27 @@
         },
 
         /**
+         * _entryCopy (BUG #260 · 2026-11-10): copia d'una entrada de la taula
+         * CONSERVANT la marca d'origen `sint` (les que ha encaixat el 🧩).
+         * PER QUE CAL: totes les reconstruccions de taula (warp de marcadors,
+         * IN/OUT, AJUSTAR) creaven objectes nous sense `sint`, així que el clip
+         * sintètic passava a comptar com a oficial i es pintava de verd («com els
+         * normals») tot just s'editava. Ara conserva el roig de l'origen.
+         * @param {Object} e - entrada {index,timeStr,texts,startSec,endSec[,sint]}
+         * @param {number} [deltaSec=0] - desplaçament aplicat a startSec/endSec
+         * @returns {Object} còpia nova (mai la mateixa referència)
+         */
+        _entryCopy: function (e, deltaSec) {
+            var d = Number(deltaSec) || 0;
+            var c = {
+                index: e.index, timeStr: e.timeStr, texts: (e.texts || []).slice(),
+                startSec: (Number(e.startSec) || 0) + d, endSec: (Number(e.endSec) || 0) + d
+            };
+            if (e.sint) c.sint = true;
+            return c;
+        },
+
+        /**
          * _applyAllMarkers: Recalcula TOTA la taula de clips des de la taula ORIGINAL
          * (_originalEntries) segons les posicions dels marcadors. Cada segment entre
          * marcadors consecutius es re-escala amb scaleSegmentWithGaps (acordió: separació
@@ -3344,14 +3370,13 @@
                 for (var t = 0; t < orig.length; t++) {
                     var e = orig[t];
                     if (e.startSec >= O[k - 1]) {
-                        result.push({ index: e.index, timeStr: e.timeStr, texts: e.texts.slice(), startSec: e.startSec + delta, endSec: e.endSec + delta });
+                        result.push(this._entryCopy(e, delta));
                     }
                 }
             } else {
                 // Sense marcadors: copiar la taula original tal qual
                 for (var c0 = 0; c0 < orig.length; c0++) {
-                    var e0 = orig[c0];
-                    result.push({ index: e0.index, timeStr: e0.timeStr, texts: e0.texts.slice(), startSec: e0.startSec, endSec: e0.endSec });
+                    result.push(this._entryCopy(orig[c0], 0));
                 }
             }
 
@@ -3770,7 +3795,7 @@
             // (BUG #258) L'IN trau els primers clips: els índexs d'ancla es desplacen
             // (o passen a lliures si el clip ancla ja no hi és).
             this._shiftAnchors(targetIdx, -1);
-            this._originalEntries = this._entries.map(function (e) { return { index: e.index, timeStr: e.timeStr, texts: e.texts.slice(), startSec: e.startSec, endSec: e.endSec }; });
+            this._originalEntries = this._entries.map(function (e) { return this._entryCopy(e, 0); }, this);
             if (this._entries.length > 0) {
                 var first = this._entries[0].startSec;
                 var exists = this._markers.some(function (m) { return Math.abs(m - first) < 0.05; });
@@ -3801,7 +3826,7 @@
             // (BUG #258) L'OUT elimina els clips del darrere: les ancles que
             // apuntaven a eixos clips passen a LLIURES amb la seua referència.
             this._shiftAnchors(0, this._entries.length);
-            this._originalEntries = this._entries.map(function (e) { return { index: e.index, timeStr: e.timeStr, texts: e.texts.slice(), startSec: e.startSec, endSec: e.endSec }; });
+            this._originalEntries = this._entries.map(function (e) { return this._entryCopy(e, 0); }, this);
             if (this._entries.length > 0) {
                 var lastIdxO = this._entries.length - 1;
                 var finalSec = this._entries[lastIdxO].endSec;
@@ -3854,7 +3879,7 @@
                 }
             }
 
-            this._originalEntries = this._entries.map(function (e) { return { index: e.index, timeStr: e.timeStr, texts: e.texts.slice(), startSec: e.startSec, endSec: e.endSec }; });
+            this._originalEntries = this._entries.map(function (e) { return this._entryCopy(e, 0); }, this);
             this._refreshOriginalFromAnchors();
             this._clearSelection(); this._isDirty = true; this.render();
             this._persistMarkers();

@@ -8,7 +8,7 @@
 > **Un sol handoff.** Prohibit tornar a crear diaris a `.roo/`, `plans/HANDOFF_*` o llistes de
 > pendents a `INFO/` (històric fusionat a [`docs/archive/`](archive/), 2026-11-06).
 
-**Últim traspàs:** 2026-11-10 · **Versió del codi:** 0.9.8 · **Branca:** `main` (commits locals `b282ac9` + `42ebb97` (#258) + l'últim (#259), **sense push**: `git-remote-https` ix 128 en este equip)
+**Últim traspàs:** 2026-11-10 · **Versió del codi:** 0.9.8 · **Branca:** `main` (commits locals `b282ac9` + `42ebb97` (#258) + `3763848` (#259) + l'últim (#260), **sense push**: `git-remote-https` ix 128 en este equip)
 
 ---
 
@@ -17,14 +17,28 @@
 | Què | Valor |
 |---|---|
 | Versió de l'extensió | **0.9.8** a `CSXS/manifest.xml` (bundle + panell), títol d'`index.html`, `package.json` |
-| Validació vigent | `ALL GREEN \| setup 35/35 \| js 65/65 \| smoke 1030/1030 \| dead 0 \| jsx intacte` |
+| Validació vigent | `ALL GREEN \| setup 35/35 \| js 65/65 \| smoke 1035/1035 \| dead 0 \| jsx intacte` |
 | `.jsx` | **0 fitxers tocats** en esta tanda (segell de `check_all` intacte) |
 | Branca | `main` net, sense ahead/behind |
 | Git | `E:\PortableGit\bin\git.exe` (**no** està al `PATH`) |
 
 ## 2 · Què s'ha fet en este traspàs
 
-> **Última entrada (2026-11-10 b · BUG #259): els clips SINT ja no es perden «un sí, un no».**
+> **Última entrada (2026-11-10 c · BUG #260): el clip SINT conserva el ROIG en editar-lo.**
+> Report de l'usuari: «cuando ya se han colocado [los SINT], si intentas editarlos cambian de
+> color de rojo a verde, como los normales … quiero que quede claro cuál es su origen».
+> CAUSA: totes les reconstruccions de la taula creaven entrades **NOVES sense la marca `sint`**
+> —`SrtParser.scaleSegmentWithGaps` (el warp de marcadors), `applyTrimIn`/`applyTrimOut`/
+> `applyTimeAdjust` (botons IN/OUT/AJUSTAR) i les còpies de `_applyAllMarkers`/IN/OUT/AJUSTAR de
+> `js/editor/srt_editor.js`—: el clip perdia el color d'origen i, de passada, deixava de comptar
+> com a sintètic a `_baseForMeasure`. A més, en **seleccionar-lo** es pintava amb el vel de la
+> vista (`st.sel`). SOLUCIÓ: la marca `sint` viatja amb l'entrada (helper `_entryCopy` a l'editor
+> + `if (x.sint) y.sint = true` a la lògica pura) i el SINT té vel de selecció **roig** propi
+> (`selSint: rgba(255,64,64,0.42)`): el roig és estable sense editar, editat i seleccionat.
+> Decidit amb l'usuari: **roig sempre** (els normals de la vista MOD continuen verds). Proves
+> `#F3/98`–`#F3/102`. `index.html` passa a `10_Srt_Logic.js?v=26` i `srt_editor.js?v=96`.
+>
+> **Anterior (2026-11-10 b · BUG #259): els clips SINT ja no es perden «un sí, un no».**
 > L'usuari: «necesito que encuentres donde desaparecen los clips de subtítulos de los SINT…
 > Parece que se colocan en el timeline del editor de subtítulos, uno sí, uno no». **No era ni el
 > parser ni el warp** (el #257 ja va mesurar 85→85): era el filtre anti-duplicat de
