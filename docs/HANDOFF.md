@@ -8,7 +8,7 @@
 > **Un sol handoff.** Prohibit tornar a crear diaris a `.roo/`, `plans/HANDOFF_*` o llistes de
 > pendents a `INFO/` (històric fusionat a [`docs/archive/`](archive/), 2026-11-06).
 
-**Últim traspàs:** 2026-11-10 · **Versió del codi:** 0.9.8 · **Branca:** `main` (commits locals `b282ac9` + `42ebb97` (#258) + `3763848` (#259) + `3738404` (#260) + `7e7dd63` + `0bc166a` (#261) + `3755f13` (tancament del bloc SINT), **pujats a `origin` el 10/11** amb `E:\PortableGit\bin\git.exe` (`6b6b8c3..3755f13 main -> main`); el `git-remote-https` del PATH fallava amb 128, el de PortableGit **sí que puja**)
+**Últim traspàs:** 2026-11-10 · **Versió del codi:** 0.9.8 · **Branca:** `main` (commits locals `b282ac9` + `42ebb97` (#258) + `3763848` (#259) + `3738404` (#260) + `7e7dd63` + `0bc166a` (#261) + `3755f13` (tancament del bloc SINT) + `4f034a4` (tancament del #257), **pujats a `origin` el 10/11** amb `E:\PortableGit\bin\git.exe` (`6b6b8c3..3755f13 main -> main`); el `git-remote-https` del PATH fallava amb 128, el de PortableGit **sí que puja**)
 
 ---
 
@@ -24,7 +24,15 @@
 
 ## 2 · Què s'ha fet en este traspàs
 
-> **Última entrada (2026-11-10 d · BUG #261): els clips del VORE del buit ja no es perden.**
+> **Última entrada (2026-11-10 f · BUG #257 TANCAT per decisió de l'usuari).** Ordre rebuda:
+> «Cierra 257». **No hi ha canvi de codi**: el 09/11 ja es va mesurar amb els fitxers reals i el codi
+> real que l'editor **no perd cap clip** en importar el SINT (85 entrades → 85 clips) i que la pèrdua
+> de text que es veia («acaba en punt i el següent comença en minúscula») és dins de l'ASR, fora de
+> l'abast del panell. Es queda el blindatge d'eixe dia: la vista SINT no restaura marcadors de
+> l'oficial, no aplica `_applyAllMarkers()`, no en desa al disc i el clic dret no crea ni esborra
+> marcadors. Catàlegs al dia: **21 pendents · 159 resolts/tancats**.
+>
+> **Entrada anterior (2026-11-10 d · BUG #261): els clips del VORE del buit ja no es perden.**
 > Report de l'usuari: «después de borrar clips y rellenar con SINT, falta uno al principio y uno
 > al final», amb la seua proposta textual: «buscar específicamente el último que tenemos (antes
 > del hueco) … y colocar el resto de clips SINT, hasta añadir el último, que debería coincidir
@@ -223,13 +231,13 @@ incomplixen:
 | `BUGS.md` **§1.1** | Bugs **amb codi o diagnòstic**, pendents de validar en viu | 19 |
 | `BUGS.md` **§1.2** | Noves sense diagnòstic ni codi | 2 |
 | `BUGS.md` **§1.3** | Decisions pendents de l'usuari | 2 (`#116`, `#242`) |
-| `BUGS.md` **§2** | Resolts i tancats (orde cronològic) | 152 |
-| `FEATURES.md` **§1** | Implementacions validades | 40 |
+| `BUGS.md` **§2** | Resolts i tancats (orde cronològic) | 159 |
+| `FEATURES.md` **§1** | Implementacions validades | 41 |
 | `FEATURES.md` **§2** | Implementades, **pendents de validar en viu** | 9 |
 | `FEATURES.md` **§3** | En cua / per implementar | 7 |
 | `FEATURES.md` **§4** | Descartades per decisió | 3 |
 
-Els 19 de `BUGS.md` §1.1 (per número): `#256`, `#224`, `#212`, `#210`, `#209`, `#206`, `#205`,
+Els 19 de `BUGS.md` §1.1 (per número): `#258`, `#256`, `#212`, `#210`, `#209`, `#206`, `#205`,
 `#197`, `#202`, `#232`, `#233`, `#237`, `#235`, `#236`, `#239`, `#241`, `#245`, `#249`, `#234`.
 Els 7 de `FEATURES.md` §3: `XARXES_TC00`, `NNEWS`, `MARKERS_INVARIANT`, `SRT_GUARD`,
 `JSON_DIETA`, `AUDIO_IA_DEREVERB`, `OCR_FRAME_CABEZAL`.
