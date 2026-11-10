@@ -24,16 +24,18 @@
 
 ## 2 · Què s'ha fet en este traspàs
 
-> **Última entrada (2026-11-10 g · BUG #262: l'eix de l'editor ven del clip del MP4 a V1).**
+> **Última entrada (2026-11-10 g · BUG #262: l'eix de l'editor = IN del primer clip de V1).**
 > Report de l'usuari: «en tallar o trimear V1 a mitjan edició, els subtítols i la WF es desplacen i
 > ja no quadren amb el habla, encara que recarregue el SRT». L'eix (`_axisOrigin` = media que cau al
 > TL 0) eixia de `segs[0]`, i amb el tag del MP4 sense coincidir (`mode='v1'`) `segs` porta **tots**
 > els clips de V1: el primer podia ser un rètol o un altre material —i quin clip ocupa primer la
 > pista canvia quan es talla—, així que la WF i els subtítols (en media del MP4) es desplaçaven
-> respecte del clip. ARA: si el tag no ha filtrat, es tria el **material de referència** de tot el
-> mapa (el nom que suma més durada: el MP4) i després la pista —V1 si el material hi és—, i al final
-> el clip **que ocupa el TL 0** (`s <= 0,02`). L'eix seguix sent
-> `m − s`. Proves noves: `#F3/107`–`#F3/110`; smoke 1039 → **1043**. Pendent de **validar en viu**.
+> respecte del clip. ARA (**regla d'usuari**): la referència del retall del MP4 original és **SEMPRE
+> el IN del PRIMER clip del track V1** en la seua media original — es filtra V1, es tria el clip de
+> `s` més baix i l'eix = `m − s` (exactament el seu IN si el clip arranca al TL 0). Res
+> d'heurístiques: ni el mínim inPoint (#223), ni el material que suma més durada, ni «el clip que
+> cau al TL 0»; si V1 està buit, cau al primer clip de la resta de pistes. Proves noves:
+> `#F3/107`–`#F3/110`; smoke 1039 → **1043**. Pendent de **validar en viu**.
 >
 > **Entrada anterior (2026-11-10 f · BUG #257 TANCAT per decisió de l'usuari).** Ordre rebuda:
 > «Cierra 257». **No hi ha canvi de codi**: el 09/11 ja es va mesurar amb els fitxers reals i el codi

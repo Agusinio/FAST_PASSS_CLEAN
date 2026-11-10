@@ -1610,58 +1610,39 @@
                 // residual del mateix MP4 col·locada més endavant (retalls o
                 // «Repartir») baixava l'eix i separava els subtítols —que viuen en
                 // media— de l'inici de la WF: eixia un buit sense clips al davant.
-                // (BUG #262, 10/11) PERÒ el primer clip de V1 pot NO ser el del MP4: en
-                // el fallback 'v1' (el tag no ha coincidit amb cap `projectItem`) `segs`
-                // porta TOTS els clips de V1, i un rètol o un altre material col·locat al
-                // principi donava un `m − s` d'un altre fitxer. En tallar o trimear V1 a
-                // mitjan edició eixe clip passava a ser el primer → l'eix es movia i la WF
-                // i els subtítols (que viuen en media del MP4) deixaven de quadrar amb el
-                // clip, ni recarregant el SRT. Ara, quan el tag no ha filtrat, es tria
-                // abans el MATERIAL de referència (el nom que suma més durada de timeline
-                // a TOT el mapa: el MP4) i només després es mira la pista.
-                var refName = '';
-                if (parsed.mode !== 'tag' && segs.length > 1) {
-                    var durByName = {}, bestDur = -1;
-                    for (var ab = 0; ab < segs.length; ab++) {
-                        var nmB = segs[ab].n || '';
-                        durByName[nmB] = (durByName[nmB] || 0) + (segs[ab].e - segs[ab].s);
-                        if (durByName[nmB] > bestDur) { bestDur = durByName[nmB]; refName = nmB; }
-                    }
-                    log("📝 SRT_EDIT: mode=" + parsed.mode + " → material de referència = \"" +
-                        refName + "\" (" + bestDur.toFixed(1) + "s de timeline; " +
-                        "el tag no ha filtrat el mapa per nom)");
-                }
-                var pool = [];
-                for (var am = 0; am < segs.length; am++) {
-                    if (!refName || (segs[am].n || '') === refName) pool.push(segs[am]);
-                }
-                if (!pool.length) pool = segs;
-                // V1 manar: és on viu el MP4. Si el material de referència NO hi és (MP4 en
-                // una altra pista), `onV1` queda buit i es respecta la pista on estiga.
-                var axisPool = pool, onV1 = [];
-                for (var av = 0; av < pool.length; av++) { if (pool[av].v === 0) onV1.push(pool[av]); }
-                if (onV1.length) axisPool = onV1;
-                // El clip que ocupa el TL 0; si el bloc arranca més enllà del 0, el primer
-                // per inici de timeline (`axisPool` ja ve ordenat per `s`).
-                var axisSeg = axisPool.length ? axisPool[0] : null;
+                // (BUG #262, 10/11 · REGLA D'USUARI) La referència del retall del MP4
+                // original és SEMPRE el **IN del PRIMER clip del track V1** (en la seua
+                // media original). V1 és on viu el MP4 i eixe clip obri el muntatge, així
+                // que mana ell i el seu inPoint: res d'heurístiques —ni el mínim inPoint
+                // (#223), ni el material que suma més durada, ni «el clip que cau al TL 0».
+                // Si es trimea o es talla V1, el primer clip de V1 canvia d'IN i l'eix el
+                // seguix; recarregar el SRT torna a donar el mateix valor.
+                // `m − s` és eixe IN referit al TL 0: si el clip arranca al 0 (el cas
+                // normal) és exactament el seu inPoint; si hi ha un buit al cap, manté el
+                // clip al seu lloc del timeline en compte de desplaçar-lo al 0.
+                // `segs` ve ordenat per pista i per índex de clip, però s'ordena ací per
+                // `s` perquè «el primer» no depenga de l'orde d'eixida del jsx.
+                var onV1 = [], axisPool;
+                for (var av = 0; av < segs.length; av++) { if (segs[av].v === 0) onV1.push(segs[av]); }
+                axisPool = onV1.length ? onV1 : segs;
+                var axisSeg = null;
                 for (var ad = 0; ad < axisPool.length; ad++) {
-                    if (axisPool[ad].s <= 0.02) { axisSeg = axisPool[ad]; break; }
+                    if (!axisSeg || axisPool[ad].s < axisSeg.s) axisSeg = axisPool[ad];
                 }
                 var axisTl0 = axisSeg ? (axisSeg.m - axisSeg.s) : NaN;
                 this._axisOrigin = isFinite(axisTl0) ? axisTl0 : this._wfMediaStart;
                 // DIAGNÒSTIC de l'origen del mapa: 'tag' = clips del MP4 triats pel nom;
                 // 'v1' = fallback a la pista V1 (el tag no ha coincidit amb cap clip);
-                // 'all' = totes les pistes (pitjor cas: l'eix pot baixar a 0 i el clip
-                // del MP4 sortir desplaçat amb un buit gran al davant).
+                // 'all' = totes les pistes (pitjor cas: V1 buit i l'eix pot baixar a 0).
                 log("📝 SRT_EDIT: Mapa de clips mode=" + (parsed.mode || "?") + " tag=\"" + tag +
-                    "\" → _axisOrigin=" + this._axisOrigin.toFixed(2) + "s (eix: " +
-                    (axisSeg ? "V" + (axisSeg.v + 1) + " tl=" + axisSeg.s.toFixed(2) + "s ← media " +
-                        axisSeg.m.toFixed(2) + "s \"" + (axisSeg.n || "?") + "\"" : "cap clip") +
+                    "\" → _axisOrigin=" + this._axisOrigin.toFixed(2) + "s (eix: IN del primer clip de " +
+                    (onV1.length ? "V1" : "la resta de pistes") + " · " +
+                    (axisSeg ? "tl=" + axisSeg.s.toFixed(2) + "s ← media " + axisSeg.m.toFixed(2) +
+                        "s \"" + (axisSeg.n || "?") + "\"" : "cap clip") +
                     " · " + segs.length + " segs)");
                 if (parsed.mode && parsed.mode !== 'tag') {
                     log("⚠️ SRT_EDIT: cap clip del projecte conté el tag \"" + tag + "\" → mapa per " +
                         (parsed.mode === 'v1' ? "la pista V1" : "TOTES les pistes") +
-                        (refName ? " (material de referència: \"" + refName + "\")" : "") +
                         ". Si el timeline de l'editor surt desplaçat, revisa el nom del MP4 al projecte.");
                 }
                 // Log diagnòstic quan canvia el mapa (o primer cop): resum de medias + primers segments
