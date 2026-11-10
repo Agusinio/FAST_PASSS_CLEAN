@@ -413,9 +413,9 @@
             ok('#F3/24 index: 🧩 a la fila SUBTÍTOLS i 🗑 RETIRAT (Supr ho fa)',
                 html.indexOf('btnSrtDel') === -1 && /id="btnSrtFill"/.test(html) &&
                 /Ctrl\+clic = SUBTÍTOLS SINTÈTICS/.test(html));
-            ok('#F3/25 index: cache-busts F3 (srt_editor 94, flow_srt 21, main ' +
+            ok('#F3/25 index: cache-busts F3 (srt_editor 95, flow_srt 21, main ' +
                 '109, Scanner 27, Srt_Logic 24, Config 46)',
-                /srt_editor\.js\?v=94/.test(html) && /flow_srt\.js\?v=21/.test(html) &&
+                /srt_editor\.js\?v=95/.test(html) && /flow_srt\.js\?v=21/.test(html) &&
                 /main\.js\?v=109/.test(html) && /Scanner\.js\?v=27/.test(html) &&
                 /10_Srt_Logic\.js\?v=24/.test(html) && /11_Configuracio\.js\?v=46/.test(html));
 
@@ -861,7 +861,151 @@
                     'SrtEditor=' + !!SE + ' wipe=' + !!(SE && SE._wipeMarkersFile));
             }
 
+            // ═══ (BUG #258 · 2026-11-10) EL MARCADOR S'ANCLA AL CLIP ORIGINAL ═══════
+            // Report de l'usuari: «així com la posició dels clips es calcula sempre
+            // respecte del original per a evitar errors acumulatius, els marcadors es
+            // referencien només al timeline … haurien d'anar referenciats al clip en
+            // el fitxer original». Un marcador passa a ser un REGISTRE
+            // `{num, clip ancla, extrem (in/out), TC destí}`: el punt de referència
+            // del warp es re-deriva SEMPRE del clip original, mai d'una posició.
+            ok('#F3/89 editor: el marcador porta identitat (núm + clip ancla + extrem + TC destí)',
+                /_markerAnchors:\s*\[\]/.test(edSrc) && /_nextMarkerNum:\s*1/.test(edSrc) &&
+                /_nearestClipEdge:\s*function/.test(edSrc) &&
+                /_refreshOriginalFromAnchors:\s*function/.test(edSrc) &&
+                /_sortMarkers:\s*function/.test(edSrc) &&
+                /_addMarker:\s*function/.test(edSrc) &&
+                /_removeMarkerAt:\s*function/.test(edSrc) &&
+                /_remapAnchorsAfterDelete:\s*function/.test(edSrc) &&
+                /_shiftAnchors:\s*function/.test(edSrc) &&
+                /anchors:\s*anchors/.test(edSrc) &&
+                /nextNum:\s*this\._nextMarkerNum/.test(edSrc) &&
+                /_applyAllMarkers: function \(\) \{[\s\S]{0,1200}?_refreshOriginalFromAnchors\(\)/.test(edSrc) &&
+                // Les ancles viatgen amb la instantània de vista (switchView NORMAL↔SINT)
+                /markerAnchors: \(this\._markerAnchors \|\| \[\]\)\.map/.test(edSrc) &&
+                /this\._markerAnchors = \(v\.markerAnchors \|\| \[\]\)\.map/.test(edSrc),
+                'ancles=' + /_markerAnchors:\s*\[\]/.test(edSrc) +
+                ' refresh=' + /_refreshOriginalFromAnchors:\s*function/.test(edSrc) +
+                ' payload=' + /anchors:\s*anchors/.test(edSrc) +
+                ' vista=' + /markerAnchors: \(this\._markerAnchors \|\| \[\]\)\.map/.test(edSrc));
+
+            var SE2 = UI.Editor && UI.Editor.SrtEditor;
+            if (SE2 && SE2._addMarker && SE2._nearestClipEdge && SE2._applyAllMarkers) {
+                // Taula ORIGINAL de 3 clips; el marcador ha d'apuntar a l'EXTREM del
+                // clip (inici/final), no al segon on s'ha deixat anar.
+                function newEd258() {
+                    var ed = Object.create(SE2);
+                    ed._originalEntries = [E(0, 2), E(4, 6), E(10, 14)];
+                    ed._entries = [E(0, 2), E(4, 6), E(10, 14)];
+                    ed._markers = []; ed._originalMarkers = [];
+                    ed._markerAnchors = []; ed._nextMarkerNum = 1;
+                    return ed;
+                }
+                var edA = newEd258();
+                var nearA = SE2._nearestClipEdge.call(edA, 5.9);
+                var ancA = edA._addMarker(5.9);     // cau vora el FINAL del clip 2 (6 s)
+                var ancB = edA._addMarker(11.9);    // cau vora l'INICI del clip 3 (10 s)
+                ok('#F3/90 funcional: `_nearestClipEdge`/`_addMarker` anclen a l\'EXTREM del clip (no al TC del clic)',
+                    nearA && nearA.clip === 1 && nearA.edge === 'out' && near(nearA.time, 6) &&
+                    ancA && ancA.clip === 1 && ancA.edge === 'out' && near(ancA.orig, 6) &&
+                    ancB && ancB.clip === 2 && ancB.edge === 'in' && near(ancB.orig, 10) &&
+                    near(edA._markers[0], 6) && near(edA._markers[1], 10) &&
+                    near(edA._originalMarkers[0], 6) && near(edA._originalMarkers[1], 10),
+                    'near=' + JSON.stringify(nearA) + ' A=' + JSON.stringify(ancA) + ' B=' + JSON.stringify(ancB) +
+                    ' dest=' + JSON.stringify(edA._markers) + ' orig=' + JSON.stringify(edA._originalMarkers));
+            } else {
+                ok('#F3/90 funcional: `_nearestClipEdge`/`_addMarker` anclen a l\'EXTREM del clip (no al TC del clic)', false,
+                    'SrtEditor=' + !!SE2 + ' add=' + !!(SE2 && SE2._addMarker));
+            }
+
+            // (BUG #258) PROVA FUNCIONAL del warp: el marcador arrossegat canvia el
+            // DESTÍ, però el punt de referència ix del CLIP original → dos
+            // aplicacions seguides donen exactament el mateix (cap error acumulatiu).
+            if (SE2 && SE2._addMarker && SE2._applyAllMarkers && SE2._markersPayload) {
+                var edW = Object.create(SE2);
+                edW._originalEntries = [E(0, 2), E(4, 6), E(10, 14)];
+                edW._entries = [E(0, 2), E(4, 6), E(10, 14)];
+                edW._markers = []; edW._originalMarkers = [];
+                edW._markerAnchors = []; edW._nextMarkerNum = 1;
+                var aW1 = edW._addMarker(1.9);    // ancla clip 1/final (2 s)
+                var aW2 = edW._addMarker(11.9);   // ancla clip 3/inici (10 s)
+                edW._markers[0] = 1.0;            // l'usuari ARROSSEGA el 1r marcador a 1 s
+                edW._applyAllMarkers();
+                var sigW = function () {
+                    return edW._entries.map(function (x) {
+                        return Number(x.startSec).toFixed(3) + '-' + Number(x.endSec).toFixed(3);
+                    }).join('|');
+                };
+                var tW1 = sigW();
+                edW._applyAllMarkers();
+                var tW2 = sigW();
+                ok('#F3/91 funcional: el warp partix del CLIP ORIGINAL (no del TC) i és idempotent',
+                    aW1 && aW1.clip === 0 && aW1.edge === 'out' &&
+                    aW2 && aW2.clip === 2 && aW2.edge === 'in' &&
+                    near(edW._originalMarkers[0], 2) && near(edW._originalMarkers[1], 10) &&
+                    edW._entries.length === 3 && tW1 === tW2,
+                    'anc1=' + JSON.stringify(aW1) + ' anc2=' + JSON.stringify(aW2) +
+                    ' orig=' + JSON.stringify(edW._originalMarkers) + ' t1=' + tW1 + ' t2=' + tW2);
+
+                // Esborrar un CLIP ha de reindexar les ancles (són índexs, no TCs).
+                edW._remapAnchorsAfterDelete(0);
+                ok('#F3/92 funcional: esborrar un clip REINDEXA les ancles (no apunten a un altre clip)',
+                    aW1.clip === -1 && aW1.edge === null &&
+                    aW2.clip === 1 && aW2.edge === 'in' &&
+                    near(aW1.orig, edW._originalMarkers[0]),
+                    'anc1=' + JSON.stringify(aW1) + ' anc2=' + JSON.stringify(aW2));
+
+                // El TC de destí i la identitat viatgen junts al fitxer de marcadors.
+                var jW = JSON.parse(edW._markersPayload());
+                ok('#F3/93 funcional: `_markersPayload` desa {num, clip, edge} + TC destí de cada marcador',
+                    jW && Array.isArray(jW.anchors) && jW.anchors.length === edW._markers.length &&
+                    jW.anchors.length === jW.markers.length &&
+                    jW.anchors[1] && jW.anchors[1].clip === 1 && jW.anchors[1].edge === 'in' &&
+                    jW.nextNum === edW._nextMarkerNum,
+                    'anchors=' + JSON.stringify(jW.anchors) + ' markers=' + JSON.stringify(jW.markers) +
+                    ' next=' + jW.nextNum);
+
+                // Borrar un marcador trau les TRES llistes (mai queden desalineades).
+                var nBefore = edW._markers.length;
+                edW._removeMarkerAt(0);
+                ok('#F3/94 funcional: `_removeMarkerAt` manté alineades les tres llistes',
+                    edW._markers.length === nBefore - 1 &&
+                    edW._markerAnchors.length === edW._markers.length &&
+                    edW._originalMarkers.length === edW._markers.length,
+                    'm=' + edW._markers.length + ' a=' + edW._markerAnchors.length + ' o=' + edW._originalMarkers.length);
+
+                // Un IN/OUT que trau clips ha de DESPLAÇAR les ancles (són índexs).
+                var edS = Object.create(SE2);
+                edS._markers = [5, 20]; edS._originalMarkers = [5, 20];
+                edS._markerAnchors = [
+                    { num: 1, clip: 0, edge: 'in', orig: 5 },
+                    { num: 2, clip: 3, edge: 'in', orig: 20 }
+                ];
+                edS._nextMarkerNum = 3;
+                edS._shiftAnchors(2, -1);          // un IN trau els 2 primers clips
+                var inOk = edS._markerAnchors[0].clip === -1 && edS._markerAnchors[1].clip === 1;
+                var edS2 = Object.create(SE2);
+                edS2._markers = [5]; edS2._originalMarkers = [5];
+                edS2._markerAnchors = [{ num: 1, clip: 3, edge: 'out', orig: 5 }];
+                edS2._nextMarkerNum = 2;
+                edS2._shiftAnchors(0, 3);          // un OUT deixa la taula en 3 clips
+                ok('#F3/95 funcional: `_shiftAnchors` remapea les ancles quan IN/OUT trauen clips',
+                    inOk && edS2._markerAnchors[0].clip === -1 && edS2._markerAnchors[0].edge === null,
+                    'IN=' + JSON.stringify(edS._markerAnchors) + ' OUT=' + JSON.stringify(edS2._markerAnchors));
+            } else {
+                ok('#F3/91 funcional: el warp partix del CLIP ORIGINAL (no del TC) i és idempotent', false,
+                    'SrtEditor=' + !!SE2 + ' apply=' + !!(SE2 && SE2._applyAllMarkers));
+                ok('#F3/92 funcional: esborrar un clip REINDEXA les ancles (no apunten a un altre clip)', false,
+                    'remap=' + !!(SE2 && SE2._remapAnchorsAfterDelete));
+                ok('#F3/93 funcional: `_markersPayload` desa {num, clip, edge} + TC destí de cada marcador', false,
+                    'payload=' + !!(SE2 && SE2._markersPayload));
+                ok('#F3/94 funcional: `_removeMarkerAt` manté alineades les tres llistes', false,
+                    'remove=' + !!(SE2 && SE2._removeMarkerAt));
+                ok('#F3/95 funcional: `_shiftAnchors` remapea les ancles quan IN/OUT trauen clips', false,
+                    'shift=' + !!(SE2 && SE2._shiftAnchors));
+            }
+
             // (BUG #190 · 2026-10-23) Quan 🧩/Ctrl+clic no troben SINT, el motiu REAL ha
+
             // d'arribar a la barra d'estat: abans deia «revisa rutas.subtitulosSinteticos»
             // i pareixia que el botó no responia (la carpeta estava bé; eixe dia només hi
             // havia sintetics d'un ALTRE programa i la guarda del #187 els descarta).

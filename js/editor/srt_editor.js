@@ -106,6 +106,21 @@
                               // d'una altra peça/sessió que comparteix el nom 'emergencia_EMERGENCIA')
         _markers: [],
         _originalMarkers: [],
+        // (2026-11-10 · BUG #258) IDENTITAT DELS MARCADORS. Cada marcador és un
+        // registre `{num, clip, edge, orig}` que diu «el EXTREM (inici/final) del
+        // clip `clip` del SRT ORIGINAL ha d'anar al TC de destí de _markers[i]»
+        // (com si l'usuari l'haguera arrossegat al timeline de l'editor). Abans
+        // el marcador era només un número en segons i el pareo original→actual es
+        // feia per ORDRE: dos marcadors bescanviats o un de lliure desplaçaven
+        // totes les anelles següents. `_markerAnchors` va alineat 1:1 amb
+        // `_markers` i `_originalMarkers` (mateix índex = mateix marcador).
+        //   num  → número identificador estable (no canvia al arrossegar)
+        //   clip → índex de `_originalEntries` (-1 = marcador lliure, sense ancla)
+        //   edge → 'in' | 'out' (extrem del clip ancla)
+        //   orig → segons ORIGINALS del marcador (derivat del clip/extrem; per als
+        //          lliures és l'única memòria de la seua posició original)
+        _markerAnchors: [],
+        _nextMarkerNum: 1,
         _dragIdx: -1,
         _didDrag: false,
         _suppressClick: false,
@@ -181,20 +196,17 @@
                 // 1) Borrar si el clic cau sobre un marcador existent (mateixa tol que el drag).
                 var idx = self._markerAtSec(rawSec);
                 if (idx >= 0) {
-                    var delSec = self._markers[idx];
-                    self._markers.splice(idx, 1);
-                    if (idx < self._originalMarkers.length) self._originalMarkers.splice(idx, 1);
+                    var delSec = self._removeMarkerAt(idx);
                     log("📝 SRT_EDIT: Marcador esborrat a " + delSec.toFixed(2) + "s");
                 } else {
-                    // 2) Crear marcador snap al límit del clip que ES VEU (taula actual),
-                    //    i mapejar-lo a l'espai ORIGINAL per a _originalMarkers.
-                    var snapActual = self._snapToSubtitleBoundary(rawSec, self._entries);
-                    var snapOriginal = self._actualToOriginal(snapActual);
-                    self._markers.push(snapActual);
-                    self._markers.sort(function (a, b) { return a - b; });
-                    self._originalMarkers.push(snapOriginal);
-                    self._originalMarkers.sort(function (a, b) { return a - b; });
-                    log("📝 SRT_EDIT: Marcador creat a " + snapActual.toFixed(2) + "s (orig " + snapOriginal.toFixed(2) + "s, clic " + rawSec.toFixed(2) + "s)");
+                    // 2) Crear marcador ANCLAT al límit del clip que ES VEU: guarda
+                    //    {num, clip, extrem, destí}. L'origen ix del clip ANCLA de
+                    //    `_originalEntries`, no del punt del clic (BUG #258).
+                    var near = self._nearestClipEdge(rawSec, self._entries);
+                    var anc = self._addMarker(rawSec, near);
+                    log("📝 SRT_EDIT: Marcador #" + (anc ? anc.num : '?') + " creat a " + (near ? near.time.toFixed(2) : rawSec.toFixed(2)) +
+                        "s → ancla clip " + (near ? (near.clip + 1) + '/' + near.edge : 'lliure') +
+                        " (orig " + (anc ? anc.orig.toFixed(2) : '-') + "s, clic " + rawSec.toFixed(2) + "s)");
                 }
                 self._isDirty = true;
                 self._applyAllMarkers();
@@ -501,6 +513,8 @@
             this._waveformPeaks = null;
             this._markers = [];
             this._originalMarkers = [];
+            this._markerAnchors = [];
+            this._nextMarkerNum = 1;
             // (BUG #257 · 2026-11-09) MARCADORS NOMÉS DEL SRT OFICIAL: el fitxer de
             // marcadors va lligat al NOM i a l'EMPREMTA del SRT oficial, però eixa
             // empremta no canvia al carregar un SINT (només la fixa el NORMAL, #224-b).
@@ -537,6 +551,11 @@
                     var shS = Number(this._sintShiftSec) || 0;
                     this._markers = (this._markers || []).map(function (m) { return Math.max(0, m + shS); });
                     this._originalMarkers = (this._originalMarkers || []).map(function (m) { return Math.max(0, m + shS); });
+                    // (BUG #258) La referència dels marcadors LLIURES viatja amb el
+                    // mateix desplaçament (les anclades es re-deriven del clip).
+                    (this._markerAnchors || []).forEach(function (aSh) {
+                        if (aSh && typeof aSh.orig === 'number' && isFinite(aSh.orig)) aSh.orig = Math.max(0, aSh.orig + shS);
+                    });
                     log("📝 SRT_EDIT: marcadors SINT desplaçats " + shS.toFixed(2) + "s (" + this._markers.length + ")");
                 }
                 if (wg && projFolder) {
@@ -1926,6 +1945,12 @@
                 originalEntries: P.cloneEntries(this._originalEntries),
                 markers: (this._markers || []).slice(),
                 originalMarkers: (this._originalMarkers || []).slice(),
+                // (BUG #258) La identitat dels marcadors (número + clip ancla +
+                // extrem) viatja amb la instantània de la vista.
+                markerAnchors: (this._markerAnchors || []).map(function (a) {
+                    return { num: a.num, clip: a.clip, edge: a.edge, orig: a.orig };
+                }),
+                nextMarkerNum: this._nextMarkerNum,
                 // (BUG #189) eixe desplaçament ja està aplicat a `entries` i `markers`:
                 // si la vista torna a ser la viva cal saber-lo per a desar-los bé.
                 sintShiftSec: Number(this._sintShiftSec) || 0,
@@ -1962,6 +1987,14 @@
             this._originalEntries = P.cloneEntries(v.originalEntries);
             this._markers = (v.markers || []).slice();
             this._originalMarkers = (v.originalMarkers || []).slice();
+            // (BUG #258) Les ancles de la vista es restauren alhora que els temps;
+            // si la instantània és antiga (sense `markerAnchors`) es normalitzen
+            // com a marcadors lliures.
+            this._markerAnchors = (v.markerAnchors || []).map(function (a) {
+                return { num: a.num, clip: a.clip, edge: a.edge, orig: a.orig };
+            });
+            this._nextMarkerNum = Number(v.nextMarkerNum) || 1;
+            this._normalizeAnchors();
             // (BUG #189) la instantania pot portar la taula SINT ja desplaçada: el
             // desplaçament viatja amb ella per a poder desar els marcadors a l'eix
             // del FITXER i no tornar-los a moure en el pròxim carregament.
@@ -2165,6 +2198,11 @@
                 });
                 this._entries = P.removeEntryAt(this._entries, kd);
                 this._originalEntries = P.removeEntryAt(this._originalEntries, kd);
+                // (BUG #258 · 2026-11-10) Les ancles dels marcadors són ÍNDEXS de
+                // `_originalEntries`: si s'esborra un clip, cal remapear-les o el
+                // marcador passaria a apuntar a un altre clip. Si el clip ancla era
+                // el que s'esborra, el marcador queda LLIURE amb la seua referència.
+                this._remapAnchorsAfterDelete(kd);
             }
             removed.sort(function (a, b) { return a.n - b.n; });   // missatge en ordre de taula
             this._clearSelection();
@@ -2568,6 +2606,20 @@
             var mk = baseView ? (baseView.markers || []) : (this._markers || []);
             this._markers = mk.slice();
             this._originalMarkers = mk.slice();   // warp identitat: res es mou per si sol
+            // (BUG #258 · 2026-11-10) La fusió REINDEXA la taula (clips sintetics
+            // inserits entremig): les ancles per índex deixarien d'apuntar al clip
+            // correcte. Es re-ancla cada marcador al borde MÉS PRÒXIM de la taula
+            // fusionada, que és la nova `_originalEntries`.
+            this._markerAnchors = [];
+            for (var iMk = 0; iMk < this._markers.length; iMk++) {
+                var nbMk = this._nearestClipEdge(this._markers[iMk], this._originalEntries);
+                this._markerAnchors.push({
+                    num: this._nextMarkerNum++,
+                    clip: nbMk ? nbMk.clip : -1,
+                    edge: nbMk ? nbMk.edge : null,
+                    orig: this._markers[iMk]
+                });
+            }
             this._kind = 'MOD';
             this._clearSelection();
             this._isDirty = true;
@@ -2884,6 +2936,15 @@
                 ctx.strokeStyle = '#000';
                 ctx.lineWidth = 1;
                 ctx.stroke();
+                // (BUG #258 · 2026-11-10) Número del marcador: és la seua IDENTITAT
+                // estable (no canvia al arrossegar-lo) i el que ix al log quan s'ancla
+                // al clip original.
+                var anc = (this._markerAnchors && this._markerAnchors[i]) || null;
+                if (anc && anc.num) {
+                    ctx.fillStyle = inDrag ? '#ffe89a' : 'rgba(255,210,77,0.95)';
+                    ctx.font = '8px monospace';
+                    ctx.fillText('#' + anc.num, x + 4, 20);
+                }
             }
         },
 
@@ -2911,6 +2972,9 @@
         /**
          * _snapToSubtitleBoundary: retorna el startSec/endSec més proper de les
          * entrades (subtítols) a 'sec'. Si no hi ha entrades, retorna 'sec' tal qual.
+         * (BUG #258 · 2026-11-10) Ja no s'usa en crear marcadors: ara
+         * `_nearestClipEdge` torna clip+extrem (la identitat). Es conserva com a
+         * utilitat de snap per a qui la necessite.
          * @param {number} sec - Posició (en temps de media)
          * @param {Array} [entriesRef] - Entrades de referència (per defecte: this._entries)
          */
@@ -2929,10 +2993,203 @@
         },
 
         /**
+         * _shiftAnchors: desplaça cap arrere els índexs d'ancla quan la taula
+         * PERD clips pel davant (p. ex. un IN que trau els primers) o pel darrere
+         * (un OUT). Les ancles que queden fora del tram passen a LLIURES amb la
+         * seua referència, mai apunten a un clip que no existix.
+         * @param {number} delta - clips que desapareixen del DAVANT (>= 0)
+         * @param {number} keepLen - longitud de la taula nova (-1 = sense límit)
+         */
+        _shiftAnchors: function (delta, keepLen) {
+            this._normalizeAnchors();
+            for (var i = 0; i < this._markerAnchors.length; i++) {
+                var a = this._markerAnchors[i];
+                if (!a || !(a.clip >= 0)) continue;
+                var nc = a.clip - (Number(delta) || 0);
+                if (nc < 0 || (keepLen >= 0 && nc >= keepLen)) {
+                    a.clip = -1;
+                    a.edge = null;
+                    a.orig = this._originalMarkers[i];
+                } else {
+                    a.clip = nc;
+                }
+            }
+        },
+
+        /**
+         * _nearestClipEdge: borde (INICI o FINAL) d'un clip de `entriesRef` més
+         * pròxim a `sec`.
+         * (BUG #258 · 2026-11-10) És l'àtom que convertix un clic o un destí
+         * arrossegat en una ANCLA de marcador {clip, edge}: el marcador no guarda
+         * «un segon del timeline», guarda «el final del clip 12 va ací».
+         * @param {number} sec - posició en segons (eix de la taula donada)
+         * @param {Array} [entriesRef] - taula de referència (per defecte: _entries)
+         * @returns {{clip:number, edge:string, time:number, dist:number}|null}
+         */
+        _nearestClipEdge: function (sec, entriesRef) {
+            var refs = entriesRef || this._entries || [];
+            var best = null;
+            for (var i = 0; i < refs.length; i++) {
+                var dIn = Math.abs(refs[i].startSec - sec);
+                if (!best || dIn < best.dist) best = { clip: i, edge: 'in', time: refs[i].startSec, dist: dIn };
+                var dOut = Math.abs(refs[i].endSec - sec);
+                if (dOut < best.dist) best = { clip: i, edge: 'out', time: refs[i].endSec, dist: dOut };
+            }
+            return best;
+        },
+
+        /**
+         * _normalizeAnchors: garantix que `_markerAnchors` i `_originalMarkers`
+         * tinguen la MATEIXA longitud que `_markers` (els marcadors que vinguen
+         * sense ancla —fitxers antics, tests, codi llegat— es tracten com a
+         * LLIURES i conserven la seua posició original).
+         */
+        _normalizeAnchors: function () {
+            if (!Array.isArray(this._markerAnchors)) this._markerAnchors = [];
+            if (!Array.isArray(this._originalMarkers)) this._originalMarkers = [];
+            var n = (this._markers || []).length;
+            if (this._markerAnchors.length > n) this._markerAnchors.length = n;
+            if (this._originalMarkers.length > n) this._originalMarkers.length = n;
+            for (var i = this._markerAnchors.length; i < n; i++) {
+                var o = (this._originalMarkers.length > i) ? this._originalMarkers[i] : this._markers[i];
+                this._markerAnchors.push({ num: this._nextMarkerNum++, clip: -1, edge: null, orig: o });
+            }
+            for (var j = this._originalMarkers.length; j < n; j++) this._originalMarkers.push(this._markers[j]);
+        },
+
+        /**
+         * _refreshOriginalFromAnchors: re-deriva `_originalMarkers` des de les
+         * ancles (`_originalEntries[clip].startSec|endSec`).
+         * (BUG #258) És el que fa que l'edició siga SEMPRE respecte del clip
+         * original i no acumule error: el destí (el que veu l'usuari) viu a
+         * `_markers`, però el punt de referència es recalcula des del clip.
+         * @returns {number} quants marcadors han canviat de referència
+         */
+        _refreshOriginalFromAnchors: function () {
+            var n = (this._markers || []).length;
+            if (!n || !Array.isArray(this._markerAnchors) || this._markerAnchors.length !== n) return 0;
+            var og = this._originalEntries || [];
+            var changed = 0;
+            for (var i = 0; i < n; i++) {
+                var a = this._markerAnchors[i];
+                if (!a) continue;
+                var v = null;
+                if (a.clip >= 0 && a.clip < og.length && (a.edge === 'in' || a.edge === 'out')) {
+                    v = (a.edge === 'out') ? og[a.clip].endSec : og[a.clip].startSec;
+                } else if (typeof a.orig === 'number' && isFinite(a.orig)) {
+                    v = a.orig;
+                }
+                if (v != null && Math.abs(v - this._originalMarkers[i]) > 0.000001) {
+                    this._originalMarkers[i] = v;
+                    changed++;
+                }
+            }
+            return changed;
+        },
+
+        /**
+         * _sortMarkers: ordena `_markers` pel TC de destí MANTENINT l'alineació
+         * amb `_originalMarkers` i `_markerAnchors` (bug clàssic: un `sort()`
+         * sols sobre `_markers` deixava les ancles aparellades amb un altre
+         * marcador).
+         */
+        _sortMarkers: function () {
+            this._normalizeAnchors();
+            var idx = [];
+            for (var i = 0; i < this._markers.length; i++) idx.push(i);
+            var self = this;
+            idx.sort(function (a, b) {
+                var d = self._markers[a] - self._markers[b];
+                return (d !== 0) ? d : (a - b);   // estable
+            });
+            var m = [], o = [], an = [];
+            for (var j = 0; j < idx.length; j++) {
+                m.push(this._markers[idx[j]]);
+                o.push(this._originalMarkers[idx[j]]);
+                an.push(this._markerAnchors[idx[j]]);
+            }
+            this._markers = m;
+            this._originalMarkers = o;
+            this._markerAnchors = an;
+            return this._markers;
+        },
+
+        /**
+         * _addMarker: crea un marcador AMB IDENTITAT.
+         * (BUG #258 · 2026-11-10) Un marcador = `{num, clip ancla, extrem, TC destí}`.
+         * El destí s'ajusta al borde de clip més pròxim (`_nearestClipEdge`) i
+         * l'origen es pren del clip ANCLA de `_originalEntries`, no del punt on
+         * ha clicat l'usuari: així el warp sempre partix d'una referència exacta.
+         * @param {number} destSec - posició (media) on es deixa el marcador
+         * @param {Object} [near] - resultat ja calculat de _nearestClipEdge
+         * @returns {Object|null} l'ancla creada
+         */
+        _addMarker: function (destSec, near) {
+            var nb = near || this._nearestClipEdge(destSec, this._entries);
+            var dest = (nb ? nb.time : destSec);
+            var anchor = { num: this._nextMarkerNum++, clip: -1, edge: null, orig: dest };
+            if (nb && nb.clip >= 0) {
+                anchor.clip = nb.clip;
+                anchor.edge = nb.edge;
+                var og = this._originalEntries || [];
+                if (nb.clip < og.length) {
+                    anchor.orig = (nb.edge === 'out') ? og[nb.clip].endSec : og[nb.clip].startSec;
+                }
+            }
+            if (!Array.isArray(this._markerAnchors)) this._markerAnchors = [];
+            if (!Array.isArray(this._originalMarkers)) this._originalMarkers = [];
+            this._markers.push(dest);
+            this._originalMarkers.push(anchor.orig);
+            this._markerAnchors.push(anchor);
+            this._sortMarkers();
+            return anchor;
+        },
+
+        /**
+         * _removeMarkerAt: esborra el marcador `idx` de les TRES llistes alhora
+         * (`_markers`, `_originalMarkers`, `_markerAnchors`).
+         * @returns {number} el TC de destí esborrat (o -1)
+         */
+        _removeMarkerAt: function (idx) {
+            if (!(idx >= 0) || idx >= (this._markers || []).length) return -1;
+            var t = this._markers[idx];
+            this._markers.splice(idx, 1);
+            if (idx < this._originalMarkers.length) this._originalMarkers.splice(idx, 1);
+            if (idx < this._markerAnchors.length) this._markerAnchors.splice(idx, 1);
+            return t;
+        },
+
+        /**
+         * _remapAnchorsAfterDelete: reindexa les ancles quan s'esborra el clip `kd`
+         * de `_originalEntries` (les ancles són ÍNDEXS, no TCs).
+         *  · ancla == kd  → el clip ancla desapareix: el marcador passa a LLIURE
+         *                   conservant la seua referència original (`orig`).
+         *  · ancla >  kd  → el clip s'ha desplaçat una posició cap arrere.
+         * @param {number} kd - índex esborrat
+         */
+        _remapAnchorsAfterDelete: function (kd) {
+            this._normalizeAnchors();
+            for (var i = 0; i < this._markerAnchors.length; i++) {
+                var a = this._markerAnchors[i];
+                if (!a || !(a.clip >= 0)) continue;
+                if (a.clip === kd) {
+                    a.clip = -1;
+                    a.edge = null;
+                    a.orig = this._originalMarkers[i];
+                } else if (a.clip > kd) {
+                    a.clip--;
+                }
+            }
+        },
+
+        /**
          * _actualToOriginal: Mapeja un punt de l'espai ACTUAL (el que es veu,
-         * _entries deformada pel warp) a l'espai ORIGINAL (_originalEntries).
+         * `_entries` deformada pel warp) a l'espai ORIGINAL (`_originalEntries`).
          * Per a límits de clip (IN/OUT) fa un mapatge precís clip-a-clip; per a
          * punts interiors fa servir la inversa lineal del warp com a fallback.
+         * (BUG #258 · 2026-11-10) Els marcadors ja NO passen per ací: el warp
+         * re-deriva la referència del clip ancla (`_refreshOriginalFromAnchors`).
+         * Es conserva com a utilitat d'inversió del warp.
          */
         _actualToOriginal: function (sec) {
             var orig = this._originalEntries || [];
@@ -3041,6 +3298,15 @@
             var P = window.FASTPASS_UI.Logic.SrtParser;
             var orig = this._originalEntries || [];
             if (orig.length === 0) { this._entries = []; return; }
+
+            // (BUG #258 · 2026-11-10) El punt de referència de cada marcador es
+            // re-deriva del CLIP ANCLA (`_originalEntries[clip].inicio|final`)
+            // abans de cap càlcul: mai d'una posició del timeline. Si les llistes
+            // no estan aparellades (dades antigues o tests), no es toca res i es
+            // manté el comportament anterior.
+            this._normalizeAnchors();
+            var nRef = this._refreshOriginalFromAnchors();
+            if (nRef) log("📝 SRT_EDIT: " + nRef + " marcador(s) re-anclats al clip original");
 
             var O = (this._originalMarkers || []).slice().sort(function (a, b) { return a - b; });
             var C = (this._markers || []).slice().sort(function (a, b) { return a - b; });
@@ -3329,12 +3595,30 @@
                 if (!sh) return src.slice();
                 return src.map(function (m) { return Math.round((Number(m) - sh) * 1000) / 1000; });
             };
+            // (BUG #258 · 2026-11-10) La IDENTITAT de cada marcador viatja amb ell:
+            // {num, clip ancla, extrem (in/out), orig}. `clip` és un ÍNDEX de
+            // `_originalEntries` (el SRT del fitxer), no un TC: en recarregar el
+            // mateix SRT el marcador torna a apuntar al MATEIX clip encara que
+            // altres marcadors hagen mogut la taula. `orig` només fa falta per als
+            // marcadors LLIURES (clip = -1).
+            this._normalizeAnchors();
+            var anchors = (this._markerAnchors || []).map(function (a) {
+                var o = Number(a && a.orig);
+                return {
+                    num: (a && isFinite(a.num)) ? Number(a.num) : 0,
+                    clip: (a && isFinite(a.clip)) ? Number(a.clip) : -1,
+                    edge: (a && (a.edge === 'in' || a.edge === 'out')) ? a.edge : null,
+                    orig: isFinite(o) ? (Math.round((o - sh) * 1000) / 1000) : null
+                };
+            });
             return JSON.stringify({
                 srtName: this._srtName,
                 srtFingerprint: this._srtFingerprint || '',
                 projectKey: this._projectKey || '',
                 markers: toFile(this._markers),
                 originalMarkers: toFile(this._originalMarkers),
+                anchors: anchors,
+                nextNum: this._nextMarkerNum,
                 updatedAt: new Date().toISOString()
             });
         },
@@ -3372,12 +3656,37 @@
                     // els marcadors antics ja no pertanyen a aquest contingut → es descarten.
                     var sameContent = !!(this._srtFingerprint && parsed && parsed.srtFingerprint && parsed.srtFingerprint === this._srtFingerprint);
                     if (sameSrt && sameContent && Array.isArray(parsed.markers) && sameProject) {
-                        this._markers = parsed.markers.filter(function (m) { return typeof m === 'number' && isFinite(m); });
-                        this._markers.sort(function (a, b) { return a - b; });
-                        var om = Array.isArray(parsed.originalMarkers) ? parsed.originalMarkers : parsed.markers;
-                        this._originalMarkers = om.filter(function (m) { return typeof m === 'number' && isFinite(m); });
-                        this._originalMarkers.sort(function (a, b) { return a - b; });
-                        if (this._markers.length > 0) log("📝 SRT_EDIT: " + this._markers.length + " marcadors restaurats (local, mateixa sessió i mateix contingut SRT)");
+                        // (BUG #258 · 2026-11-10) Es restaura la IDENTITAT de cada
+                        // marcador (num + clip ancla + extrem) al costat del seu
+                        // TC de destí. Si el fitxer és antic i no porta `anchors`,
+                        // `_normalizeAnchors()` els tracta com a LLIURES i es
+                        // comporten com abans.
+                        var mk = [], om2 = [], an = [];
+                        var srcMk = parsed.markers;
+                        var anch = Array.isArray(parsed.anchors) ? parsed.anchors : [];
+                        for (var iR = 0; iR < srcMk.length; iR++) {
+                            var vC = Number(srcMk[iR]);
+                            if (!isFinite(vC)) continue;
+                            var vO = Number(Array.isArray(parsed.originalMarkers) ? parsed.originalMarkers[iR] : vC);
+                            if (!isFinite(vO)) vO = vC;
+                            var aR = anch[iR] || null;
+                            mk.push(vC);
+                            om2.push(vO);
+                            an.push({
+                                num: (aR && isFinite(aR.num)) ? Number(aR.num) : 0,
+                                clip: (aR && isFinite(aR.clip)) ? Number(aR.clip) : -1,
+                                edge: (aR && (aR.edge === 'in' || aR.edge === 'out')) ? aR.edge : null,
+                                orig: (aR && isFinite(Number(aR.orig))) ? Number(aR.orig) : vO
+                            });
+                        }
+                        this._markers = mk;
+                        this._originalMarkers = om2;
+                        this._markerAnchors = an;
+                        this._nextMarkerNum = (isFinite(Number(parsed.nextNum)) && Number(parsed.nextNum) > 0) ? Number(parsed.nextNum) : 1;
+                        this._sortMarkers();
+                        this._refreshOriginalFromAnchors();
+                        var nAnc = this._markerAnchors.filter(function (a) { return a && a.clip >= 0; }).length;
+                        if (this._markers.length > 0) log("📝 SRT_EDIT: " + this._markers.length + " marcadors restaurats (" + nAnc + " anclats a clip, " + (this._markers.length - nAnc) + " lliures)");
                     } else if (parsed && (parsed.srtName || parsed.projectKey || parsed.srtFingerprint)) {
                         // Restes d'un altre projecte o d'un SRT anterior amb el mateix nom
                         // (p. ex. 'emergencia_EMERGENCIA' regenerat per a una altra peça):
@@ -3441,17 +3750,38 @@
             var newStart = (this._axisOrigin || 0) + PAD_START_SEC;
             log("📝 SRT_EDIT: IN → primer clip a media " + newStart.toFixed(2) + "s (padding " + PAD_START_SEC.toFixed(2) + "s)");
             this._entries = window.FASTPASS_UI.Logic.SrtParser.applyTrimIn(this._entries, targetIdx, newStart);
-            // Marcadors: mateix offset que les entrades + àncora al primer clip
+            // Marcadors: mateix offset que les entrades + ancla al primer clip.
+            // (BUG #258 · 2026-11-10) Del marcador se'n mou NOMÉS el destí: les
+            // ancles (número + clip + extrem) viatgen intactes, i els marcadors que
+            // cauen fora de la peça s'emporten la seua ancla.
             var offset = newStart - originalStart;
-            this._markers = this._markers.map(function (m) { return m + offset; }).filter(function (m) { return m >= 0.39; });
+            this._normalizeAnchors();
+            var mkIn = [], omIn = [], anIn = [];
+            for (var iIn = 0; iIn < this._markers.length; iIn++) {
+                var dIn2 = this._markers[iIn] + offset;
+                if (dIn2 < 0.39) continue;
+                mkIn.push(dIn2);
+                omIn.push(this._originalMarkers[iIn] + offset);
+                anIn.push(this._markerAnchors[iIn]);
+            }
+            this._markers = mkIn;
+            this._originalMarkers = omIn;
+            this._markerAnchors = anIn;
+            // (BUG #258) L'IN trau els primers clips: els índexs d'ancla es desplacen
+            // (o passen a lliures si el clip ancla ja no hi és).
+            this._shiftAnchors(targetIdx, -1);
+            this._originalEntries = this._entries.map(function (e) { return { index: e.index, timeStr: e.timeStr, texts: e.texts.slice(), startSec: e.startSec, endSec: e.endSec }; });
             if (this._entries.length > 0) {
                 var first = this._entries[0].startSec;
                 var exists = this._markers.some(function (m) { return Math.abs(m - first) < 0.05; });
-                if (!exists) this._markers.push(first);
-                this._markers.sort(function (a, b) { return a - b; });
+                if (!exists) {
+                    this._markers.push(first);
+                    this._originalMarkers.push(this._originalEntries[0].startSec);
+                    this._markerAnchors.push({ num: this._nextMarkerNum++, clip: 0, edge: 'in', orig: this._originalEntries[0].startSec });
+                }
+                this._sortMarkers();
             }
-            this._originalEntries = this._entries.map(function (e) { return { index: e.index, timeStr: e.timeStr, texts: e.texts.slice(), startSec: e.startSec, endSec: e.endSec }; });
-            this._originalMarkers = this._markers.slice();
+            this._refreshOriginalFromAnchors();
             // (#132) IN fixat → l'eix es cenyeix al tram de la peça (marge esquerre) i
             // deixarà de dependre de la llargada del clip carregat.
             this._setEditWindow();
@@ -3467,17 +3797,25 @@
             this._entries = window.FASTPASS_UI.Logic.SrtParser.applyTrimOut(this._entries, targetIdx);
             // Marcador al final del darrer clip: deixa ben definit el final dels
             // subtítols encara que s'editen marcadors intermedis.
+            this._normalizeAnchors();
+            // (BUG #258) L'OUT elimina els clips del darrere: les ancles que
+            // apuntaven a eixos clips passen a LLIURES amb la seua referència.
+            this._shiftAnchors(0, this._entries.length);
+            this._originalEntries = this._entries.map(function (e) { return { index: e.index, timeStr: e.timeStr, texts: e.texts.slice(), startSec: e.startSec, endSec: e.endSec }; });
             if (this._entries.length > 0) {
-                var finalSec = this._entries[this._entries.length - 1].endSec;
+                var lastIdxO = this._entries.length - 1;
+                var finalSec = this._entries[lastIdxO].endSec;
                 var exists = this._markers.some(function (m) { return Math.abs(m - finalSec) < 0.05; });
                 if (!exists) {
+                    // (BUG #258) El marcador final s'ANCLA al final del darrer clip.
                     this._markers.push(finalSec);
-                    this._markers.sort(function (a, b) { return a - b; });
-                    log("📝 SRT_EDIT: OUT → marcador final afegit a " + finalSec.toFixed(2) + "s");
+                    this._originalMarkers.push(this._originalEntries[lastIdxO].endSec);
+                    this._markerAnchors.push({ num: this._nextMarkerNum++, clip: lastIdxO, edge: 'out', orig: this._originalEntries[lastIdxO].endSec });
+                    log("📝 SRT_EDIT: OUT → marcador final afegit a " + finalSec.toFixed(2) + "s (ancla clip " + (lastIdxO + 1) + "/out)");
                 }
+                this._sortMarkers();
             }
-            this._originalEntries = this._entries.map(function (e) { return { index: e.index, timeStr: e.timeStr, texts: e.texts.slice(), startSec: e.startSec, endSec: e.endSec }; });
-            this._originalMarkers = this._markers.slice();
+            this._refreshOriginalFromAnchors();
             // (#132) OUT fixat → finestra d'edició = [inici de la peça − marge, OUT + marge dret].
             this._setEditWindow();
             this._clearSelection(); this._isDirty = true; this.render();
@@ -3504,11 +3842,20 @@
             var curDur = lastOut - firstIn, newDur = cti - firstIn;
             if (curDur > 0 && newDur > 0) {
                 var ratio = newDur / curDur;
-                this._markers = this._markers.map(function (m) { return firstIn + (m - firstIn) * ratio; });
-                this._originalMarkers = this._originalMarkers.map(function (m) { return firstIn + (m - firstIn) * ratio; });
+                var scaleM = function (m) { return firstIn + (m - firstIn) * ratio; };
+                this._normalizeAnchors();
+                this._markers = this._markers.map(scaleM);
+                this._originalMarkers = this._originalMarkers.map(scaleM);
+                // (BUG #258) Els marcadors LLIURES guarden la seua referència a
+                // `orig`; els anclats es re-deriven del clip escalat (més avall).
+                for (var iSc = 0; iSc < this._markerAnchors.length; iSc++) {
+                    var aSc = this._markerAnchors[iSc];
+                    if (aSc && typeof aSc.orig === 'number' && isFinite(aSc.orig)) aSc.orig = scaleM(aSc.orig);
+                }
             }
 
             this._originalEntries = this._entries.map(function (e) { return { index: e.index, timeStr: e.timeStr, texts: e.texts.slice(), startSec: e.startSec, endSec: e.endSec }; });
+            this._refreshOriginalFromAnchors();
             this._clearSelection(); this._isDirty = true; this.render();
             this._persistMarkers();
             getUtils().status("AJUSTAT: " + this._entries.length + " entrades", "exito");
@@ -3721,6 +4068,8 @@
             });
             this._markers = [];
             this._originalMarkers = [];
+            this._markerAnchors = [];
+            this._nextMarkerNum = 1;
             this._dragIdx = -1;
             this._isDirty = false;
             this._clearSelection();
@@ -3822,6 +4171,7 @@
             pas(function () { self._clearEditWindow(); });   // (#132)
             pas(function () {
                 self._markers = []; self._originalMarkers = []; self._dragIdx = -1;
+                self._markerAnchors = []; self._nextMarkerNum = 1;
                 self._lastCtiSec = -1; self._lastLocalT = -1; self._lastLocalPx = -1;
                 self._pendingSeek = null;
             });

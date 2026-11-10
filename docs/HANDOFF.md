@@ -8,7 +8,7 @@
 > **Un sol handoff.** Prohibit tornar a crear diaris a `.roo/`, `plans/HANDOFF_*` o llistes de
 > pendents a `INFO/` (històric fusionat a [`docs/archive/`](archive/), 2026-11-06).
 
-**Últim traspàs:** 2026-11-09 · **Versió del codi:** 0.9.8 · **Branca:** `main` neta (= `origin/main`, sense ahead/behind)
+**Últim traspàs:** 2026-11-10 · **Versió del codi:** 0.9.8 · **Branca:** `main` (commit local `b282ac9` + el del #258, **sense push**: `git-remote-https` ix 128 en este equip)
 
 ---
 
@@ -17,7 +17,7 @@
 | Què | Valor |
 |---|---|
 | Versió de l'extensió | **0.9.8** a `CSXS/manifest.xml` (bundle + panell), títol d'`index.html`, `package.json` |
-| Validació vigent | `ALL GREEN \| setup 35/35 \| js 65/65 \| smoke 1015/1015 \| dead 0 \| jsx intacte` |
+| Validació vigent | `ALL GREEN \| setup 35/35 \| js 65/65 \| smoke 1027/1027 \| dead 0 \| jsx intacte` |
 | `.jsx` | **0 fitxers tocats** en esta tanda (segell de `check_all` intacte) |
 | Branca | `main` net, sense ahead/behind |
 | Git | `E:\PortableGit\bin\git.exe` (**no** està al `PATH`) |
@@ -134,6 +134,19 @@
    `srt_editor.js?v=94`, `flow_srt.js?v=21` · proves `#F3/83`–`#F3/88` (una d'elles funcional amb
    `cep.fs` simulat) · **smoke 1021/1021**. Pendent de validar en viu: prémer ♻️ RESET amb un SINT
    obert i comprovar que a la carpeta del projecte no hi queda cap `fastpass_srt_markers_*`.
+14. **#258 · Els marcadors s'anclen al CLIP ORIGINAL** — report de l'usuari: «los marcadores se
+    referencian solo al timeline … deberían ir referenciados al clip en el fichero original».
+    El marcador era només un número en segons i el pareo original→actual es feia **per orde**
+    (`k = min(O,C)`), així que un marcador creat enmig d'un clip desplaçava totes les anelles
+    següents (error acumulatiu). Ara cada marcador és `{num, clip ancla, edge in/out, orig}` a
+    **`_markerAnchors`** (alineat 1:1 amb `_markers`/`_originalMarkers`):
+    `_nearestClipEdge` (l'extrem del clip, no el TC del clic), `_addMarker`, `_sortMarkers`
+    (ordena les tres llistes alhora), `_removeMarkerAt`, `_remapAnchorsAfterDelete` (esborrar un
+    clip reindexa les ancles) i `_refreshOriginalFromAnchors`, que `_applyAllMarkers` crida abans
+    de cada warp → **idempotent**. `_markersPayload`/`_restoreMarkers` guarden i tornen `anchors`
+    + `nextNum` (un JSON vell sense `anchors` es tracta com a marcadors lliures). També adaptats
+    `applyIn`/`applyOut`/`applyAdjust`, `mergeSyntheticGaps`, la instantània de vista i el RESET.
+    `srt_editor.js?v=95` · proves `#F3/89`–`#F3/94` · **smoke 1027/1027**.
 
 
 ## 3 · Com es treballa ací (resum operatiu)

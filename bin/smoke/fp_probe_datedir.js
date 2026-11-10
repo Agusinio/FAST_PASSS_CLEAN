@@ -201,11 +201,11 @@
             srcMp.indexOf('MainButton._setupContext()') === -1);
 
         var idx = await readRepo('index.html');
-        ok('#DIR/15 index.html: cache-busts del #220 (mainButton 50 · chyrons 103 · graphics 27 · markers 70 · mp4 8 · render 40 · srt 94)',
+        ok('#DIR/15 index.html: cache-busts del #220 (mainButton 50 · chyrons 103 · graphics 27 · markers 70 · mp4 8 · render 40 · srt 95)',
             /flow_mainButton\.js\?v=51/.test(idx) && /flow_chyrons\.js\?v=104/.test(idx) &&
             /flow_graphics\.js\?v=27/.test(idx) && /flow_markers\.js\?v=70/.test(idx) &&
             /flow_mp4\.js\?v=8/.test(idx) &&
-            /flow_render\.js\?v=40/.test(idx) && /srt_editor\.js\?v=94/.test(idx),
+            /flow_render\.js\?v=40/.test(idx) && /srt_editor\.js\?v=95/.test(idx),
             (idx.match(/flow_mainButton\.js\?v=\d+/) || '') + ' ' +
             (idx.match(/flow_chyrons\.js\?v=\d+/) || '') + ' ' +
             (idx.match(/flow_graphics\.js\?v=\d+/) || '') + ' ' +
