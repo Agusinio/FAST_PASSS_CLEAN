@@ -1605,22 +1605,63 @@
                 this._wfMediaEnd = isFinite(wfEnd) ? wfEnd : 0;
                 // (BUG #223, 06/11) L'EIX és la MEDIA QUE CAU AL TL 0, no el mínim
                 // inPoint de tots els clips. `segs` ve ordenat per pista i inici de
-                // timeline, així que `segs[0]` és el clip que ocupa el TL 0 i el seu
+                // timeline, així que el clip de referència és el primer de V1 i el seu
                 // `m − s` és la media d'eixe instant. Amb el mínim inPoint, una peça
                 // residual del mateix MP4 col·locada més endavant (retalls o
                 // «Repartir») baixava l'eix i separava els subtítols —que viuen en
                 // media— de l'inici de la WF: eixia un buit sense clips al davant.
-                var axisTl0 = segs.length ? (segs[0].m - segs[0].s) : NaN;
+                // (BUG #262, 10/11) PERÒ el primer clip de V1 pot NO ser el del MP4: en
+                // el fallback 'v1' (el tag no ha coincidit amb cap `projectItem`) `segs`
+                // porta TOTS els clips de V1, i un rètol o un altre material col·locat al
+                // principi donava un `m − s` d'un altre fitxer. En tallar o trimear V1 a
+                // mitjan edició eixe clip passava a ser el primer → l'eix es movia i la WF
+                // i els subtítols (que viuen en media del MP4) deixaven de quadrar amb el
+                // clip, ni recarregant el SRT. Ara, quan el tag no ha filtrat, es tria
+                // abans el MATERIAL de referència (el nom que suma més durada de timeline
+                // a TOT el mapa: el MP4) i només després es mira la pista.
+                var refName = '';
+                if (parsed.mode !== 'tag' && segs.length > 1) {
+                    var durByName = {}, bestDur = -1;
+                    for (var ab = 0; ab < segs.length; ab++) {
+                        var nmB = segs[ab].n || '';
+                        durByName[nmB] = (durByName[nmB] || 0) + (segs[ab].e - segs[ab].s);
+                        if (durByName[nmB] > bestDur) { bestDur = durByName[nmB]; refName = nmB; }
+                    }
+                    log("📝 SRT_EDIT: mode=" + parsed.mode + " → material de referència = \"" +
+                        refName + "\" (" + bestDur.toFixed(1) + "s de timeline; " +
+                        "el tag no ha filtrat el mapa per nom)");
+                }
+                var pool = [];
+                for (var am = 0; am < segs.length; am++) {
+                    if (!refName || (segs[am].n || '') === refName) pool.push(segs[am]);
+                }
+                if (!pool.length) pool = segs;
+                // V1 manar: és on viu el MP4. Si el material de referència NO hi és (MP4 en
+                // una altra pista), `onV1` queda buit i es respecta la pista on estiga.
+                var axisPool = pool, onV1 = [];
+                for (var av = 0; av < pool.length; av++) { if (pool[av].v === 0) onV1.push(pool[av]); }
+                if (onV1.length) axisPool = onV1;
+                // El clip que ocupa el TL 0; si el bloc arranca més enllà del 0, el primer
+                // per inici de timeline (`axisPool` ja ve ordenat per `s`).
+                var axisSeg = axisPool.length ? axisPool[0] : null;
+                for (var ad = 0; ad < axisPool.length; ad++) {
+                    if (axisPool[ad].s <= 0.02) { axisSeg = axisPool[ad]; break; }
+                }
+                var axisTl0 = axisSeg ? (axisSeg.m - axisSeg.s) : NaN;
                 this._axisOrigin = isFinite(axisTl0) ? axisTl0 : this._wfMediaStart;
                 // DIAGNÒSTIC de l'origen del mapa: 'tag' = clips del MP4 triats pel nom;
                 // 'v1' = fallback a la pista V1 (el tag no ha coincidit amb cap clip);
                 // 'all' = totes les pistes (pitjor cas: l'eix pot baixar a 0 i el clip
                 // del MP4 sortir desplaçat amb un buit gran al davant).
                 log("📝 SRT_EDIT: Mapa de clips mode=" + (parsed.mode || "?") + " tag=\"" + tag +
-                    "\" → _axisOrigin=" + this._axisOrigin.toFixed(2) + "s (" + segs.length + " segs)");
+                    "\" → _axisOrigin=" + this._axisOrigin.toFixed(2) + "s (eix: " +
+                    (axisSeg ? "V" + (axisSeg.v + 1) + " tl=" + axisSeg.s.toFixed(2) + "s ← media " +
+                        axisSeg.m.toFixed(2) + "s \"" + (axisSeg.n || "?") + "\"" : "cap clip") +
+                    " · " + segs.length + " segs)");
                 if (parsed.mode && parsed.mode !== 'tag') {
                     log("⚠️ SRT_EDIT: cap clip del projecte conté el tag \"" + tag + "\" → mapa per " +
                         (parsed.mode === 'v1' ? "la pista V1" : "TOTES les pistes") +
+                        (refName ? " (material de referència: \"" + refName + "\")" : "") +
                         ". Si el timeline de l'editor surt desplaçat, revisa el nom del MP4 al projecte.");
                 }
                 // Log diagnòstic quan canvia el mapa (o primer cop): resum de medias + primers segments

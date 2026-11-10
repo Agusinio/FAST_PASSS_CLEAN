@@ -419,9 +419,9 @@
             ok('#F3/24 index: 🧩 a la fila SUBTÍTOLS i 🗑 RETIRAT (Supr ho fa)',
                 html.indexOf('btnSrtDel') === -1 && /id="btnSrtFill"/.test(html) &&
                 /Ctrl\+clic = SUBTÍTOLS SINTÈTICS/.test(html));
-            ok('#F3/25 index: cache-busts F3 (srt_editor 96, flow_srt 21, main ' +
+            ok('#F3/25 index: cache-busts F3 (srt_editor 98, flow_srt 21, main ' +
                 '109, Scanner 27, Srt_Logic 26, Config 46)',
-                /srt_editor\.js\?v=97/.test(html) && /flow_srt\.js\?v=21/.test(html) &&
+                /srt_editor\.js\?v=98/.test(html) && /flow_srt\.js\?v=21/.test(html) &&
                 /main\.js\?v=109/.test(html) && /Scanner\.js\?v=27/.test(html) &&
                 /10_Srt_Logic\.js\?v=27/.test(html) && /11_Configuracio\.js\?v=46/.test(html));
 
@@ -484,14 +484,15 @@
             // era el MÍNIM inPoint dels clips del MP4 —una peça residual del mateix
             // MP4 col·locada més endavant el baixa— i (b) la referència venia del
             // manifest (`worldSecMediaStart`) i no del clip que ocupa el TL 0.
-            ok('#F3/70 editor: eix = media que cau al TL 0 (segs[0].m − segs[0].s) + reancoratge amb traça SRT_SYNC',
-                /axisTl0 = segs\.length \? \(segs\[0\]\.m - segs\[0\]\.s\) : NaN/.test(edt) &&
+            ok('#F3/70 editor: eix = media que cau al TL 0 (axisSeg.m − axisSeg.s) + reancoratge amb traça SRT_SYNC',
+                /var axisSeg = axisPool\.length \? axisPool\[0\] : null;/.test(edt) &&
+                /var axisTl0 = axisSeg \? \(axisSeg\.m - axisSeg\.s\) : NaN;/.test(edt) &&
                 /worldStart - mediaTl0/.test(edt) &&
                 /Math\.abs\(refTl - baseMediaStart\) > 0\.25/.test(edt) &&
                 /🔗 SRT_SYNC/.test(edt) &&
                 /_refreshWaveformSegments\(\)\) === true/.test(edt) &&
                 /return true;\s*\} catch\(e\) \{ return false; \}/.test(edt),
-                'tl0=' + /axisTl0 = segs\.length/.test(edt) + ' * reanc=' + /Math\.abs\(refTl/.test(edt) +
+                'tl0=' + /var axisTl0 = axisSeg \?/.test(edt) + ' * reanc=' + /Math\.abs\(refTl/.test(edt) +
                 ' * log=' + /🔗 SRT_SYNC/.test(edt) + ' * fresc=' + /=== true/.test(edt));
 
             // (2026-10-23 · BUG #186) EXPORTACIÓ NO DESTRUCTIVA: abans s'esborraven TOTS
@@ -1274,6 +1275,85 @@
                     /fromSint \? st\.selSint : st\.sel/.test(ed260));
             } catch (e260b) {
                 ok('#F3/101-102 editor (#260): sense excepcio', false, e260b && (e260b.message + ' | ' + e260b.stack));
+            }
+
+            // ═══ (BUG #262 · 2026-11-10) L'EIX DEL MAPA VEN DEL CLIP DEL MP4 A V1 ═══
+            // Report de l'usuari: «després de retallar o trimear V1 a mitjan edició, els
+            // subtítols i la WF es desplacen i ja no quadren amb el habla, encara que
+            // recarregue el SRT». QUÈ PASSAVA: si el tag del MP4 no coincidia amb cap
+            // `projectItem` (`mode='v1'`), `segs` portava TOTS els clips de V1 i l'eix
+            // (`_axisOrigin` = m − s del PRIMER clip) podia caure en un rètol o en un
+            // altre material —i quin clip ocupa primer la pista CANVIA quan es talla o es
+            // trimea—: la WF i els subtítols, que viuen en media del MP4, es desplaçaven
+            // respecte del clip. ARA: amb el tag no filtrat, l'eix es pren del MATERIAL
+            // DOMINANT de V1 (el nom que suma més durada), i del clip que ocupa el TL 0.
+            try {
+                var SE262 = UI.Editor && UI.Editor.SrtEditor;
+                var utilsPrev262 = UI.Utils;
+                function ed262(json262) {
+                    var e262 = Object.create(SE262);
+                    e262._waveformMediaTag = 'TNM_V3';
+                    UI.Utils = {
+                        log: function () { },
+                        callJSX: function () { return Promise.resolve(JSON.stringify(json262)); }
+                    };
+                    return e262;
+                }
+                // (1) mode 'v1' amb un rètol al davant de V1 (m−s = 0,5 s) i el MP4 darrere:
+                //     l'eix ha de ser 17 s (el MP4), no 0,5 s (el rètol).
+                var e262a = ed262({
+                    seqName: 'SEQ', mode: 'v1', segs: [
+                        { v: 0, s: 0, e: 5, m: 0.5, m2: 5.5, n: 'ROTUL_ENTRADA' },
+                        { v: 0, s: 0, e: 60, m: 17, m2: 77, n: 'TNM_V3' },
+                        { v: 0, s: 60, e: 200, m: 77, m2: 217, n: 'TNM_V3' }
+                    ]
+                });
+                var ok262a = await e262a._refreshWaveformSegments();
+                ok("#F3/107 funcional (#262): mode 'v1' → l'eix ven del MATERIAL DOMINANT de V1, no del primer clip (rètol)",
+                    ok262a === true && near(e262a._axisOrigin, 17),
+                    'ok=' + ok262a + ' axis=' + (e262a && e262a._axisOrigin));
+                // (2) mode 'tag': el bloc comença a tl=30 s i el mateix MP4 té un tros a V2
+                //     amb inPoint més baix (3 s). L'eix ha de ser m − s del clip de V1 que
+                //     ocupa el TL 0 (47 − 30 = 17), ni el mínim inPoint (3) ni el del TL 0.
+                var e262b = ed262({
+                    seqName: 'SEQ', mode: 'tag', segs: [
+                        { v: 1, s: 0, e: 40, m: 3, m2: 43, n: 'TNM_V3' },
+                        { v: 0, s: 30, e: 90, m: 47, m2: 107, n: 'TNM_V3' },
+                        { v: 0, s: 90, e: 200, m: 107, m2: 217, n: 'TNM_V3' }
+                    ]
+                });
+                var ok262b = await e262b._refreshWaveformSegments();
+                ok('#F3/108 funcional (#262): mode tag → eix = m − s del primer clip del MP4 a V1 (ni mínim inPoint ni V2)',
+                    ok262b === true && near(e262b._axisOrigin, 17),
+                    'ok=' + ok262b + ' axis=' + (e262b && e262b._axisOrigin));
+                UI.Utils = utilsPrev262;
+                // (3) mode 'v1' amb el MP4 a V2 i un rètol a V1: manar el MATERIAL, no la
+                //     pista → eix del MP4 (17 s), no del rètol (0,5 s).
+                var e262c = ed262({
+                    seqName: 'SEQ', mode: 'v1', segs: [
+                        { v: 0, s: 0, e: 6, m: 0.5, m2: 6.5, n: 'ROTUL_ENTRADA' },
+                        { v: 1, s: 0, e: 120, m: 17, m2: 137, n: 'TNM_V3' },
+                        { v: 1, s: 120, e: 240, m: 137, m2: 257, n: 'TNM_V3' }
+                    ]
+                });
+                var ok262c = await e262c._refreshWaveformSegments();
+                ok("#F3/110 funcional (#262): si el MP4 no és a V1, l'eix no es queda amb el rètol de V1",
+                    ok262c === true && near(e262c._axisOrigin, 17),
+                    'ok=' + ok262c + ' axis=' + (e262c && e262c._axisOrigin));
+                UI.Utils = utilsPrev262;
+                // (4) Guarda estàtica: el codi no torna a l'eix «primer clip de segs».
+                var edSrc262 = noComments(await readRepo('js/editor/srt_editor.js'));
+                ok('#F3/109 estàtic (#262): `_refreshWaveformSegments` filtra material de referència + V1 abans de l\'eix',
+                    /var refName = '';/.test(edSrc262) &&
+                    /if \(parsed\.mode !== 'tag' && segs\.length > 1\) \{/.test(edSrc262) &&
+                    /if \(!refName \|\| \(segs\[am\]\.n \|\| ''\) === refName\) pool\.push\(segs\[am\]\);/.test(edSrc262) &&
+                    /var axisPool = pool, onV1 = \[\];/.test(edSrc262) &&
+                    /if \(onV1\.length\) axisPool = onV1;/.test(edSrc262) &&
+                    /if \(axisPool\[ad\]\.s <= 0\.02\) \{ axisSeg = axisPool\[ad\]; break; \}/.test(edSrc262) &&
+                    /var axisTl0 = axisSeg \? \(axisSeg\.m - axisSeg\.s\) : NaN;/.test(edSrc262) &&
+                    !/var axisTl0 = segs\.length \? \(segs\[0\]\.m - segs\[0\]\.s\) : NaN;/.test(edSrc262));
+            } catch (e262) {
+                ok('#F3/107-110 eix del mapa (#262): sense excepcio', false, e262 && (e262.message + ' | ' + e262.stack));
             }
 
         } catch (eC) {
