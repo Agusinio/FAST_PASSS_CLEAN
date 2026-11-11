@@ -303,7 +303,13 @@
                 } catch (eFv) {
                     log('⚠️ [filtrarVermells] ' + eFv.message, 'WARN');
                 }
-                var raw = await callJSX('Markers.placeByPrefixes(\'' + JSON.stringify(safePlacements) + '\')');
+                // (2026-11-11 · BUG #263) El payload creua el pont com a literal ES3: si no
+                // s'escapa, les comilles dobles d'un titol (`10 - PP "RECONSTRUCCIO NACIONAL"`)
+                // es des-escriuen dins del literal i el `JSON.parse` del JSX peta. F2 sencer
+                // tornava `ERROR JSX: JSON.parse` i no col·locava CAP marcador (10i/10/11i).
+                // `getUtils().escape` dobla les barres invertides (i passa el no-ASCII a \uXXXX),
+                // aixi el JSON arriba intacte a ExtendScript.
+                var raw = await callJSX('Markers.placeByPrefixes(\'' + getUtils().escape(JSON.stringify(safePlacements)) + '\')');
                 if (!raw || raw === '[]' || raw === '{}') {
                     return { placed: 0, moved: 0, created: 0 };
                 }

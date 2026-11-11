@@ -636,6 +636,56 @@ window.__runTests = async function () {
     // Cas real TNM_V1 26/10 (MARCADORS_2026-10-27_1330): `01 TE-1`@35,82 i `01 TD-1`@37,59
     // s'ancoraven a `01dir`@32,28 → dins de la connexió en directe. El pare de plató és
     // `01BT`@0,00 (DonaPas) → +10/+15 s. `_resolveGraphicParents` és pura (sense JSX).
+    // ── 12c-bis. BUG #263 (2026-11-11): un títol amb comilles dobles trencava F2 ──
+    // Cas real TNV_V1 (bloc del 10/11) · `FASTPASS.log` 11/11 08:44:52: l'ítem
+    // `10 - PP "RECONSTRUCCIÓ NACIONAL"` viatjava dins del literal ES3 sense
+    // escapar; el motor des-escrivia `\"` a `"`, el `JSON.parse` del JSX petava i
+    // F2 tornava `🔴 ERROR JSX: JSON.parse` amb 0 marcadors col·locats (es perderen
+    // 10i, 10 i 11i). Ara el payload passa per `Utils.escape` (barra doblada).
+    ph('12c-bis-bug263-payload-escapat');
+    var u263 = window.FASTPASS_UI.Utils;
+    var savedCJS263 = u263.callJSX;
+    var savedFrozen263 = FM._frozen;
+    var literal263 = null;
+    var vistos263 = null;
+    FM._frozen = {};
+    u263.callJSX = function (script) {
+        var s = String(script);
+        if (/^Markers\.get\(\)$/.test(s)) return Promise.resolve('[]');
+        var m = /^Markers\.placeByPrefixes\('([\s\S]*)'\)$/.exec(s);
+        if (!m) return Promise.resolve('ERR:SENSE_PAYLOAD');
+        literal263 = m[1];
+        var arr263;
+        try { arr263 = JSON.parse(window.__unesc(m[1])); }
+        catch (eP263) {
+            return Promise.resolve(JSON.stringify({ placed: 0, moved: 0, created: 0, error: eP263.message }));
+        }
+        vistos263 = arr263;
+        return Promise.resolve(JSON.stringify({ placed: arr263.length, moved: 0, created: arr263.length }));
+    };
+    var res263 = await FM._safePlaceByPrefixes([
+        { prefix: '10i', timeSec: 0, comment: '10i - Intro', colorIdx: 6 },
+        { prefix: '10', timeSec: 18.76, comment: '10 - PP "RECONSTRUCCIÓ NACIONAL"', colorIdx: 6 },
+        { prefix: '11i', timeSec: 133.76, comment: '11i - Intro', colorIdx: 6 }
+    ], '#263');
+    u263.callJSX = savedCJS263;
+    FM._frozen = savedFrozen263;
+    ok('#263: un títol amb comilles dobles ja no trenca el payload (F2 col·loca els 3)',
+        !!res263 && !res263.error && res263.placed === 3,
+        JSON.stringify(res263));
+    ok('#263: el comentari arriba INTACTE a ExtendScript (comilles incloses)',
+        !!vistos263 && vistos263.length === 3 &&
+        vistos263[1].comment === '10 - PP "RECONSTRUCCIÓ NACIONAL"',
+        vistos263 ? JSON.stringify(vistos263.map(function (p) { return p.comment; }))
+                  : ('error=' + (res263 && res263.error)));
+    // El literal ha de portar la barra DOBLADA davant de la comilla (92,92,34);
+    // amb una de sola el motor des-escriu i el JSON queda trencat.
+    var barraDoble263 = String.fromCharCode(92, 92) + '"';
+    ok('#263: el payload viatja amb la barra DOBLADA (\\" → \\\\")',
+        !!literal263 && literal263.indexOf(barraDoble263) !== -1,
+        String(literal263 || '').slice(0, 140));
+
+
     ph('12d-bug194-grafics-fora-directe');
     var f194mk = [
         { time: 0, comments: '01BT - PG bona tarda i DONA PAS' },
