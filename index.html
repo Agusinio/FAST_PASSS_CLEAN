@@ -62,29 +62,29 @@
         
         <!-- SECTION: SETUP -->
         <div class="section-container" id="secInici">
-            <button id="btnReset" class="btn-destructivo" aria-label="RESET GENERAL" title="RESET GENERAL · Tanca el projecte del bloc seleccionat, ESBORRA ABSOLUTAMENT tota la carpeta del projecte (projecte, escaleta, MP4, manifest, snapshots, anàlisi, subtítols i marcadors) i el torna a crear de zero. Si no es pot esborrar tot, NO crea res i avisa.">🔄</button>
+            <button id="btnReset" class="btn-destructivo" aria-label="RESET GENERAL" title="RESET GENERAL · ESBORRA LA CARPETA.">🔄</button>
             <div class="section-label"><span>INICI</span></div>
             <div class="section-content">
                 <div class="setup-top-row">
                     <div class="semaforo-strip">
-                        <div class="semaforo-item" title="Estat de l'Escaleta JSON (Servidor)">
+                        <div class="semaforo-item" title="Escaleta JSON">
                             <div id="sem-esc" class="light off"></div>
                             <span>ESC</span>
                         </div>
-                        <div class="semaforo-item" title="MP4 CleanFeed al projecte/timeline">
+                        <div class="semaforo-item" title="MP4 CleanFeed">
                             <div id="sem-mp4" class="light off"></div>
                             <span>MP4</span>
                         </div>
-                        <div class="semaforo-item" title="Rètols (Wotts) al Bin CHY">
+                        <div class="semaforo-item" title="Wotts al Bin CHY">
                             <div id="sem-wot" class="light off"></div>
                             <span>WOT</span>
                         </div>
-                        <div class="semaforo-item" title="Subtítols projectats al timeline">
+                        <div class="semaforo-item" title="Subtítols">
                             <div id="sem-srt" class="light off"></div>
                             <span>SRT</span>
                         </div>
                     </div>
-                    <button id="btnFetchEscaleta" class="secondary btn-foto" title="Fer foto actualitzada de l'escaleta via API digition (Ctrl+clic = foto d'AHIR, per corregir/comparar el dia anterior)" style="background:#5a2a2a; color:#f99;">📷 FOTO</button>
+                    <button id="btnFetchEscaleta" class="secondary btn-foto" title="INSTANTANIA de l'escaleta (Ctrl+clic = foto d'AHIR)" style="background:#5a2a2a; color:#f99;">📷 FOTO</button>
                 </div>
                 <div class="setup-grid">
                     <div class="setup-inputs">
@@ -127,17 +127,17 @@
             <div class="section-content">
                 <div class="video-tactical-layout">
                     <div class="video-row-top">
-                        <button id="btnIn" class="secondary btn-sq-std btn-destructivo" title="IN: retalla la capçalera del clip de V1 fins al cabezal, desplaça l'OUT de la seqüència els mateixos frames, recol·loca els marcadors i deixa el CTI a 0. Si retalla més de 30 s avisa (sense bloquejar).">IN</button>
-                        <button id="btnScene" class="secondary btn-wide-flex btn-destructivo test-only" title="TROSSEJA: divideix el clip de V1 als talls de contingut (Cut.runScene). És la fase 2 del pipeline OUT &amp; GO: aquest botó només surt a la pantalla de TEST per poder provar-la per separat">TROSSEJA</button>
-                        <button id="btnOut" class="secondary btn-wide-flex btn-destructivo" title="OUT &amp; GO: tanca el bloc (retall + V2 a l'OUT + neteja de V3 en amunt i d'àudio), trosseja els talls i, en TREBALL, encadena les 8 fases de marcadors (Dedu → Prev → Correl → Density → Inferits → Ordre → GF → Vermells) i desa el snapshot. Els chyrons NO es col·loquen ací: van amb 🎯 COL·LOCAR.">OUT &amp; GO</button>
-                        <button id="btnKey" class="secondary btn-sq-double-high btn-destructivo" title="KEYFRAME: afig o lleva un keyframe al clip SELECCIONAT a l'instant del cabezal (si el clip és un PNG/JPG de fons, s'ignora). El mode SLIDER/KEYFRAME seguix el clip. Ctrl+clic = probe del límit de Position (diagnòstic).">KEYFRAME</button>
+                        <button id="btnIn" class="secondary btn-sq-std btn-destructivo" title="Retalla inici del clip de V1.">IN</button>
+                        <button id="btnScene" class="secondary btn-wide-flex btn-destructivo test-only" title="Trosseja el clip.">TROSSEJA</button>
+                        <button id="btnOut" class="secondary btn-wide-flex btn-destructivo" title="Retalla final del Clip i Col·loca els marcadors.">OUT &amp; GO</button>
+                        <button id="btnKey" class="secondary btn-sq-double-high btn-destructivo" title="Posa o Treu un keyframe.">KEYFRAME</button>
                     </div>
                     <div class="video-row-bottom">
-                        <button id="btnPrevClip" class="secondary btn-sq-std" title="Salta al CENTRE del clip anterior de V1 (i refresca el slider)">◀</button>
-                        <div class="slider-zone" id="sliderZone" title="Clica per armar/desarmar el reencuadre manual: actua sobre el clip SELECCIONAT. Es desarma en clicar qualsevol altre control (◀ ▶ i KEYFRAME no el desarmen).">
+                        <button id="btnPrevClip" class="secondary btn-sq-std" title="Salta al clip anterior">◀</button>
+                        <div class="slider-zone" id="sliderZone" title="Clica per armar/desarmar i mou per reencuadrar.">
                             <input type="range" id="slider-move" min="-1000" max="1000" value="0" disabled>
                         </div>
-                        <button id="btnNextClip" class="secondary btn-sq-std" title="Salta al CENTRE del clip següent de V1 (i refresca el slider)">▶</button>
+                        <button id="btnNextClip" class="secondary btn-sq-std" title="Salta al següent clip">▶</button>
                     </div>
                 </div>
             </div>
@@ -152,15 +152,15 @@
             <div class="section-label" title="Chyrons"><span class="lbl-full">CHYRONS</span><span class="lbl-short">CHY</span></div>
             <div class="section-content">
                  <div class="graphics-strip cols-3 chy-strip">
-                    <button id="btnChyronColocar" class="secondary icon-only" title="Un clic = Col·loca TOTS els chyrons: Conductor, Titol, Lloc, Nom, Resto i Traducció (verifica primer els marcadors). NO DUPLICA: la comprovació és permanent —abans de cada inserció mira si eixe rètol ja ocupa eixe instant del timeline (V6/V7/V8/V3)—, així que amb el timeline buit ho col·loca tot i, si ja n'hi ha, només entra el que falta: es pot clicar les voltes que calga. En acabar, si al BIN hi ha ítems CONVERSA o XARXES-TEXT que no han entrat al timeline: amb TC de fiar es col·loquen pel TC; amb bloc sense TC es busca per OCR als clips; sense bloc (és V) es rastreja amb ffmpeg la placa grisa del tuit cremat i s'empareja pel nom. Ctrl+clic = RASTREIG DE GRIS del bloc + FINESTRA DE SELECCIÓ del grafisme per al clip del cabezal. Spec: docs/specs/TWITTS_OCR.md">🎯</button>
-                    <button id="btnChyronRepartir" class="secondary icon-only" title="Reparteix les traduccions seleccionades">↔️</button>
-                    <button id="btnChyronCas" class="secondary icon-only" title="Tema-Títol / Conductor: ESTAT de la intro del bloc — intro LLARGA (CasA: l'obri el Tema-Títol) ⇄ intro CURTA (CasB: l'obri el Conductor). Un clic alterna l'estat i TORNA A COL·LOCAR l'inici del bloc (retira el Conductor + el Tema-Títol/titulillo i els torna a posar amb l'altre cas, sense moure la resta de la pista); a partir d'allí totes les col·locacions d'eixe inici (🎯 COLOCAR, Conduct…) ixen amb eixe cas. Ctrl+clic = torna a AUTO (auto-detecció per marge).">🔀</button>
-                    <button id="btnChyronConductor" class="secondary test-only" title="Col·loca el Conductor (TEST)">COND</button>
-                    <button id="btnChyronTitol" class="secondary test-only" title="Col·loca el Tema-Titol (TEST)">TITOL</button>
-                    <button id="btnChyronLloc" class="secondary test-only" title="Col·loca Lloc/Data (TEST)">LLOC</button>
-                    <button id="btnChyronNom" class="secondary test-only" title="Col·loca Nom/Càrrec (TEST)">NOM</button>
-                    <button id="btnChyronResto" class="secondary test-only" title="Col·loca la resta de chyrons (TEST)">RESTO</button>
-                    <button id="btnChyronTraduccio" class="secondary test-only" title="Col·loca traduccions (TEST)">TRAD</button>
+                    <button id="btnChyronColocar" class="secondary icon-only" title="Un clic = Col·loca TOTS els chyrons. Ctrl+clic = Rastreig de Twits.">🎯</button>
+                    <button id="btnChyronRepartir" class="secondary icon-only" title="Ajusta les traduccions seleccionades">↔️</button>
+                    <button id="btnChyronCas" class="secondary icon-only" title="Tema-Títol ⇄ Conductor.">🔀</button>
+                    <button id="btnChyronConductor" class="secondary test-only" title="Conductor (TEST)">COND</button>
+                    <button id="btnChyronTitol" class="secondary test-only" title="Tema-Titol (TEST)">TITOL</button>
+                    <button id="btnChyronLloc" class="secondary test-only" title="Lloc/Data (TEST)">LLOC</button>
+                    <button id="btnChyronNom" class="secondary test-only" title="Nom/Càrrec (TEST)">NOM</button>
+                    <button id="btnChyronResto" class="secondary test-only" title="Resta de chyrons (TEST)">RESTO</button>
+                    <button id="btnChyronTraduccio" class="secondary test-only" title="Traduccions (TEST)">TRAD</button>
                  </div>
             </div>
         </div>
@@ -170,12 +170,12 @@
             <div class="section-label" title="Gràfics"><span class="lbl-full">GRÀFICS</span><span class="lbl-short">GRF</span></div>
             <div class="section-content">
                  <div class="graphics-strip cols-3">
-                    <button id="btnGrafIpd" class="secondary" title="IPD (zoom 144% + posició) · Ctrl+clic: repassa els clips IPD dels marcadors">IPD</button>
-                    <button id="btnGrafIpdPlus" class="secondary" title="IPD+ · doble finestra VERTICAL (toggle per INTERVAL): l'interval és la SELECCIÓ de V1 (o el clip de V1 sota el cabezal); V2 es retalla i s'aparca a V3, V1 es duplica a V2 i es reparteixen les capes (V1 INFERIOR · V2 SUPERIOR). Ctrl+clic = reset de l'estat del flux.">IPD+</button>
-                    <button id="btnGrafDoblePantalla" class="secondary icon-only doble" title="Doble pantalla (horitzontal): en un clic V1→V4, duplicat a V5 i fons a V3 amb el cicle PAS0→PAS4. Ctrl+clic = RESET de la Doble Finestra.">🪟🪟</button>
-                    <button id="btnMapaImport" class="secondary icon-only" title="PALETA (mapa): importa els grafismes del dia (ZZZ_GRAFISME) a la pista de grafismes DES DEL CABEZAL — el grafisme entra ON ÉS EL CABEZAL, no s'ancora a cap marcador. L'espai hàbil el marca el clip SELECCIONAT al timeline (o el clip de V1 sota el cabezal) i al final hi va un congelat de 3 s. L'ítem de l'escaleta (coincidència de nom) és el del marcador anterior al cabezal. Per als marcadors GF de l'escaleta: botó GF (TEST) o pipeline OUT &amp; GO">🎨</button>
-                    <button id="btnGrafMapa" class="secondary icon-only" title="MAPA ZOOM: puja el clip SELECCIONAT a V4, posa el fons genèric a V3 dins del seu rang i aplica escala 48% + Y=447 (la X es deixa al slider)">🗺️</button>
-                    <button id="btnGrafTotem" class="secondary icon-only" title="TÒTEM: només canvia l'escala X del clip seleccionat (Scale Width 126%, Uniform Scale desactivat); la Y i la posició no es toquen">🗿</button>
+                    <button id="btnGrafIpd" class="secondary" title="IPD · Ctrl+clic: repassa els clips IPD dels marcadors">IPD</button>
+                    <button id="btnGrafIpdPlus" class="secondary" title="IPD+ · doble finestra VERTICAL.">IPD+</button>
+                    <button id="btnGrafDoblePantalla" class="secondary icon-only doble" title="Doble Finestra. Ctrl+clic = RESET de la Doble Finestra.">🪟🪟</button>
+                    <button id="btnMapaImport" class="secondary icon-only" title="Importa grafismes del dia (ZZZ_GRAFISME) DES DEL CABEZAL">🎨</button>
+                    <button id="btnGrafMapa" class="secondary icon-only" title="Mapa Zoom.">🗺️</button>
+                    <button id="btnGrafTotem" class="secondary icon-only" title="Tòtem.">🗿</button>
                  </div>
             </div>
         </div>
@@ -188,12 +188,12 @@
             <div class="section-label" title="Subtítols"><span class="lbl-full">SUBTÍTOLS</span><span class="lbl-short">SUB</span></div>
             <div class="section-content">
                  <div class="graphics-strip cols-3">
-                    <button id="btnSrtLoad" class="secondary icon-only" title="CARREGAR: obri a l'editor el SRT del bloc de 15 min del dia (l'únic mecanisme de càrrega). Ctrl+clic = SUBTÍTOLS SINTÈTICS del MATEIX PROGRAMA i de la data del PROJECTE OBERT (2n Ctrl+clic = tornar al SRT normal).">📥</button>
-                    <button id="btnSrtExport" class="secondary icon-only" title="GUARDAR: exporta la taula de l'editor a la pista de subtítols (S1; els SINT a S2) com a _MOD_<timestamp>.srt. NOMÉS substituïx els clips del tram que escriu (no esborra la resta del timeline). Ctrl+clic = AFEGIR NOMÉS EL QUE FALTA: no reescriu el que ja té clip, ho col·loca a S2 i ho pinta amb una altra etiqueta de color.">➡️</button>
-                    <button id="btnSrtReset" class="secondary icon-only" style="background:#5a2a2a; color:#f99;" title="RESET: torna la taula i els marcadors al seu estat inicial (memòria i disc), trau els subtítols de la seqüència i RECARREGA el mateix .srt (si no n'hi havia cap, l'emergència de 15 min)">♻️</button>
-                    <button id="btnSrtFill" class="secondary icon-only" title="🧩 REOMLIR: carrega els SINT del MATEIX PROGRAMA i de la data del PROJECTE OBERT (si no ho estan) i afegeix al SRT normal NOMÉS les entrades sintètiques que hi falten —comparant TC (±tolerància) I text—, dins d'un BUIT. Si un SINT no hi cap exacte s'ENCOGEIX fins a la vora del buit (retall màxim general.srtSyntheticMaxTrimSec 0,8 s; durada mínima general.srtSyntheticMinDurSec 0,4 s) · tolerància general.srtSyntheticGapTolSec 0,2 s. El resultat és una vista MOD dins del MATEIX editor (les afegides es pinten amb un to propi) i NO toca el timeline: per a col·locar-les, 💾.">🧩</button>
-                    <button id="btnSrtIn" class="secondary" title="IN del subtítol seleccionat">IN</button>
-                    <button id="btnSrtOut" class="secondary" title="OUT del subtítol seleccionat">OUT</button>
+                    <button id="btnSrtLoad" class="secondary icon-only" title="CARREGAR subtitols. Ctrl+clic = SUBTÍTOLS SINTÈTICS.">📥</button>
+                    <button id="btnSrtExport" class="secondary icon-only" title="ENVIAR a la pista de subtítols.">➡️</button>
+                    <button id="btnSrtReset" class="secondary icon-only" style="background:#5a2a2a; color:#f99;" title="RESET Subtitols.">♻️</button>
+                    <button id="btnSrtFill" class="secondary icon-only" title="🧩 REOMLIR amb SINTETICS.">🧩</button>
+                    <button id="btnSrtIn" class="secondary" title="IN del subtítol">IN</button>
+                    <button id="btnSrtOut" class="secondary" title="OUT del subtítol">OUT</button>
                  </div>
             </div>
         </div>
@@ -203,9 +203,9 @@
             <div class="section-label" title="Render"><span class="lbl-full">RENDER</span><span class="lbl-short">REN</span></div>
             <div class="section-content">
                  <div class="graphics-strip cols-3">
-                    <button id="btnRenderVideo" class="secondary icon-only" title="VÍDEO: render directe de Premiere (preset .epr) retallant la cua a l'OUT. Exporta a render1 i copia a render2. Nom: PROG_TEMA_HH_MM.mp4">📹</button>
-                    <button id="btnRenderPortada" class="secondary icon-only" title="PORTADA: exporta un PNG del frame davall del cabezal (amb zona neta temporal) a la carpeta de portades, amb el MATEIX nom que el vídeo. Tarda 10-30 s">🖼️</button>
-                    <button id="btnRenderClose" class="secondary icon-only" title="VALIDAR: desa el projecte, el tanca i elimina el .lock (allibera el treball per a un altre editor)">✅</button>
+                    <button id="btnRenderVideo" class="secondary icon-only" title="RENDER directe.">📹</button>
+                    <button id="btnRenderPortada" class="secondary icon-only" title="Exporta la PORTADA.">🖼️</button>
+                    <button id="btnRenderClose" class="secondary icon-only" title="TANCA el projecte.">✅</button>
                  </div>
             </div>
         </div>
@@ -221,7 +221,7 @@
                     <!-- 1) SIL (diagnòstic, només lectura) · 2) C0 (setup+00:00) · 3) C1 (OnAir dur) -->
                     <button id="btnMarksSIL" class="secondary" title="PAS 1 (opcional, només lectura) · SIL · Bolca al log el mapa de SILENCIS d'àudio del bloc (llegit del .bin de referència a 480Hz). Serveix per ajustar llindar/durada mínima amb dades reals. El silenci NOMÉS confirma: no mou res">1·SIL</button>
                     <button id="btnMarksC0" class="secondary" title="PAS 2 · CAPA 0 · Setup: referència del clip + context d'assembly + classificació d'ítems + col·loca el MARCADOR D'INICI a 00:00 (immutable per a totes les capes)">2·C0</button>
-                    <button id="btnMarksC1" class="secondary" title="PAS 3 · CAPA 1 · OnAir DURO: calcula densitat de corts + mapa de silencis, resol cada ítem amb OnAir real per consens (SILENCI → CORTE a prop → OnAir), valida contra el material real de V1, publica el Δ i CONGELA aquests marcadors per a les capes següents">3·C1</button>
+                    <button id="btnMarksC1" class="secondary" title="PAS 3 · CAPA 1 · OnAir DURO: calcula densitat de talls + mapa de silencis, resol cada ítem amb OnAir real per consens (SILENCI → TALL a prop → OnAir), valida contra el material real de V1, publica el Δ i CONGELA aquests marcadors per a les capes següents">3·C1</button>
                     <!-- ─── Fases antigues (pipeline OUT &amp; GO): es mantenen per comparar ─── -->
                     <button id="btnMarksF2" class="secondary" title="F2 (antic) · Marcadors OnAir deduïts">F2 Dedu</button>
                     <button id="btnMarksF3" class="secondary" title="F3 (antic) · Marcadors previstos (coincidències)">F3 Prev</button>
@@ -253,9 +253,9 @@
         <div class="srt-timeline-zone">
             <div id="srtEditorContainer" style="display:none;">
                 <div style="overflow-x:hidden; overflow-y:hidden;">
-                    <canvas id="srtCanvas" width="1800" height="150" style="cursor:crosshair; background:#1a1a1a;" title="REGLA: clic = mou el cursor · CENTRE D'UN CLIP: clic = selecciona/deselecciona · Ctrl+clic = afig/leva de la selecció · Shift+clic = rang · Supr = esborra els clips seleccionats · Marcadors: arrossega'ls amb el ratolí"></canvas>
+                    <canvas id="srtCanvas" width="1800" height="150" style="cursor:crosshair; background:#1a1a1a;" title="Clic = mou el cursor · CENTRE D'UN CLIP: clic = selecciona/deselecciona · Ctrl+clic = afig/leva de la selecció · Shift+clic = rang · Supr = esborra els clips seleccionats · Marcadors: arrossega'ls amb el ratolí"></canvas>
                 </div>
-                <div class="srt-zoombar" id="srtZoomBar" title="Arrossega els extrems per fer zoom · arrossega el centre per desplaçar-te">
+                <div class="srt-zoombar" id="srtZoomBar" title="Zoom i desplaçament">
                     <div class="srt-zoombar-fill" id="srtZoomFill"></div>
                     <div class="srt-zoombar-handle srt-zoombar-handle-l" id="srtZoomHandleL"></div>
                     <div class="srt-zoombar-handle srt-zoombar-handle-r" id="srtZoomHandleR"></div>
@@ -333,7 +333,7 @@
     <script src="js/core/assembly_context.js?v=10"></script>
     <script src="js/workflows/flow_mp4.js?v=8"></script>
     <script src="js/workflows/flow_markers.js?v=71"></script>
-    <script src="js/workflows/flow_chyrons.js?v=106"></script>
+    <script src="js/workflows/flow_chyrons.js?v=107"></script>
     <script src="js/workflows/flow_graphics.js?v=27"></script>
     <script src="js/workflows/flow_mainButton.js?v=51"></script>
     <script src="js/workflows/flow_cut.js?v=19"></script>

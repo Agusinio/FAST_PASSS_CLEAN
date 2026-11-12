@@ -2395,6 +2395,71 @@
         },
 
         /**
+         * _blockBase: NÚMERO BASE del lineID d'un marcador («10Chy» → 10, «08dp» → 8).
+         *
+         * (2026-11-12 · BUG #264) El generador de ròtols posa al nom del wott el lineID de
+         * l'ítem del bloc al qual pertany («…_10Chy_…_Enviat_No_Víctor Sorribes…») i eixe
+         * número és el que lliga el rètol amb la SECCIÓ del bloc: el DIFERIT («10 - DIFERIT
+         * MANI TORTOSA») i, quan n'hi ha, l'IPD/directe («13 - +++IPD LLEIDA» per al bloc
+         * 12). Vegeu `_sectionDest`.
+         *
+         * @param {Object|string} m - marcador {fullId, blockNum, comments, name} o un id
+         * @returns {number|null} número base (enter) o null si no en té
+         */
+        _blockBase: function (m) {
+            const raw = (m && typeof m === 'object')
+                ? String(m.fullId || m.blockNum || m.comments || m.name || '')
+                : String(m || '');
+            const num = raw.match(/^(\d+)/);
+            if (!num) return null;
+            const n = parseInt(num[1], 10);
+            return isFinite(n) ? n : null;
+        },
+
+        /**
+         * _sectionDest: marcador de la SECCIÓ del bloc al qual va un rètol de CONNEXIÓ.
+         *
+         * (2026-11-12 · BUG #264) Regles d'usuari (TNV V2, 11/11):
+         *   · «los nombres (Enviat_No_) van al diferit»
+         *   · «el Presencial va sempre en el +++IPD»
+         * El lineID del wott dóna el número de bloc (N) i la secció és:
+         *   · ENVIAT             → el DIFERIT del MATEIX número («10Chy» → «10 - DIFERIT…»;
+         *                          «08dp» → «08 - DIFERIT MANI TARRAGONA»).
+         *   · DIRECTE/PRESENCIAL → l'IPD/DIRECTE del número SEGÜENT («12Chy» → «13 - +++IPD
+         *                          LLEIDA», «08dp» → «09 - +++IPD MANI TARRAGONA»), que és on
+         *                          el lloc és a pantalla (convenció del BUG #167).
+         * Si el bloc NO té eixe ítem, no es mou: abans s'agafava el primer DIRECTE/DIFERIT
+         * posterior encara que fos d'un ALTRE bloc (el PRESENCIAL de Tortosa acabava dins de
+         * l'IPD de Lleida, i l'ENVIAT de Miíriam al donapas d'inici).
+         *
+         * @param {Array} markersFull - [{fullId, blockNum, time, label}]
+         * @param {Object} structureById - id d'ítem → ítem (`13_Parse`)
+         * @param {Object} mk0 - marcador d'origen del rètol
+         * @param {string} kind - 'DIFERIT' | 'IPD'
+         * @returns {{time: number, marker: Object, kind: string}|null} null si el bloc no en té
+         */
+        _sectionDest: function (markersFull, structureById, mk0, kind) {
+            const base = this._blockBase(mk0);
+            if (base === null) return null;
+            const want = (kind === 'DIFERIT') ? base : (base + 1);
+            let best = null;
+            for (const m of (markersFull || [])) {
+                if (!m || !isFinite(m.time)) continue;
+                if (this._blockBase(m) !== want) continue;
+                const e = (structureById || {})[m.fullId];
+                // ⚠️ La INTRO porta «DIFERIT» al títol («04i - intro DIFERIT (VIMBODÍ I
+                // POBLET)»): no és mai el destí (ho és el DIFERIT de veritat del bloc).
+                if (this._isIntroMarker(m, e)) continue;
+                const okKind = (kind === 'DIFERIT')
+                    ? this._isDiferitMarker(m, e)
+                    : this._isIpdDirecteMarker(m, e);
+                if (!okKind) continue;
+                if (!best || m.time < best.time) best = m;
+            }
+            return best ? { time: best.time, marker: best, kind: kind } : null;
+        },
+
+        /**
          * _pickDirecteDiferitAfter: a QUIN ítem DIRECTE o DIFERIT va un rètol de
          * PRESENCIAL/ENVIAT que penja d'una INTRO (2026-10-16 · BUG #168).
          *
@@ -2537,20 +2602,53 @@
                 // el DESTÍ, per no tornar a moure un rètol que ja és al seu lloc (idempotència
                 // entre fases i entre execucions).
                 const srcIntro = this._isIntroMarker(mk0, e0);
-                if (!srcIntro && (this._isIpdDirecteMarker(mk0, e0) || this._isDiferitMarker(mk0, e0))) continue;
+                // Un ítem que JA és el DESTÍ (IPD/DIFERIT) no es torna a moure: idempotència
+                // entre fases i entre execucions (el DIFERIT sí deixa passar l'ENVIAT, que pot
+                // vindre del Chy/donapas del mateix bloc).
+                const jaDesti = !srcIntro &&
+                    (this._isIpdDirecteMarker(mk0, e0) || this._isDiferitMarker(mk0, e0));
                 for (const c0 of e0.chyrons) {
                     if (!filterFn(c0)) continue;
-                    // CONDICIÓ NOVA (#168): l'ENVIAT només entra aquí si PENJA D'UNA INTRO; abans
-                    // només tenia el punt de connexió i, si no n'hi havia cap, es quedava a
-                    // l'inici del bloc. La família DIRECTE/PRESENCIAL conserva la regla #167.
-                    if (!this._isDirecteSenyalWott(c0) && !(srcIntro && this._isEnviatWott(c0))) continue;
-                    const pick = this._pickDirecteDiferitAfter(markersFull, structureById, mk0.time, c0.name);
+                    const esEnviat = this._isEnviatWott(c0);
+                    const esSenyal = this._isDirecteSenyalWott(c0);
+                    if (!esEnviat && !esSenyal) continue;
+                    if (jaDesti && !esEnviat) continue;
+                    let pick = null;
+                    if (esEnviat) {
+                        // (2026-11-12 · BUG #264) L'ENVIAT va SEMPRE al DIFERIT del SEU bloc
+                        // («el Presencial va siempre en el +++IPD» · «los nombres van al
+                        // diferit»). Abans només s'hi movia si penjava d'una INTRO (#168): els
+                        // noms que venen del donapas/Chy d'inici del bloc es quedaven allí i, si
+                        // la pista estava ocupada, es desplaçaven damunt del Tema-Títol.
+                        pick = this._sectionDest(markersFull, structureById, mk0, 'DIFERIT');
+                        if (!pick && srcIntro) {
+                            // Sense DIFERIT al bloc, la regla #168 (primer DIRECTE/DIFERIT) mana.
+                            pick = this._pickDirecteDiferitAfter(markersFull, structureById, mk0.time, c0.name);
+                        }
+                    } else if (!jaDesti) {
+                        // (2026-11-12 · BUG #264) El PRESENCIAL/DIRECTE va SEMPRE a l'IPD/DIRECTE
+                        // del SEU bloc (base+1). Si el bloc no en té, NOMÉS es mou si el títol
+                        // del candidat parla del mateix lloc (afinitat): mai al primer IPD d'un
+                        // ALTRE bloc (cas real: el de Tortosa anava a «13 - +++IPD LLEIDA»).
+                        pick = this._sectionDest(markersFull, structureById, mk0, 'IPD');
+                        if (!pick) {
+                            const alt = this._pickDirecteDiferitAfter(markersFull, structureById, mk0.time, c0.name);
+                            if (alt && alt.kind === 'DIRECTE') {
+                                const tok = this._sigTokens(c0.name);
+                                const lbl = String((alt.marker && (alt.marker.label || alt.marker.comments)) || '')
+                                    .toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+                                if (tok.some(t => lbl.indexOf(t) !== -1)) pick = alt;
+                            }
+                        }
+                    }
                     if (!pick) continue;
+                    // Ja és al seu lloc → no es toca (idempotència entre execucions).
+                    if (Math.abs(pick.time - mk0.time) <= 0.05) continue;
                     de[c0.name] = pick.time;
                     const kDest = pick.time.toFixed(2);
                     (per[kDest] = per[kDest] || []).push(c0);
                     moved++;
-                    log(`   📍 [${label}] LOCALITZACIÓ${srcIntro ? ' (intro)' : ''}: "${String(c0.name).substring(0, 50)}…" penja de l'ítem ${mk0.fullId} @ ${mk0.time.toFixed(2)}s → va a l'ítem ${pick.kind} ${pick.marker.fullId} @ ${pick.time.toFixed(2)}s`);
+                    log(`   📍 [${label}] ${esEnviat ? 'ENVIAT' : 'LOCALITZACIÓ'}${srcIntro ? ' (intro)' : ''}: "${String(c0.name).substring(0, 50)}…" penja de l'ítem ${mk0.fullId} @ ${mk0.time.toFixed(2)}s → va a l'ítem ${pick.kind} ${pick.marker.fullId} @ ${pick.time.toFixed(2)}s`);
                 }
             }
             return { de: de, per: per, moved: moved };
@@ -2574,6 +2672,76 @@
                 log(`   🔌 [Conexió] "${String(chy.name).substring(0, 55)}..." → punt de connexió @ ${tConex.toFixed(2)}s (no a ${fallback.toFixed(2)}s)`);
             }
             return tConex;
+        },
+
+        /**
+         * _temaTitolLiveRanges: rangs de la PART VIVA dels Tema-Títol ja col·locats.
+         *
+         * (2026-11-12 · BUG #264) El Tema-Títol gran ocupa la seua pista des del marcador
+         * fins al SEGÜENT Tema-Títol (el congelat s'estira), però el que «pisa» el rètol és
+         * la part viva: l'animació + el text, `CAS_DUR_TEMA_TITOL` (6,24 s, la mateixa
+         * constant que fa servir `_casForceTimes` per col·locar el CONDUCTOR després del gran).
+         *
+         * Funció ASÍNCRONA perquè llig el timeline (el Tema-Títol es col·loca en una fase
+         * anterior, així que ja hi és).
+         *
+         * @param {Object} cfg - configuració activa
+         * @returns {Promise<Array<{start:number,end:number}>>}
+         */
+        _temaTitolLiveRanges: async function (cfg) {
+            const c = cfg || FASTPASS_UI.Config.get();
+            const track = ((((c || {}).tracks || {}).video) || {}).tematitol;
+            if (!track) return [];
+            let clips = [];
+            try { clips = await getClipsLogic().getTrackClips(track, 'video'); }
+            catch (e) { return []; }
+            const out = [];
+            for (const cl of (clips || [])) {
+                const st = Number(cl.start), en = Number(cl.end);
+                if (!isFinite(st) || !isFinite(en) || en <= st) continue;
+                out.push({ start: st, end: Math.min(en, st + CAS_DUR_TEMA_TITOL) });
+            }
+            return out;
+        },
+
+        /**
+         * _evitaTemaTitol: desplaça l'inici d'un rètol de PERSONA perquè no caiga damunt de
+         * la part viva del Tema-Títol (2026-11-12 · BUG #264).
+         *
+         * REGLA D'USUARI: «el TemaTítol no pot pisar cap Enviat_No_, però ha d'estar al seu
+         * bloc; un poc com el Tema-Títol amb el conductor». Es resol igual que el CasA de
+         * `_casForceTimes` (el conductor entra a `ttAnchor + CAS_DUR_TEMA_TITOL`): el rètol de
+         * persona ESPERA que el gran acabe la part viva i entra darrere.
+         *
+         * Si eixir-se'n cap endavant no hi cap dins de l'ítem (`maxEnd`), es deixa l'instant
+         * ideal i decidix `_chooseSlot` (mai no s'ix de l'ítem pel Tema-Títol).
+         *
+         * Funció PURA (sense estat ni JSX) per poder provar-la al smoke.
+         *
+         * @param {number} start - instant ideal del rètol
+         * @param {number} dur - durada del rètol
+         * @param {Array<{start:number,end:number}>} ranges - parts vives dels Tema-Títol
+         * @param {number|null} [maxEnd] - final de l'ítem (null = sense límit)
+         * @returns {number} instant ajustat (o el mateix si no cal)
+         */
+        _evitaTemaTitol: function (start, dur, ranges, maxEnd) {
+            const ini = Number(start) || 0;
+            const d = Math.max(Number(dur) || 0, 0.5);
+            const sorted = (ranges || []).slice().sort((a, b) => a.start - b.start);
+            let t = ini;
+            for (let pass = 0; pass < 4; pass++) {
+                let moved = false;
+                for (const r of sorted) {
+                    if (r.end <= t + 0.001) continue;      // el Tema-Títol ja ha passat
+                    if (r.start >= t + d - 0.001) break;   // hi cap abans del Tema-Títol
+                    t = r.end;                             // xoca: espera que acabe la part viva
+                    moved = true;
+                }
+                if (!moved) break;
+            }
+            if (Math.abs(t - ini) < 0.001) return ini;
+            if (maxEnd !== null && maxEnd !== undefined && (t + d) > Number(maxEnd) + 0.01) return ini;
+            return t;
         },
 
         /**
@@ -3550,6 +3718,10 @@
 
                 const wottIdx = await FASTPASS_UI.Logic.Project.getWottIndex();
                 const ctx = { busy: {}, placed: {} };
+                // (2026-11-12 · BUG #264) Parts vives dels Tema-Títol ja col·locats: cap rètol de
+                // PERSONA (Enviat_No_) no hi pot caure damunt (regla d'usuari). Es llig una volta
+                // per passada: el Tema-Títol el col·loca una fase anterior (`placeChyronTitol`).
+                const ttLive = await this._temaTitolLiveRanges(cfg);
                 // ── REGLA DELS RÈTOLS (2026-09-16 · matisada 2026-10-28 #201) ────
                 // Un rètol (NomCarrec, Lloc, Resto…) va a l'inici del SEU CLIP de
                 // referència — el clip de V1 que conté l'instant ideal. El decalatge de
@@ -3607,7 +3779,7 @@
                         // de connexió, mana la regla #168 (ja resolta a `ipdDe`: ítem DIRECTE o
                         // DIFERIT): aquí no s'ha de tocar.
                         if (ipdDe[c0.name] !== undefined && !teConnexio) {
-                            log(`   🔌 [${label}] CONNEXIÓ: "${String(c0.name).substring(0, 50)}…" penja d'una INTRO i no té punt de connexió → mana l'ítem DIRECTE/DIFERIT @ ${ipdDe[c0.name].toFixed(2)}s`);
+                            log(`   🔌 [${label}] CONNEXIÓ: "${String(c0.name).substring(0, 50)}…" no té punt de connexió → mana l'ítem DIRECTE/DIFERIT del seu bloc @ ${ipdDe[c0.name].toFixed(2)}s`);
                             continue;
                         }
                         if (!teConnexio) continue;   // ja és al seu ítem
@@ -3869,6 +4041,24 @@
                                 log(`   📐 [${label}] ${String(chy.name).substring(0, 34)}… → clip [${ci.start.toFixed(2)}-${ci.end.toFixed(2)}] → entra a ${placeStart.toFixed(2)}s (+${esPrimer ? CHYRON_OFFSET_FRAMES : 0}f), surt a ${(placeEnd === null ? placeStart + Math.max(durInfo.dur, 0.5) : placeEnd).toFixed(2)}s` +
                                     (mkEff.fullId !== mk.fullId ? ` [ítem ${mkEff.fullId}]` : '') +
                                     (trimmed ? ' (acurtat per ' + limWhy + ')' : ' (durada pròpia del wott)'));
+                            }
+                        }
+                        // (2026-11-12 · BUG #264) «El TemaTítol no pot pisar cap Enviat_No_»: si el
+                        // rètol de persona cau damunt de la part viva del Tema-Títol, ESPERA que el
+                        // gran acabe (la mateixa mecànica que el CONDUCTOR al CasA de
+                        // `_casForceTimes`: `ttAnchor + CAS_DUR_TEMA_TITOL`). Sempre dins de l'ítem.
+                        if (this._isEnviatWott(chy) && ttLive.length > 0) {
+                            const dPlan = (placeEnd !== null) ? (placeEnd - placeStart) : durInfo.dur;
+                            const tAdj = this._evitaTemaTitol(placeStart, dPlan, ttLive,
+                                (limSlot !== null) ? limSlot : placeEnd);
+                            if (tAdj > placeStart + 0.01) {
+                                const span = (placeEnd !== null) ? (placeEnd - placeStart) : null;
+                                log(`   🎬 [${label}] ${String(chy.name).substring(0, 32)}… espera el Tema-Títol: ${placeStart.toFixed(2)}s → ${tAdj.toFixed(2)}s`);
+                                placeStart = tAdj;
+                                if (span !== null) {
+                                    placeEnd = placeStart + span;
+                                    if (limSlot !== null && placeEnd > limSlot) placeEnd = limSlot;
+                                }
                             }
                         }
                         const chyronDur = (placeEnd !== null) ? Math.max(0.5, placeEnd - placeStart) : durInfo.dur;

@@ -200,10 +200,96 @@
                 var s = structOf([['04i', 'i', [cNom]], ['04', '', []], ['05', '', []]]);
                 return CHY._ipdAnchorPlan(MK, s, filterResto, 'Resto').moved === 0;
             })());
-        ok('#168 LOG: diu el tipus de desti (DIRECTE o DIFERIT) i els dos instants',
+        ok('#168 LOG: diu el tipus de desti (DIFERIT) i els dos instants',
             window.__LOG.some(function (l) {
-                return l.indexOf('LOCALITZACI\u00d3 (intro)') !== -1 && l.indexOf('DIFERIT 04') !== -1 &&
+                return l.indexOf('ENVIAT (intro)') !== -1 && l.indexOf('DIFERIT 04') !== -1 &&
                     l.indexOf('18.36') !== -1;
             }));
+
+        // ── 7. BUG #264 (2026-11-12): ENVIAT -> DIFERIT del SEU bloc · PRESENCIAL -> IPD del SEU bloc ──
+        // Cas real TNV V2 (11/11) [TNV_V2.fastpass.json · MARCADORS_2026-11-12_1202.txt]:
+        //   08dp@0 «Donapas diferits» · 08@7.88 «DIFERIT MANI TARRAGONA» · 09@18.12 «+++IPD MANI TARRAGONA»
+        //   10@49.64 «DIFERIT MANI TORTOSA» · 10Chy@59.64 «chyrons tortosa» (NO hi ha 11/+++IPD de Tortosa)
+        //   12@88.48 «DIFERIT MANI LLEIDA» · 12Chy@93.33 · 13@95.76 «+++IPD LLEIDA»
+        // Abans: «Enviat_No_Víctor Sorribes» es quedava a 10Chy (59.64) en lloc del DIFERIT (49.64),
+        // «Enviat_No_Míriam Gavaldà» es desplaçava dins del 08dp (damunt del Tema-Títol) i
+        // «Directe_PRESENCIAL_Tortosa» saltava a 13 («+++IPD LLEIDA», un ALTRE bloc).
+        window.__PHASE = '17-seccio-bloc';
+
+        var N_ENV10 = 'Wott_TNV_v2_10Chy_00.01_chyrons tortosa_690422_Enviat_No_V\u00edctor Sorribes_Mart\u00ed Mestres.00690866.mov';
+        var N_PRE10 = 'Wott_TNV_v2_10Chy_00.00_chyrons tortosa_690370_Directe_PRESENCIAL_Tortosa.00690863.mov';
+        var N_ENV08 = 'Wott_TNV_v2_08dp_00.01_Donapas diferits_690443_Enviat_No_M\u00edriam Gavald\u00e0_Anna Rius Sagrera.00690859.mov';
+        var N_PRE12 = 'Wott_TNV_v2_12Chy_00.00_chyrons lleida_690371_Directe_PRESENCIAL_Lleida.00690869.mov';
+        var cEnv10 = chy(N_ENV10, 'Enviat', '00.01');
+        var cPre10 = chy(N_PRE10, 'Directe_PRESENCIAL', '00.00');
+        var cEnv08 = chy(N_ENV08, 'Enviat', '00.01');
+        var cPre12 = chy(N_PRE12, 'Directe_PRESENCIAL', '00.00');
+
+        var M264 = [
+            { fullId: '08dp', blockNum: '08', time: 0, label: '08dp - Donapas diferits' },
+            { fullId: '08', blockNum: '08', time: 7.88, label: '08 - DIFERIT MANI TARRAGONA' },
+            { fullId: '09', blockNum: '09', time: 18.12, label: '09 - +++IPD MANI TARRAGONA' },
+            { fullId: '10', blockNum: '10', time: 49.64, label: '10 - DIFERIT MANI TORTOSA' },
+            { fullId: '10Chy', blockNum: '10', time: 59.64, label: '10Chy - chyrons tortosa' },
+            { fullId: '12', blockNum: '12', time: 88.48, label: '12 - DIFERIT MANI LLEIDA' },
+            { fullId: '12Chy', blockNum: '12', time: 93.33, label: '12Chy - chyrons lleida' },
+            { fullId: '13', blockNum: '13', time: 95.76, label: '13 - +++IPD LLEIDA' }
+        ];
+        var S264 = structOf([
+            ['08dp', '', [cEnv08]],
+            ['08', '', []],
+            ['09', '', []],
+            ['10', '', []],
+            ['10Chy', 'chy', [cEnv10, cPre10]],
+            ['12', '', []],
+            ['12Chy', 'chy', [cPre12]],
+            ['13', '', []]
+        ]);
+
+        ok('#264 helpers de SECCIO de bloc al flow_chyrons',
+            typeof CHY._blockBase === 'function' && typeof CHY._sectionDest === 'function' &&
+            typeof CHY._evitaTemaTitol === 'function' && typeof CHY._temaTitolLiveRanges === 'function');
+        ok('#264 _blockBase: el numero del lineID («10Chy»->10 · «08dp»->8 · «04i»->4 · sense digit->null)',
+            CHY._blockBase({ fullId: '10Chy' }) === 10 && CHY._blockBase({ fullId: '08dp' }) === 8 &&
+            CHY._blockBase({ fullId: '04i' }) === 4 && CHY._blockBase({ fullId: 'lead' }) === null);
+        ok('#264 _sectionDest ENVIAT: el DIFERIT del MATEIX numero (10Chy->10 · 08dp->08)',
+            (CHY._sectionDest(M264, S264, M264[4], 'DIFERIT') || {}).time === 49.64 &&
+            (CHY._sectionDest(M264, S264, M264[0], 'DIFERIT') || {}).time === 7.88);
+        ok('#264 _sectionDest PRESENCIAL: l\'IPD del numero SEGUENT (12Chy->13) i null si el bloc no en te (10Chy->11 no existeix)',
+            (CHY._sectionDest(M264, S264, M264[6], 'IPD') || {}).time === 95.76 &&
+            CHY._sectionDest(M264, S264, M264[4], 'IPD') === null);
+
+        var plan264 = CHY._ipdAnchorPlan(M264, S264, filterResto, 'Resto');
+        ok('#264 PLA: l\'ENVIAT de 10Chy va al DIFERIT del bloc (49.64), no es queda al Chy (59.64)',
+            plan264.de[cEnv10.name] === 49.64 && plan264.per['49.64'] && plan264.per['49.64'][0] === cEnv10,
+            'de=' + JSON.stringify(Object.keys(plan264.de)));
+        ok('#264 PLA: l\'ENVIAT del donapas 08dp va al DIFERIT 08 (7.88)',
+            plan264.de[cEnv08.name] === 7.88, 'de=' + JSON.stringify(Object.keys(plan264.de)));
+        ok('#264 PLA: el PRESENCIAL de 12Chy va al +++IPD del seu bloc (95.76)',
+            plan264.de[cPre12.name] === 95.76);
+        ok('#264 PLA: el PRESENCIAL de 10Chy NO salta a l\'IPD d\'un altre bloc (es queda al seu item)',
+            plan264.de[cPre10.name] === undefined && plan264.moved === 3, 'moved=' + plan264.moved);
+        ok('#264 LOG: diu ENVIAT i el marcador de desti',
+            window.__LOG.some(function (l) {
+                return l.indexOf('ENVIAT') !== -1 && l.indexOf('10Chy') !== -1 &&
+                    l.indexOf('49.64') !== -1 && l.indexOf('DIFERIT 10') !== -1;
+            }));
+
+
+        // ── 8. BUG #264: el Tema-Títol no pot pisar un Enviat_No_ (part viva = 6,24 s) ──
+        // El 1r Tema-Títol del TNV V2 arrenca a 4,80 s (CasB: conductor a 0,40 + 4,40) i la
+        // seua part viva acaba a 11,04 s; l'ENVIAT de Míriam hi cau damunt -> ha d'esperar.
+        var TT_LIVE = [{ start: 4.80, end: 11.04 }];
+        ok('#264 _evitaTemaTitol: un enviar que cau damunt del Tema-Títol espera que acabe',
+            CHY._evitaTemaTitol(1.00, 4.70, TT_LIVE, 18.12) === 11.04,
+            String(CHY._evitaTemaTitol(1.00, 4.70, TT_LIVE, 18.12)));
+        ok('#264 _evitaTemaTitol: si hi cap ABANS del Tema-Títol, no es mou',
+            CHY._evitaTemaTitol(0.40, 3.00, TT_LIVE, 18.12) === 0.40);
+        ok('#264 _evitaTemaTitol: si ja entra DESPRES de la part viva, no es mou',
+            CHY._evitaTemaTitol(11.50, 4.70, TT_LIVE, 18.12) === 11.50);
+        ok('#264 _evitaTemaTitol: si no hi cap dins de l\'ITEM, no s\'ix de l\'item (ho decidix _chooseSlot)',
+            CHY._evitaTemaTitol(8.00, 4.70, TT_LIVE, 14.00) === 8.00);
+        ok('#264 _evitaTemaTitol: dos Tema-Títol encadenats -> espera el segon',
+            CHY._evitaTemaTitol(12.00, 4.00, [{ start: 4.80, end: 11.04 }, { start: 13.00, end: 19.24 }], 30) === 19.24);
     };
 })();

@@ -249,8 +249,8 @@
                 /if \(placeEnd !== null && \(placeEnd - slot\.start\) > REV_FRAME \+ 0\.001\) \{/.test(chySrc) &&
                 /placeEnd = gridDown\(placeEnd - REV_FRAME\);/.test(chySrc));
             var idxW = await readRepo('index.html');
-            ok('#WOTT/24 cache-bust al dia (4_Context 36, flow_chyrons 106, Scanner 27)',
-                /4_Context\.js\?v=36/.test(idxW) && /flow_chyrons\.js\?v=106/.test(idxW) &&
+            ok('#WOTT/24 cache-bust al dia (4_Context 36, flow_chyrons 107, Scanner 27)',
+                /4_Context\.js\?v=36/.test(idxW) && /flow_chyrons\.js\?v=107/.test(idxW) &&
                 /Scanner\.js\?v=27/.test(idxW),
                 (idxW.match(/4_Context\.js\?v=\d+/) || '') + ' ' +
                 (idxW.match(/flow_chyrons\.js\?v=\d+/) || '') + ' ' +
@@ -664,9 +664,9 @@
             ok('#WOTT/43 retall del clip sencer: 3 → 1 frame i un de 2 frames NO es toca (mai <1)',
                 rC === null && rD !== null && fN(rD) === 1,
                 '2f=' + (rC === null ? 'intacte' : fN(rC)) + ' 3f=' + (rD === null ? 'n/d' : fN(rD)));
-            ok('#WOTT/44 el retall del sencer deixa traça (✂️ CLIP SENCER) i cache-bust flow_chyrons 106',
+            ok('#WOTT/44 el retall del sencer deixa traça (✂️ CLIP SENCER) i cache-bust flow_chyrons 107',
                 chySrc.indexOf('✂️ [') > 0 && chySrc.indexOf('CLIP SENCER') > 0 &&
-                /flow_chyrons\.js\?v=106/.test(idxW),
+                /flow_chyrons\.js\?v=107/.test(idxW),
                 (idxW.match(/flow_chyrons\.js\?v=\d+/) || ''));
 
             // ── N2. CUA DE SEGURETAT DE TOTS ELS WOTTS (2026-11-02 · #218, 03/11) ──
@@ -795,11 +795,11 @@
                     /const LIMIT_PROGRAMA = 400 \* 1024/.test(stillSrc) &&
                     /const pngSospitos = cap\.ok && Number\(cap\.bytes\) > LIMIT_PROGRAMA/.test(stillSrc) &&
                     /if \(cap\.ok && !pngSospitos\)/.test(stillSrc) &&
-                    /flow_chyrons\.js\?v=106/.test(idxW),
+                    /flow_chyrons\.js\?v=107/.test(idxW),
                     'still=' + stillSrc.length +
                     ' zoneAvansCaptura=' + (stillSrc.indexOf('_freezeZone(needZone)') > -1 && stillSrc.indexOf('_freezeZone(needZone)') < stillSrc.indexOf('_capturePng(capBase')) +
                     ' v6=' + (stillSrc.indexOf('const TEMP_TC = await this._v6FreeTC') === -1 ? 'fora' : 'DINS') +
-                    ' v100=' + /flow_chyrons\.js\?v=106/.test(idxW));
+                    ' v100=' + /flow_chyrons\.js\?v=107/.test(idxW));
             } finally {
                 UI.Utils.callJSX = savedCJZ;
             }
@@ -1169,10 +1169,14 @@
             ' insIf=' + (chyMod && typeof chyMod._insertIfMissing) +
             ' noDupProp=' + (chyMod && typeof chyMod._noDup));
 
-        ok('#WOTT/58 🎯: no hi ha cap mode a activar (main.js només reseteja i llig el comptador) i el title ho diu',
+        // (2026-11-12) El `title` del RESET es va abreujar a index.html («ESBORRA LA
+        // CARPETA.») i ja no diu «NO DUPLICA»: el que importa és que la UI tinga el botó i
+        // que main.js només RESETEJE i LLIGA el comptador (cap mode a activar).
+
+        ok('#WOTT/58 🎯: no hi ha cap mode a activar (main.js només reseteja i llig el comptador) i el botó de RESET hi és',
             !/setNoDupMode/.test(mainSrcP) &&
             /resetDupSkipped/.test(mainSrcP) && /getDupSkipped/.test(mainSrcP) &&
-            /NO DUPLICA/.test(idxP),
+            /id=["']btnReset["']/.test(idxP),
             'main reset=' + /resetDupSkipped/.test(mainSrcP) + ' get=' + /getDupSkipped/.test(mainSrcP));
 
         ok('#WOTT/59 Chyrons._dupKey: dues generacions del MATEIX rètol compten com U (i un altre text, no)',
