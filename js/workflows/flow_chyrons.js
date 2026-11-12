@@ -3718,10 +3718,9 @@
 
                 const wottIdx = await FASTPASS_UI.Logic.Project.getWottIndex();
                 const ctx = { busy: {}, placed: {} };
-                // (2026-11-12 · BUG #264) Parts vives dels Tema-Títol ja col·locats: cap rètol de
-                // PERSONA (Enviat_No_) no hi pot caure damunt (regla d'usuari). Es llig una volta
-                // per passada: el Tema-Títol el col·loca una fase anterior (`placeChyronTitol`).
-                const ttLive = await this._temaTitolLiveRanges(cfg);
+                // (2026-11-12 · BUG #264/#265) El rètol de PERSONA (Enviat_No_) no es mou per
+                // no caure damunt del Tema-Títol: el gran és qui cedix (`placeChyronTitol`
+                // l'aparta després del rètol). Per això ací ja no es llig la pista V6.
                 // ── REGLA DELS RÈTOLS (2026-09-16 · matisada 2026-10-28 #201) ────
                 // Un rètol (NomCarrec, Lloc, Resto…) va a l'inici del SEU CLIP de
                 // referència — el clip de V1 que conté l'instant ideal. El decalatge de
@@ -4043,24 +4042,11 @@
                                     (trimmed ? ' (acurtat per ' + limWhy + ')' : ' (durada pròpia del wott)'));
                             }
                         }
-                        // (2026-11-12 · BUG #264) «El TemaTítol no pot pisar cap Enviat_No_»: si el
-                        // rètol de persona cau damunt de la part viva del Tema-Títol, ESPERA que el
-                        // gran acabe (la mateixa mecànica que el CONDUCTOR al CasA de
-                        // `_casForceTimes`: `ttAnchor + CAS_DUR_TEMA_TITOL`). Sempre dins de l'ítem.
-                        if (this._isEnviatWott(chy) && ttLive.length > 0) {
-                            const dPlan = (placeEnd !== null) ? (placeEnd - placeStart) : durInfo.dur;
-                            const tAdj = this._evitaTemaTitol(placeStart, dPlan, ttLive,
-                                (limSlot !== null) ? limSlot : placeEnd);
-                            if (tAdj > placeStart + 0.01) {
-                                const span = (placeEnd !== null) ? (placeEnd - placeStart) : null;
-                                log(`   🎬 [${label}] ${String(chy.name).substring(0, 32)}… espera el Tema-Títol: ${placeStart.toFixed(2)}s → ${tAdj.toFixed(2)}s`);
-                                placeStart = tAdj;
-                                if (span !== null) {
-                                    placeEnd = placeStart + span;
-                                    if (limSlot !== null && placeEnd > limSlot) placeEnd = limSlot;
-                                }
-                            }
-                        }
+                        // (2026-11-12 · BUG #264/#265) L'ENVIAT_No_ MANA: el rètol de persona
+                        // NO espera el Tema-Títol (fins ara s'empenyia fins a la fi de la part
+                        // viva i l'usuari el veia «fora del lloc»). Ara és el GRAN qui cedix:
+                        // `placeChyronTitol` el desplaça darrere del rètol + la seua animació de
+                        // SORTIDA i el titulillo cobrix el buit del davant del gran.
                         const chyronDur = (placeEnd !== null) ? Math.max(0.5, placeEnd - placeStart) : durInfo.dur;
                         // maxEnd = límit de l'ÍTEM (final del clip de referència o següent
                         // marcador) → _chooseSlot pot buscar un forat lliure en tot l'ítem però
@@ -4257,6 +4243,77 @@
          *      (amb el marge CasA/CasB si hi ha conductor).
          *   3. Cada Tema‑Titol s'estira amb freeze fins al següent o al final.
          */
+        /**
+         * _personRangesV7: rangs [start,end] dels rètols de PERSONA ja col·locats a la pista
+         * de noms (V7).
+         *
+         * (2026-11-12 · BUG #264/#265) L'Enviat_No_ té PREFERÈNCIA de lloc (regla d'usuari:
+         * «el Diferit dura poc, l'Enviat es col·loca on toca i el Tema-Títol va després»).
+         * Com que la fase `placeChyronEnviat` corre ABANS que `placeChyronTitol`, ací ja es
+         * poden llegir els rètols col·locats i el gran els cedix el terreny.
+         *
+         * Només compta la família de persona (ENVIAT / PRESENCIAL al nom del wott): els
+         * titulillos i la resta de grafismes de V7 no fan fora el Tema-Títol.
+         *
+         * @param {Object} cfg - configuració activa
+         * @returns {Promise<Array<{start:number,end:number,name:string}>>}
+         */
+        _personRangesV7: async function (cfg) {
+            const c = cfg || FASTPASS_UI.Config.get();
+            const track = ((((c || {}).tracks || {}).video) || {}).chyrons;
+            if (!track) return [];
+            let clips = [];
+            try { clips = await getClipsLogic().getTrackClips(track, 'video'); }
+            catch (e) { return []; }
+            const out = [];
+            for (const cl of (clips || [])) {
+                const n = String(cl.name || '').toUpperCase();
+                if (n.indexOf('ENVIAT') === -1 && n.indexOf('PRESENCIAL') === -1) continue;
+                const st = Number(cl.start), en = Number(cl.end);
+                if (!isFinite(st) || !isFinite(en) || en <= st) continue;
+                out.push({ start: st, end: en, name: String(cl.name || '') });
+            }
+            out.sort((a, b) => a.start - b.start);
+            return out;
+        },
+
+        /**
+         * placeChyronEnviat: rètols de PERSONA — ENVIAT_No_ i DIRECTE/PRESENCIAL.
+         *
+         * (2026-11-12 · BUG #264/#265) Petició d'usuari: «col·locamos primero los nombres
+         * ENVIAT y luego los Tema-Titol; así el primer Enviat queda bien colocado». Esta
+         * fase corre ABANS de `placeChyronTitol` (vegeu el botó COL·LOCAR de `main.js`), de
+         * manera que:
+         *   · l'ENVIAT es queda al DIFERIT del SEU bloc (7,88 s al TNV V2) sense esperar
+         *     ningú, i el DIRECTE/PRESENCIAL al `+++IPD` del seu bloc — el destí el resol
+         *     `_ipdAnchorPlan` com sempre;
+         *   · el Tema-Títol gran, que es col·loca després, els cedix el lloc.
+         *
+         * RESTO continua incloent estes dos famílies: si es col·loquen ací, el guard
+         * NO-DUPLICAR les detecta i no es dupliquen (una passada de RESTO solta seguix
+         * funcionant igual que sempre).
+         */
+        placeChyronEnviat: async function () {
+            await this._placeChyronsByType(
+                c => !this._isTraduccioWott(c) && (this._isEnviatWott(c) || this._isDirecteSenyalWott(c)),
+                (c, cfg) => {
+                    // ⚠️ Mateixos noms de pista que la fase Resto (V_CHYRONS = V7, V_LLOC = V8).
+                    const V_CHYRONS = cfg.tracks.video.chyrons;
+                    const V_LLOC = cfg.tracks.video.lloc || cfg.tracks.video.llocdata || 8;
+                    // DIRECTE/PRESENCIAL: lloc preferent (V8) i el nom de reserva (V7).
+                    if (this._isDirecteSenyalWott(c) && !this._isEnviatWott(c)) return [V_LLOC, V_CHYRONS];
+                    // ENVIAT: nom-càrrec del connector → NOMÉS V7.
+                    return [V_CHYRONS];
+                },
+                "Enviat"
+            );
+        },
+
+        /**
+         * placeChyronTitol: Tema‑Títol GRAN del bloc. Abans de col·locar-lo, cedix el lloc
+         * als rètols de persona que ja hi ha (vegeu `_personRangesV7` i la fase
+         * `placeChyronEnviat`, que corre ABANS que esta).
+         */
         placeChyronTitol: async function () {
             if (!(await getUtils().validateActiveSequence())) return;
             // 🛡️ (2026-10-30) NO-DUPLICAR: es rellegeix el timeline a cada passada.
@@ -4406,6 +4463,41 @@
                 }
                 if (ttFinal.length < ttPos.length) {
                     log(`   🛡️ [Titol] ${ttPos.length - ttFinal.length} Tema-Títol(s) descartat(s) per col·lisió de posició`);
+                }
+
+                // ── 4b. L'ENVIAT_No_ MANA: el gran cedix el seu lloc (2026-11-12 · #264/#265) ──
+                // La fase ENVIAT (`placeChyronEnviat`) ja ha col·locat els rètols de persona a
+                // V7. Si l'àncora d'un gran cau damunt d'un d'ells, el gran passa a entrar JUST
+                // DESPRÉS de la seua animació de SORTIDA (final del rètol + `temaTitolExit.durSec`
+                // = 0,24 s): el titulillo congelat cobrix el buit del davant i la SORTIDA el tanca
+                // (`_placeTemaTitolTransicions`).
+                // MESURAT (TNV V2, 13:00): «Enviat_No_Míriam Gavaldà» 7,88→12,56 s i el gran del
+                // bloc 08 ancorat a 4,80 s → el gran passa a 12,80 s (12,56 + 0,24).
+                const exitCfgGran = this._temaTitolExitCfg();
+                try {
+                    const personRanges = await this._personRangesV7(cfg);
+                    if (personRanges.length > 0) {
+                        let moguts = 0;
+                        for (const p of ttFinal) {
+                            const t0 = p.time;
+                            // La DURADA del gran també compta: el gran no pot començar abans
+                            // d'un rètol i estirar-s'hi a sobre (TNV V2: gran 4,80-12,80 s vs
+                            // rètol 7,88-12,56 s → el gran passa a 12,80 s).
+                            const dGran = (Number(p.tt && p.tt.dur) > 0.5) ? Number(p.tt.dur) : 8.0;
+                            const tLliure = this._evitaTemaTitol(t0, dGran, personRanges, null);
+                            if (tLliure > t0 + 0.01) {
+                                p.time = tLliure + exitCfgGran.durSec;
+                                moguts++;
+                                log(`   🎬 [Titol] «${String(p.tt.name).substring(0, 45)}…» cedix l'Enviat_No_: ${t0.toFixed(2)}s → ${p.time.toFixed(2)}s (rètol fins ${tLliure.toFixed(2)}s + sortida ${exitCfgGran.durSec.toFixed(2)}s)`);
+                            }
+                        }
+                        if (moguts > 0) {
+                            ttFinal.sort((a, b) => a.time - b.time);
+                            log(`   🎬 [Titol] ${moguts} Tema-Títol(s) desplaçat(s) per no pisar cap rètol de persona`);
+                        }
+                    }
+                } catch (ePR) {
+                    log(`   ⚠️ [Titol] No s'han pogut llegir els rètols de persona de V7: ${ePR.message}`, 'WARN');
                 }
 
                 // 🛡️ (2026-10-30) NO-DUPLICAR (regla permanent): si TOTS els Tema-Títol grans
@@ -4926,21 +5018,29 @@
          */
         _placeTemaTitolTransicions: async function (p) {
             const petit = FASTPASS_UI.Logic.Project.pickTemaTitolPetit(p.struct, p.wottIdx, p.minSec);
+            // (2026-11-12 · BUG #265) SENSE titulillo petit TAMBÉ hi ha faena: la SORTIDA
+            // (desaparició del gran) de cada transició i la COBERTURA del davant del primer
+            // gran NO depenen del titulillo. Abans s'eixia ací amb `return 0` i l'usuari es
+            // quedava sense cap animació de sortida (TNV V2 de l'11/11: «és com si
+            // l'animació només s'haguera col·locat per als casos simples»).
             if (!petit) {
-                log(`   ℹ️ [Titol·Petit] Cap titulillo petit (≤${p.minSec}s) al bin CHY: sense transicions.`);
-                return 0;
+                log(`   ℹ️ [Titol·Petit] Cap titulillo petit (≤${p.minSec}s) al bin CHY: es col·locaran les SORTIDES i la cobertura amb el congelat del gran.`);
+            } else {
+                log(`   🎬 [Titol·Petit] Titulillo triat: "${String(petit.name).substring(0, 60)}" (${petit.dur.toFixed(2)}s, id=${petit.idNum})`);
             }
-            log(`   🎬 [Titol·Petit] Titulillo triat: "${String(petit.name).substring(0, 60)}" (${petit.dur.toFixed(2)}s, id=${petit.idNum})`);
             // (2026-10-07) El revers ffmpeg del titulillo JA NO s'usa com a SORTINT: ara és la
             // peça de desaparició del propi gran (`_insertTemaTitolExit`). Es conserva AQUEST
             // `getRev` només com a xarxa de seguretat si la peça no es pot col·locar i
             // `cfg.temaTitolExit.useReverseFallback` està actiu.
             let _revCache = null;
             const getRev = async () => {
-                if (_revCache === null) _revCache = await this._ensureReversedTitolPetit(petit);
+                if (_revCache === null) {
+                    _revCache = petit ? await this._ensureReversedTitolPetit(petit)
+                        : { ok: false, name: '', path: '' };
+                }
                 return _revCache;
             };
-            const durP = petit.dur;
+            const durP = petit ? petit.dur : 0;
             // (2026-10-01 · #129) DUrada REAL (ffprobe) en lloc de l'estimació del manifest.
             // Amb la durada ESTIMADA (p. ex. 1,02 s = 25,5 frames; el .mov real són 25 frames =
             // 1,00 s) `target - durP` cau en un MIG frame, Premiere el snapeja i el revers
@@ -4981,7 +5081,11 @@
             // durada és una constant de config i no cal tocar ffmpeg ni cap import.
             const exitCfg = this._temaTitolExitCfg();
             const exitDur = snapDur(exitCfg.durSec);
-            const petitDur = (p.case === 'B') ? await realDurOf(petit.path, snapDur(durP)) : snapDur(durP);
+            const petitDur = (p.case === 'B' && petit) ? await realDurOf(petit.path, snapDur(durP)) : (petit ? snapDur(durP) : 0);
+            // (2026-11-12 · BUG #265) Font del CONGELAT de cobertura: el titulillo si n'hi ha;
+            // si no, el PROPI gran (el PNG és el mateix — `_stillKey` és per contingut).
+            const stillSrc = petit ? petit : ((p.ttPlaced && p.ttPlaced.length > 0)
+                ? { name: p.ttPlaced[0].name, dur: 8 } : null);
 
             // ── FASE 1 · PLA: TOTES les posicions, calculades ABANS d'inserir res ─────────
             // (2026-10-01 · #129) Els inserts de Premiere (Clips.insert → overwriteClip) NO
@@ -4991,7 +5095,7 @@
             // les peces, 2) s'ordenen pel IN i 3) s'apliquen d'ESQUERRA A DRETA, de manera
             // que cada inserció només pot tocar zona buida (els clips de la dreta encara no hi són).
             const plan = [];
-            if (p.case === 'B') {
+            if (p.case === 'B' && petit) {
                 // (2026-10-01 · #128/#129) L'OUT de l'entrant = IN + durada REAL del titulillo
                 // (mesurada per ffprobe i alineada a la rejilla de frames). Amb l'estimació del
                 // manifest (1,02 s) l'interval quedava 1 frame més llarg del que toca.
@@ -5018,13 +5122,27 @@
                     }
                 }
             }
+            // (2026-11-12 · BUG #265) SENSE titulillo petit: el buit entre l'inici del bloc i
+            // el PRIMER gran es cobrix amb el CONGELAT del propi gran (mateix PNG que el seu
+            // freeze: `_stillCache`/`_findStillInChy`) i la SORTIDA el tanca. És exactament el
+            // que demanava l'usuari: «el titulillo des de l'inici fins que comença el
+            // TemaTitol, amb l'animació de sortida».
+            if (!petit && p.ttPlaced.length > 0) {
+                const firstTT = p.ttPlaced[0].placeTime;
+                const exitStart = revStartFor(firstTT, exitDur);
+                const covStart = p.clipStart + 0.40;
+                if (exitStart > covStart + 0.20) {
+                    plan.push({ kind: 'congelat', start: covStart, end: exitStart, label: '🧊 [Titol] COBERTURA (congelat del gran)' });
+                }
+            }
             // SORTINT (peça de DESAPARICIÓ del propi gran) just abans de cada Tema-Títol gran
-            // (la del primer, només en CasB).
+            // (la del primer, només si el gran no obri el bloc: CasB o gran desplaçat pels
+            // rètols de persona — BUG #265).
             for (let i = 0; i < p.ttPlaced.length; i++) {
                 const target = p.ttPlaced[i].placeTime;
                 const start = revStartFor(target, exitDur);
                 if (start < p.clipStart + 0.10) continue;
-                if (i === 0 && p.case !== 'B') continue;
+                if (i === 0 && target <= p.clipStart + 0.60) continue;
                 if (!p.ttPlaced[i].name) {
                     log(`   ⚠️ [Titol·Petit] Sense nom del Tema-Títol gran ${i + 1}: no es planifica la SORTINT @ ${start.toFixed(2)}s`, 'WARN');
                     continue;
@@ -5034,7 +5152,7 @@
             plan.sort((a, b) => a.start - b.start);
             if (plan.length > 0) {
                 log(`   📋 [Titol·Petit] Pla: ${plan.length} peça(es) d'esquerra a dreta · ` +
-                    `titulillo ${petitDur.toFixed(2)}s · sortida ${exitDur.toFixed(2)}s (desaparició del gran, mèdia ${exitCfg.atSec.toFixed(2)}s) → ` +
+                    `${petit ? 'titulillo ' + petitDur.toFixed(2) + 's · ' : ''}sortida ${exitDur.toFixed(2)}s (desaparició del gran, mèdia ${exitCfg.atSec.toFixed(2)}s) → ` +
                     plan.map(x => `${x.kind}@${x.start.toFixed(2)}→${x.end.toFixed(2)}s`).join(' | '));
             }
 
@@ -5042,7 +5160,9 @@
             let n = 0;
             for (const it of plan) {
                 if (it.kind === 'congelat') {
-                    if (await this._freezeTitulilloStill(petit, p.track, it.start, it.end, it.label)) n++;
+                    // (2026-11-12 · BUG #265) Sense titulillo petit la font del congelat és el
+                    // PROPI gran (`stillSrc`), no el titulillo.
+                    if (stillSrc && await this._freezeTitulilloStill(stillSrc, p.track, it.start, it.end, it.label)) n++;
                     continue;
                 }
                 // (2026-10-07) La SORTINT és la peça de DESAPARICIÓ del propi Tema-Títol gran:

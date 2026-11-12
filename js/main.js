@@ -1680,6 +1680,10 @@ if (btnMarksC1) btnMarksC1.addEventListener('click', () => callWorkflow('Markers
         }
         const phases = [
             ['Conduct',   () => callWorkflow('Chyrons', 'placeChyronConductor')],
+            // (2026-11-12 · BUG #264/#265) Els rètols de PERSONA (Enviat_No_ i
+            // Directe/PRESENCIAL) van ABANS del Tema-Títol: tenen preferència de lloc i el
+            // gran és qui cedix (placeChyronTitol l'aparta i el titulillo cobrix el buit).
+            ['Enviat',    () => callWorkflow('Chyrons', 'placeChyronEnviat')],
             ['Titol',     () => callWorkflow('Chyrons', 'placeChyronTitol')],
             ['Lloc',      () => callWorkflow('Chyrons', 'placeChyronLloc')],
             ['Nom',       () => callWorkflow('Chyrons', 'placeChyronNom')],

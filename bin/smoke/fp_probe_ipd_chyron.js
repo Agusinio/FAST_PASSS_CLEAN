@@ -291,5 +291,20 @@
             CHY._evitaTemaTitol(8.00, 4.70, TT_LIVE, 14.00) === 8.00);
         ok('#264 _evitaTemaTitol: dos Tema-Títol encadenats -> espera el segon',
             CHY._evitaTemaTitol(12.00, 4.00, [{ start: 4.80, end: 11.04 }, { start: 13.00, end: 19.24 }], 30) === 19.24);
+
+        // ── 9. BUG #264/#265 (12/11, 2a part): l'ENVIAT MANA i el GRAN cedix ──────────
+        // Regla d'usuari: «el Diferit dura poc, l'Enviat es col-loca a 7,88 i el Tema-Titol
+        // a 12,80». Ara el gran s'aparta fins al final del retol + la seua animacio de
+        // SORTIDA (0,24 s = 6 frames) i el titulillo cobrix el buit del davant.
+        var RANG_MIRIAM = [{ start: 7.88, end: 12.56, name: 'Enviat_No_Miriam' }];
+        ok('#265 el gran deixa passar l\'Enviat: 4,80 + 8 s -> 12,80 (fi del retol + 0,24)',
+            Math.abs((CHY._evitaTemaTitol(4.80, 8.00, RANG_MIRIAM, null) + 0.24) - 12.80) < 0.001,
+            String(CHY._evitaTemaTitol(4.80, 8.00, RANG_MIRIAM, null) + 0.24));
+        ok('#265 el gran que ja entra DESPRES del retol no es mou',
+            CHY._evitaTemaTitol(13.00, 8.00, RANG_MIRIAM, null) === 13.00);
+        ok('#265 el gran que entra ABANS del retol i no hi arriba no es mou',
+            CHY._evitaTemaTitol(1.00, 4.00, RANG_MIRIAM, null) === 1.00);
+        ok('#264 fase ENVIAT: placeChyronEnviat i _personRangesV7 existixen',
+            typeof CHY.placeChyronEnviat === 'function' && typeof CHY._personRangesV7 === 'function');
     };
 })();
